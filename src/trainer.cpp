@@ -106,7 +106,13 @@ double Trainer::loopWrapped(double time, double blockPosition) const {
   if (loopEnd <= loopStart || blockPosition < loopStart || blockPosition > loopEnd)
     return time;
 
-  return grid::wrapIntoLoop(time, loopStart, loopEnd);
+  // Окно заворота сдвинуто назад на половину интервала между узлами: узел на
+  // конце петли — это первый узел следующего прохода. Так ранняя нота к первой
+  // доле петли остаётся у её начала, а не уходит к доле после конца петли.
+  const double step = 1.0 / static_cast<double>(grid::divisions(settings_.mode));
+  const double half =
+      (timeline_.timeAt(timeline_.beatsAt(loopStart) + step) - loopStart) / 2.0;
+  return grid::wrapIntoLoop(time, loopStart - half, loopEnd - half);
 }
 
 double Trainer::now() const {

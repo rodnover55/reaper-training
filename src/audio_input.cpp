@@ -164,8 +164,12 @@ void AudioInput::feed(const BlockHeader &header) {
         std::ranges::find_if(newestFirst, [&found](const StreamBlock &candidate) {
           return static_cast<double>(candidate.streamStart) <= found.position;
         });
-    if (block == newestFirst.end() || !block->moving)
+    if (block == newestFirst.end())
       continue;
+    if (!block->moving) {
+      journal("onset dropped: position {:.6f} is not moving", block->header.position);
+      continue;
+    }
 
     const HookOnset hit{.blockPosition = block->header.position,
                         .offset = found.position - static_cast<double>(block->streamStart),
