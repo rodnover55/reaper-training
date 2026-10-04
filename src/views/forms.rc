@@ -1,0 +1,24 @@
+// Описание форм модуля.
+//
+// Единственный исходник формы. Под SWELL из него порождается таблица C++
+// скриптом WDL/swell/swell_resgen.pl.
+//
+// Координаты в диалоговых единицах, а не в пикселях: масштаб у платформ разный.
+
+#include "ids.h"
+
+// Окно тренажёра встаёт в док REAPER, поэтому это дочерняя форма без рамки.
+// Сверху — настройки и строка состояния, ниже окно рисует строки ударов само.
+IDD_TRAINER DIALOG DISCARDABLE 0, 0, 320, 200
+STYLE DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+BEGIN
+    LTEXT           "Mode:", IDC_MODE_LABEL, 4, 4, 26, 10
+    COMBOBOX        IDC_MODE, 32, 2, 90, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Tolerance, ms:", IDC_TOLERANCE_LABEL, 128, 4, 52, 10
+    EDITTEXT        IDC_TOLERANCE, 182, 2, 24, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "Input:", IDC_CHANNEL_LABEL, 212, 4, 22, 10
+    COMBOBOX        IDC_CHANNEL, 236, 2, 80, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Silence, dBFS:", IDC_SILENCE_LABEL, 4, 20, 52, 10
+    EDITTEXT        IDC_SILENCE, 58, 18, 24, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "", IDC_STATUS, 90, 20, 226, 10
+END

@@ -1,0 +1,152 @@
+# Сборка модуля для Linux и macOS и выкладка в Releases.
+#
+# Каждый push в любую ветку собирает и проверяет модуль на обеих ОС; файлы
+# модуля лежат в артефактах прогона. Тег vX.Y.Z (та же версия, что в
+# project() в CMakeLists.txt) вдобавок создаёт релиз с этими файлами.
+#
+# Сборка — `cmake --workflow --preset release`: её же можно повторить у себя.
+
+name: Сборка
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Новый push в рабочую ветку отменяет недоделанную сборку прошлого; master и
+# теги собираются до конца.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # Linux собирается в Ubuntu 22.04: модуль требует glibc не новее той, с
+    # которой собран, и чем она старше, тем больше систем его загрузит.
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            container: ubuntu:22.04
+            cc: gcc-13
+            cxx: g++-13
+            file: reaper_training.so
+          - name: macOS (Apple Silicon и Intel)
+            os: macos-latest
+            cc: clang
+            cxx: clang++
+            # Один файл на оба процессора: REAPER бывает и тот и другой.
+            # Наименьшая macOS (12.0) задана в CMakeLists.txt.
+            osx_architectures: arm64;x86_64
+            file: reaper_training.dylib
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      CMAKE_OSX_ARCHITECTURES: ${{ matrix.osx_architectures }}
+
+    steps:
+      # GCC 13 — первый, который собирает этот C++23; в Ubuntu 22.04 он из
+      # toolchain PPA. CMake там 3.22, а пресетам нужен 3.29 — он из PyPI.
+      - name: Инструменты (Linux)
+        if: runner.os == 'Linux'
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            software-properties-common gpg-agent ca-certificates git perl python3-pip
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get install -y --no-install-recommends g++-13
+          pip3 install cmake ninja
+
+      - name: Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: command -v ninja || brew install ninja
+
+      - uses: actions/checkout@v5
+
+      - name: Сборка и тесты
+        run: cmake --workflow --preset release
+
+      # MacBook Pro Early 2015 не обновляется дальше macOS 12, а машин с macOS
+      # 12 в GitHub Actions нет. Поэтому проверяется хотя бы то, что файл
+      # объявляет 12.0 своей наименьшей системой — для обоих процессоров.
+      - name: Наименьшая macOS — 12.0
+        if: runner.os == 'macOS'
+        run: |
+          for arch in arm64 x86_64; do
+            minos=$(vtool -arch "$arch" -show-build "build/release/${{ matrix.file }}" \
+              | awk '$1 == "minos" { print $2 }')
+            echo "$arch: minos $minos"
+            if [ "$minos" != "12.0" ]; then
+              echo "::error::$arch: наименьшая macOS $minos, а нужна 12.0"
+              exit 1
+            fi
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.file }}
+          path: build/release/${{ matrix.file }}
+          if-no-files-found: error
+
+  release:
+    name: Релиз
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Версия тега совпадает с версией проекта
+        id: version
+        run: |
+          project=$(sed -n 's/^  VERSION \([0-9][0-9.]*\)$/\1/p' CMakeLists.txt)
+          tag=${GITHUB_REF_NAME#v}
+          echo "Версия в CMakeLists.txt: $project, тег: $GITHUB_REF_NAME"
+          case "$tag" in
+            "$project" | "$project"-*) ;;
+            *) echo "::error::Тег $GITHUB_REF_NAME не совпадает с версией проекта $project"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Контрольные суммы
+        working-directory: dist
+        run: sha256sum reaper_training.* | tee SHA256SUMS.txt
+
+      # Тег с суффиксом (v0.2.0-rc1) — предварительный релиз. Повторный прогон
+      # того же тега заменяет файлы в уже созданном релизе. Описание — общая
+      # часть из .github/release-notes.md (что на какой системе работает) и
+      # список изменений, собранный GitHub.
+      - name: Выкладка
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            prerelease=""
+            case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
+            gh release create "$TAG" dist/* --verify-tag --generate-notes \
+              --notes-file .github/release-notes.md \
+              --title "reaper-training $VERSION" $prerelease
+          fi
