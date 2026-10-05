@@ -4,7 +4,7 @@
 
 | Что | Какое |
 |---|---|
-| Система | Linux x86_64 с glibc 2.35 и новее: Ubuntu 22.04, Debian 12, Fedora 36 и всё, что свежее. macOS 12 и новее, Mac с процессором Intel и с Apple Silicon — один и тот же файл. |
+| Система | Linux x86_64 с glibc 2.35 и новее: Ubuntu 22.04, Debian 12, Fedora 36 и всё, что свежее. Windows 10 и 11 (x64). macOS 12 и новее, Mac с процессором Intel и с Apple Silicon — один и тот же файл. |
 | REAPER | REAPER 7. |
 
 ## Как поставить
@@ -15,6 +15,7 @@
    | Система | Файл | Папка `UserPlugins` |
    |---|---|---|
    | Linux (x86_64) | `reaper_training.so` | `~/.config/REAPER/UserPlugins/` |
+   | Windows (x64) | `reaper_training.dll` | `%APPDATA%\REAPER\UserPlugins\` |
    | macOS (Apple Silicon и Intel) | `reaper_training.dylib` | `~/Library/Application Support/REAPER/UserPlugins/` |
 
    Если REAPER стоит в портативном режиме, папка ресурсов — другая: её
@@ -33,8 +34,8 @@
    Если команда отвечает `No such xattr`, пометки нет и снимать нечего.
 5. Запустите REAPER.
 
-Файл можно и собрать из исходников проекта (на Linux; на macOS 12 свежего
-компилятора нет, и файл для Mac собирает CI). Нужны компилятор C++23,
+Файл можно и собрать из исходников проекта (на Linux и Windows; на macOS 12
+свежего компилятора нет, и файл для Mac собирает CI). Нужны компилятор C++23,
 CMake 3.29 и новее и Ninja; в папке проекта выполните:
 
 ```sh
@@ -70,4 +71,4 @@ explorer/finder**, а на macOS — что с него снята пометк�
 ## Удаление
 
 Закройте REAPER и удалите файл расширения из папки `UserPlugins`
-(`reaper_training.so` или `reaper_training.dylib`).
+(`reaper_training.so`, `reaper_training.dll` или `reaper_training.dylib`).

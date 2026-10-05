@@ -105,7 +105,7 @@
       "inherits": "default",
       "configurePreset": "release",
       "displayName": "Тесты сборки для раздачи",
-      "description": "Только тесты: линтеры зависят от версии инструментов на машине, а на macOS их может не быть вовсе. Они проверяются перед push.",
+      "description": "Только тесты: линтеры зависят от версии инструментов на машине, а на Windows и macOS их может не быть вовсе. Они проверяются перед push.",
       "filter": {
         "exclude": {
           "label": "lint|slow"
@@ -148,7 +148,7 @@
     {
       "name": "release",
       "displayName": "Модуль для раздачи: сборка и тесты",
-      "description": "То, что CI делает на Linux и macOS перед выкладкой в Releases.",
+      "description": "То, что CI делает на Linux, Windows и macOS перед выкладкой в Releases.",
       "steps": [
         {
           "type": "configure",
