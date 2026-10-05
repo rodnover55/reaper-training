@@ -1,13 +1,13 @@
 #pragma once
 
-// Тренажёр в главном потоке (design.md D2, D3, D6): атаки со входа → время на
-// шкале → строки ударов для окна.
+// Тренажёр в главном потоке: атаки со входа → время на шкале → строки тактов
+// для окна (архив add-timing-trainer, design.md D2, D3; design.md D1–D5).
 
 #include "audio_input.hpp"
 #include "project_timeline.hpp"
 #include "settings.hpp"
 
-#include "training/grid/beats.hpp"
+#include "training/grid/bars.hpp"
 
 #include <cstdint>
 #include <deque>
@@ -43,7 +43,7 @@ struct Status {
   double rate = 1.0;
 };
 
-/// Тренажёр: вход звуковой карты, настройки и строки ударов.
+/// Тренажёр: вход звуковой карты, настройки и строки тактов.
 ///
 /// Многопоточность: только главный поток.
 class Trainer {
@@ -54,12 +54,18 @@ public:
   const Settings &settings() const { return settings_; }
 
   /// Меняет и сохраняет настройки (`saveSettings`), прижав их к границам.
-  /// Режим и допуск действуют на следующие удары, канал и порог — со
-  /// следующего блока.
+  /// Режим действует на удары, которые ещё не начались, допуск — на
+  /// значения, которые появятся после смены, канал и порог — со следующего
+  /// блока.
   void setSettings(const Settings &settings);
 
-  /// Строки ударов, новые вперёд.
-  const std::deque<grid::BeatRow> &rows() const { return beats_.rows(); }
+  /// Строки тактов последнего запуска транспорта.
+  const grid::Bars &bars() const { return bars_; }
+
+  /// Кладёт в строки тактов ноту в момент `time` шкалы, с, как будто её только
+  /// что нашёл поиск атак. Нужна для проверок окна без гитары. Пока
+  /// транспорт стоит, ничего не делает.
+  void addTestNote(double time);
 
   const Status &status() const { return status_; }
 
@@ -69,8 +75,9 @@ public:
 
   AudioInput &input() { return input_; }
 
-  /// Забирает новые атаки, ставит их в строки, отмечает пропуски и обновляет
-  /// состояние. Зовётся таймером главного потока.
+  /// Сообщает строкам тактов слышимую позицию воспроизведения, забирает новые
+  /// атаки, ставит их в строки и обновляет состояние. Зовётся таймером главного
+  /// потока.
   ///
   /// @return правда, если строки или состояние изменились и окно пора
   ///   перерисовать.
@@ -79,13 +86,14 @@ public:
 private:
   void start();
   void takeCompensation();
-  double now() const;
+  double loopBeats(double heard) const;
+  void followPlayback();
   double loopWrapped(double time, double blockPosition) const;
 
   AudioInput input_;
   ProjectTimeline timeline_;
   Settings settings_;
-  grid::Beats beats_;
+  grid::Bars bars_;
   Status status_;
   std::vector<HookOnset> lastRun_;
 

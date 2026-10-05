@@ -20,6 +20,12 @@ struct Settings {
 
   /// Порог тишины, dBFS: целое от −90 до −10.
   double silenceDb = -50.0;
+
+  /// Колонка номеров тактов слева от строк («Bar numbers»).
+  bool showBarNumbers = true;
+
+  /// Колонка среднего и разброса справа от строк («Mean/spread»).
+  bool showBarStats = true;
 };
 
 /// Читает настройки, сохранённые REAPER (`GetExtState`). Чего нет или что

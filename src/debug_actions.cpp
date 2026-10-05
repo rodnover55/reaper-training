@@ -18,12 +18,14 @@
 #define REAPERAPI_WANT_GetAudioAccessorEndTime
 #define REAPERAPI_WANT_GetAudioAccessorSamples
 #define REAPERAPI_WANT_Master_GetPlayRate
+#define REAPERAPI_WANT_GetCursorPosition
 
 #include "debug_actions.hpp"
 
 #include <reaper_plugin_functions.h>
 
 #include "journal.hpp"
+#include "project_timeline.hpp"
 #include "trainer.hpp"
 #include "window.hpp"
 
@@ -135,10 +137,12 @@ const char *const kConfigVarDef =
 /// @param channel входной канал, 1 — первый.
 /// @param silenceDb порог тишины, dBFS.
 void setSettings(int mode, double toleranceMs, int channel, double silenceDb) {
-  trainer().setSettings({.mode = static_cast<grid::Mode>(mode),
-                         .toleranceMs = toleranceMs,
-                         .channel = channel - 1,
-                         .silenceDb = silenceDb});
+  Settings settings = trainer().settings();
+  settings.mode = static_cast<grid::Mode>(mode);
+  settings.toleranceMs = toleranceMs;
+  settings.channel = channel - 1;
+  settings.silenceDb = silenceDb;
+  trainer().setSettings(settings);
   showSettings();
   refreshWindow();
   journal("script settings: mode {}, tolerance {} ms, channel {}, silence {} dBFS", mode,
@@ -187,6 +191,66 @@ const char *const kSetEnergyRatioDef =
     "void\0double\0energyRatio\0"
     "reaper-training (debug): set how much the high-frequency energy must grow for a strike "
     "on a ringing string to count; default 2";
+
+/// Кладёт в строки тактов ноту в момент `time` шкалы, как будто её нашёл
+/// поиск атак: для проверок окна без гитары. Во время остановки ничего не
+/// делает.
+void addNote(double time) { trainer().addTestNote(time); }
+
+void *addNoteVararg(void **args, int count) {
+  if (count >= 1 && args[0])
+    addNote(*static_cast<const double *>(args[0]));
+  return nullptr;
+}
+
+/// Нажимает флажок окна по номеру контрола, как `clickCheckbox`.
+///
+/// @return 1 — флажок включён, 0 — выключен, −1 — окно закрыто или контрола
+///   нет.
+int clickCheckboxFromScript(int control) {
+  const std::optional<bool> checked = clickCheckbox(control);
+  journal("script click {}: {}", control, checked ? (*checked ? "on" : "off") : "no window");
+  return checked ? (*checked ? 1 : 0) : -1;
+}
+
+void *clickCheckboxVararg(void **args, int count) {
+  if (count < 1)
+    return nullptr;
+  return reinterpret_cast<void *>(static_cast<std::intptr_t>(
+      clickCheckboxFromScript(static_cast<int>(reinterpret_cast<std::intptr_t>(args[0])))));
+}
+
+const char *const kClickCheckboxDef =
+    "int\0int\0control\0"
+    "reaper-training (debug): click a checkbox of the trainer window by control id; returns 1 "
+    "when it becomes checked, 0 when unchecked, -1 without the window";
+
+#ifndef _WIN32
+/// Рисует строки тактов в файл PPM, как `snapshotRows`.
+bool snapshot(const char *path, int width, int height) {
+  const bool written = snapshotRows(path, width, height);
+  journal("snapshot {} {}x{}: {}", path ? path : "", width, height, written);
+  return written;
+}
+
+void *snapshotVararg(void **args, int count) {
+  if (count < 3)
+    return nullptr;
+  const bool written = snapshot(static_cast<const char *>(args[0]),
+                                static_cast<int>(reinterpret_cast<std::intptr_t>(args[1])),
+                                static_cast<int>(reinterpret_cast<std::intptr_t>(args[2])));
+  return reinterpret_cast<void *>(static_cast<std::intptr_t>(written));
+}
+
+const char *const kSnapshotDef =
+    "bool\0const char*,int,int\0path,width,height\0"
+    "reaper-training (debug): draw the bar rows like the window does into a PPM file";
+#endif
+
+const char *const kAddNoteDef =
+    "void\0double\0time\0"
+    "reaper-training (debug): put a note at the given project time into the bar rows, as if "
+    "the onset detector found it now";
 
 /// Строка от скрипта проверки в журнал: так в журнале видно, где какой
 /// сценарий.
@@ -359,17 +423,54 @@ void compareWithItem() {
                   (shift / rate - driver) * 1000.0));
 }
 
+/// Размер для журнала: «7/8».
+std::string meterText(const grid::Meter &meter) {
+  return fmt::format("{}/{}", meter.beats, meter.unit);
+}
+
+/// Печатает такты вокруг курсора правки так, как их видит сетка тренажёра:
+/// номер, первый удар, размер и смены темпа и размера (design.md D6).
+void printBars() {
+  const ProjectTimeline timeline;
+  const auto cursorBeat =
+      static_cast<std::int64_t>(std::floor(timeline.beatsAt(GetCursorPosition())));
+
+  grid::Bar bar = timeline.barOf(cursorBeat);
+  for (int back = 0; back < 2 && bar.firstBeat > 0; ++back)
+    bar = timeline.barOf(bar.firstBeat - 1);
+
+  say("такты вокруг курсора:");
+  for (int count = 0; count < 10; ++count) {
+    std::string line = fmt::format("  такт {}: удары с {}, размер {}, начало {:.3f} с",
+                                   bar.index + 1, bar.firstBeat, meterText(bar.meter),
+                                   timeline.timeAt(static_cast<double>(bar.firstBeat)));
+    for (const grid::Change &change : bar.changes) {
+      line += fmt::format("; на ударе {:.3f}:", change.beat + 1.0);
+      if (change.meterFrom && change.meterTo)
+        line +=
+            fmt::format(" {} → {}", meterText(*change.meterFrom), meterText(*change.meterTo));
+      if (change.tempoFrom && change.tempoTo)
+        line += fmt::format(" {} → {}", *change.tempoFrom, *change.tempoTo);
+    }
+    say(line);
+    bar = timeline.barOf(bar.firstBeat + bar.meter.beats);
+  }
+}
+
 struct DebugAction {
   custom_action_register_t registration;
   std::function<void()> run;
   int command = 0;
 };
 
-std::array<DebugAction, 1> actions{{
+std::array<DebugAction, 2> actions{{
     {{0, "REAPER_TRAINING_DEBUG_COMPARE_ITEM",
       "reaper-training (debug): compare onsets of the last run with the selected item",
       nullptr},
      compareWithItem},
+    {{0, "REAPER_TRAINING_DEBUG_BARS",
+      "reaper-training (debug): print bars around the edit cursor", nullptr},
+     printBars},
 }};
 
 bool onAction(KbdSectionInfo * /*section*/, int command, int /*val*/, int /*val2*/,
@@ -421,6 +522,23 @@ void registerDebugActions(reaper_plugin_info_t *rec) {
   hostRegister("APIvararg_TrainingDebug_Journal",
                reinterpret_cast<void *>(journalFromScriptVararg));
   hostRegister("APIdef_TrainingDebug_Journal", const_cast<char *>(kJournalDef));
+
+  hostRegister("API_TrainingDebug_AddNote", reinterpret_cast<void *>(addNote));
+  hostRegister("APIvararg_TrainingDebug_AddNote", reinterpret_cast<void *>(addNoteVararg));
+  hostRegister("APIdef_TrainingDebug_AddNote", const_cast<char *>(kAddNoteDef));
+
+  hostRegister("API_TrainingDebug_ClickCheckbox",
+               reinterpret_cast<void *>(clickCheckboxFromScript));
+  hostRegister("APIvararg_TrainingDebug_ClickCheckbox",
+               reinterpret_cast<void *>(clickCheckboxVararg));
+  hostRegister("APIdef_TrainingDebug_ClickCheckbox", const_cast<char *>(kClickCheckboxDef));
+
+#ifndef _WIN32
+  hostRegister("API_TrainingDebug_SnapshotRows", reinterpret_cast<void *>(snapshot));
+  hostRegister("APIvararg_TrainingDebug_SnapshotRows",
+               reinterpret_cast<void *>(snapshotVararg));
+  hostRegister("APIdef_TrainingDebug_SnapshotRows", const_cast<char *>(kSnapshotDef));
+#endif
 }
 
 void unregisterDebugActions() {
@@ -431,6 +549,12 @@ void unregisterDebugActions() {
   hostRegister("-API_TrainingDebug_SetSettings", reinterpret_cast<void *>(setSettings));
   hostRegister("-API_TrainingDebug_SetEnergyRatio", reinterpret_cast<void *>(setEnergyRatio));
   hostRegister("-API_TrainingDebug_Journal", reinterpret_cast<void *>(journalFromScript));
+  hostRegister("-API_TrainingDebug_AddNote", reinterpret_cast<void *>(addNote));
+  hostRegister("-API_TrainingDebug_ClickCheckbox",
+               reinterpret_cast<void *>(clickCheckboxFromScript));
+#ifndef _WIN32
+  hostRegister("-API_TrainingDebug_SnapshotRows", reinterpret_cast<void *>(snapshot));
+#endif
   hostRegister("-hookcommand2", reinterpret_cast<void *>(onAction));
 
   for (auto &action : actions)

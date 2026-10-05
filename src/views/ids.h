@@ -22,5 +22,7 @@
 #define IDC_SILENCE_LABEL 1006
 #define IDC_SILENCE 1007
 #define IDC_STATUS 1008
+#define IDC_SHOW_NUMBERS 1009
+#define IDC_SHOW_STATS 1010
 
 // NOLINTEND(modernize-macro-to-enum,cppcoreguidelines-macro-usage)
