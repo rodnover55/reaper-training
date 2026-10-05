@@ -2,13 +2,18 @@
 
 #include "synth.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <span>
 #include <vector>
 
 using training::test::evenPlucks;
 using training::test::Pluck;
 using training::test::render;
+using training::test::renderRinging;
+using training::test::RingingSettings;
+using training::test::Strike;
 using training::test::SynthSettings;
 
 TEST_CASE("синтез: щипок начинается ровно там, где задан") {
@@ -56,4 +61,65 @@ TEST_CASE("синтез: ровная сетка щипков") {
   CHECK(plucks[3].start == 480 + 3 * 4500);
   CHECK(plucks[1].frequency == 147.0);
   CHECK(plucks[2].frequency == 110.0);
+}
+
+namespace {
+
+/// Наибольший модуль сэмпла в `signal[from, to)`.
+float peakOf(const std::vector<float> &signal, std::size_t from, std::size_t to) {
+  const std::span<const float> part = std::span(signal).subspan(from, to - from);
+  return std::abs(std::ranges::max(part, {}, [](float sample) { return std::abs(sample); }));
+}
+
+} // namespace
+
+TEST_CASE("синтез: тело ноты разгорается с первого сэмпла") {
+  const SynthSettings settings{};
+  const std::vector<float> rising =
+      render({{.start = 1000, .frequency = 110.0, .riseMs = 8.0}}, 4800, settings);
+  const std::vector<float> plucked =
+      render({{.start = 1000, .frequency = 110.0}}, 4800, settings);
+
+  CHECK(rising[999] == 0.0F);
+  CHECK(rising[1000] != 0.0F);
+
+  // Первую миллисекунду звук тише щипка без нарастания, после 8 мс — тот же.
+  CHECK(peakOf(rising, 1000, 1048) < 0.2F * peakOf(plucked, 1000, 1048));
+  CHECK(rising[1500] == plucked[1500]);
+}
+
+TEST_CASE("синтез: звенящая струна — пачка медиатора, затем всплеск раз в период") {
+  const RingingSettings settings{};
+  const Strike struck{
+      .start = 1000, .amplitude = 0.0, .burstAmplitude = 0.01, .pickAmplitude = 0.02};
+  const std::vector<float> signal = renderRinging({struck}, 9600, settings);
+
+  // Всплеск начинается с нуля ровно на начале удара.
+  for (std::size_t n = 0; n <= 1000; ++n)
+    REQUIRE(signal[n] == 0.0F);
+  CHECK(signal[1001] != 0.0F);
+
+  // Пачка — пять всплесков через 1.5 мс, звон — с конца пачки, раз в период
+  // си: 778 сэмплов.
+  const std::size_t release = 1000 + 360;
+  CHECK(std::abs(peakOf(signal, 1000, 1072) - 0.02F * 0.76F) < 0.002F);
+  CHECK(std::abs(peakOf(signal, 1288, 1360) - 0.02F * 0.76F) < 0.002F);
+  CHECK(std::abs(peakOf(signal, release, release + 72) - 0.01F * 0.76F) < 0.001F);
+  CHECK(peakOf(signal, release + 200, release + 700) < 1e-6F);
+  CHECK(std::abs(peakOf(signal, release + 778, release + 850) - 0.01F * 0.76F) < 0.001F);
+}
+
+TEST_CASE("синтез: новый удар обрывает звон прошлого") {
+  const RingingSettings settings{};
+  const Strike first{
+      .start = 0, .amplitude = 0.05, .burstAmplitude = 0.01, .pickAmplitude = 0.0};
+  const std::vector<float> one = renderRinging({first}, 9600, settings);
+  const std::vector<float> two = renderRinging(
+      {first, {.start = 4800, .amplitude = 0.0, .burstAmplitude = 0.0, .pickAmplitude = 0.0}},
+      9600, settings);
+
+  // До глушения звон общий, к началу второго удара первый умолк.
+  CHECK(two[4000] == one[4000]);
+  CHECK(std::abs(two[4799]) < std::abs(one[4799]) * 0.05F + 1e-6F);
+  CHECK(peakOf(two, 4800, 9600) == 0.0F);
 }

@@ -4,10 +4,13 @@
 add_executable(training_tests
   main.cpp
   concurrency_spsc_ring_test.cpp
+  onset_sliding_max_test.cpp
   onset_detector_test.cpp
   synth.cpp
   synth_test.cpp
   onset_synth_test.cpp
+  wav.cpp
+  onset_recordings_test.cpp
   grid_beats_test.cpp
   grid_display_test.cpp
   grid_nodes_test.cpp
@@ -21,6 +24,11 @@ target_link_libraries(training_tests PRIVATE
   training_grid)
 
 target_include_directories(training_tests PRIVATE .)
+
+# Записи для регрессии читаются прямо из исходников: копировать их в каталог
+# сборки незачем.
+target_compile_definitions(training_tests PRIVATE
+  "TRAINING_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
 
 training_enable_warnings(training_tests)
 
