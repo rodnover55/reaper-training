@@ -125,18 +125,25 @@ void AudioInput::feed(const BlockHeader &header) {
   (void)samples_->pop(std::span<float>(blockSamples_));
 
   const double silenceDb = silenceDb_.load(std::memory_order_relaxed);
+  const double energyRatio = energyRatio_.load(std::memory_order_relaxed);
 
   if (!detector_ || header.sampleRate != detectorRate_) {
-    detector_.emplace(
-        onset::Settings{.sampleRate = header.sampleRate, .silenceDb = silenceDb});
+    detector_.emplace(onset::Settings{
+        .sampleRate = header.sampleRate, .silenceDb = silenceDb, .energyRatio = energyRatio});
     detectorRate_ = header.sampleRate;
     appliedSilenceDb_ = silenceDb;
+    appliedEnergyRatio_ = energyRatio;
     streaming_ = false;
   }
 
   if (silenceDb != appliedSilenceDb_) {
     detector_->setSilenceDb(silenceDb);
     appliedSilenceDb_ = silenceDb;
+  }
+
+  if (energyRatio != appliedEnergyRatio_) {
+    detector_->setEnergyRatio(energyRatio);
+    appliedEnergyRatio_ = energyRatio;
   }
 
   // Новый запуск транспорта или разрыв потока: сэмплы до и после несмежны.

@@ -17,10 +17,6 @@ constexpr double kBackNewestMs = 5.0;
 /// струны давал в окне почти одну и ту же энергию.
 constexpr double kEnergyMs = 20.0;
 
-/// Во сколько раз вырастает энергия при ударе по звучащей струне: удар
-/// добавляет верха спектра не меньше, чем было в звоне.
-constexpr double kEnergyRatio = 2.0;
-
 /// За сколько миллисекунд огибающая спадает в e раз, когда звук стихает.
 constexpr double kReleaseMs = 10.0;
 
@@ -50,6 +46,7 @@ double crossing(std::uint64_t index, double level, double previous, double envel
 Detector::Detector(const Settings &settings)
     : release_(std::exp(-1.0 / samplesOf(kReleaseMs, settings.sampleRate))),
       threshold_(std::pow(10.0, settings.silenceDb / 20.0)), ratio_(settings.ratio),
+      energyRatio_(settings.energyRatio),
       deadTime_(static_cast<std::uint64_t>(
           std::llround(samplesOf(settings.deadTimeMs, settings.sampleRate)))),
       backOldest_(std::max(lengthOf(kBackOldestMs, settings.sampleRate),
@@ -97,6 +94,8 @@ void Detector::reset() {
 void Detector::setSilenceDb(double silenceDb) {
   threshold_ = std::pow(10.0, silenceDb / 20.0);
 }
+
+void Detector::setEnergyRatio(double energyRatio) { energyRatio_ = energyRatio; }
 
 void Detector::process(std::span<const float> samples, std::vector<Onset> &onsets) {
   for (const float sample : samples)
@@ -191,12 +190,12 @@ void Detector::processSample(double sample, std::vector<Onset> &onsets) {
     return;
   }
 
-  // Удар по звучащей струне: энергия выросла вдвое. Верх спектра от
+  // Удар по звучащей струне: энергия выросла в `energyRatio` раз. Верх спектра от
   // медиатора приходит раньше щелчка, поэтому решение ждёт ещё одно окно, и
   // начало — самый сильный подъём огибающей за 20 мс до и после роста.
   // Энергия без подъёма огибающей — не удар.
   if (!energyPending_ && index >= energyArmedFrom_ &&
-      energy > kEnergyRatio * energyMax_.max().value) {
+      energy > energyRatio_ * energyMax_.max().value) {
     energyPending_ = true;
     energyDecision_ = index + energyLength_;
   }

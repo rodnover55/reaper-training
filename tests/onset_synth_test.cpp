@@ -205,6 +205,36 @@ TEST_CASE("детектор на синтезе: удар по звенящей 
   }
 }
 
+TEST_CASE("детектор на синтезе: порог энергии решает, засчитан ли удар по звучащей струне") {
+  // Пачка медиатора второго удара на 3 дБ выше звона: пять всплесков вместо
+  // одного поднимают энергию за 20 мс в несколько раз, но не в сотню.
+  const std::vector<Strike> strikes = twoStrikes(24000, 3.0);
+  const std::vector<float> signal =
+      renderRinging(strikes, strikes.back().start + 24000, kRinging);
+  const auto count = [&signal](double energyRatio) {
+    Detector detector(Settings{.sampleRate = kSampleRate,
+                               .silenceDb = kQuietDiSilenceDb,
+                               .energyRatio = energyRatio});
+    std::vector<Onset> onsets;
+    detector.process(signal, onsets);
+    return onsets.size();
+  };
+
+  CHECK(count(Settings{}.energyRatio) == 2);
+  CHECK(count(100.0) == 1);
+
+  // Смена на ходу действует со следующего сэмпла: до второго удара порог
+  // заоблачный, к нему — обычный.
+  Detector detector(Settings{
+      .sampleRate = kSampleRate, .silenceDb = kQuietDiSilenceDb, .energyRatio = 100.0});
+  std::vector<Onset> onsets;
+  const std::span<const float> all(signal);
+  detector.process(all.first(strikes[1].start - 4800), onsets);
+  detector.setEnergyRatio(Settings{}.energyRatio);
+  detector.process(all.subspan(strikes[1].start - 4800), onsets);
+  CHECK(onsets.size() == 2);
+}
+
 TEST_CASE("детектор на синтезе: нарезка не меняет удар по звенящей струне") {
   // Удар по звучащей струне решается позже, чем замечен: решение тоже не должно
   // зависеть от того, где кончился кусок.
