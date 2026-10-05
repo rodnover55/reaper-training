@@ -52,7 +52,7 @@ cmake --install build
 console output»):
 
 ```
-reaper-training 0.1.0 loaded (сборка 2026-10-03 21:37:12)
+reaper-training 0.2.0 loaded (сборка 2026-10-03 21:37:12)
 ```
 
 В строке — версия расширения, в скобках — дата и время сборки: по ним видно,
