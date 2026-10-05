@@ -1,0 +1,803 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Окно тренажёра: такт на строку — макет</title>
+<style>
+  :root {
+    --bg: rgb(24, 24, 24);
+    --neutral: rgb(170, 170, 170);
+    --dim: rgb(125, 125, 125);
+    --good: rgb(90, 210, 90);
+    --bad: rgb(235, 80, 70);
+    --beat: rgb(255, 190, 60);
+    --change: rgb(110, 170, 255);
+  }
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 16px 20px; background: #ececec; color: #222; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 4px 0 10px; max-width: 1240px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 6px; }
+  .tabs button, .frames button {
+    font: inherit; padding: 4px 12px; border: 1px solid #999; background: #fff;
+    border-radius: 4px; cursor: pointer;
+  }
+  .tabs button.active { background: #333; color: #fff; border-color: #333; }
+  .frames button.active { background: rgb(255, 222, 150); border-color: rgb(176, 128, 32); }
+  #desc { min-height: 42px; }
+
+  .window {
+    width: 1240px; height: 480px; min-width: 520px; min-height: 260px;
+    resize: both; overflow: hidden; border: 1px solid #444;
+    display: flex; flex-direction: column; box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+  }
+  .controls { flex: none; background: rgb(180, 180, 180); font: 13px Arial, sans-serif; padding: 3px 8px 5px; color: #111; }
+  .controls .line { display: flex; align-items: center; gap: 8px; height: 26px; }
+  .controls .gap { width: 14px; }
+  .edit { background: #fff; border: 1px solid #777; padding: 1px 4px; width: 32px; }
+  .check { display: flex; align-items: center; gap: 3px; cursor: pointer; }
+  .check input { margin: 0; }
+  .combo {
+    background: linear-gradient(#fafafa, #ddd); border: 1px solid #777; padding: 1px 6px;
+    width: 130px; display: flex; justify-content: space-between;
+  }
+  .rows {
+    flex: 1; position: relative; background: var(--bg); overflow: hidden;
+    font-family: Arial, Helvetica, sans-serif; font-weight: bold;
+  }
+  .rows > div { position: absolute; }
+  .tx { transform: translate(-50%, -50%); white-space: nowrap; line-height: 1; }
+  .dot { transform: translate(-50%, -50%); border-radius: 50%; }
+  .glow { text-shadow: 0 0 10px #fff, 0 0 3px #fff; }
+  .mark { white-space: nowrap; line-height: 1; color: var(--change); }
+
+  .transport { display: flex; align-items: center; gap: 12px; margin: 10px 0 6px; max-width: 1240px; }
+  .transport input[type=range] { flex: 1; }
+  .transport button { font-size: 16px; width: 40px; }
+  #pos { font-variant-numeric: tabular-nums; min-width: 220px; }
+  .frames { display: flex; gap: 6px; flex-wrap: wrap; }
+  #caption {
+    margin-top: 8px; padding: 8px 12px; background: #fff; max-width: 1216px; min-height: 42px;
+    border-left: 4px solid rgb(230, 170, 40);
+  }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 14px 0 6px; align-items: center; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -1px; margin-right: 5px; }
+  details { max-width: 1240px; margin-top: 8px; }
+  details li { margin: 3px 0; }
+</style>
+</head>
+<body>
+
+<h1>Окно тренажёра: такт на строку — макет</h1>
+<p>Строка окна — один такт на всю ширину, шкала строки делится на доли этого такта.
+Mode задаёт сетку — сколько узлов на долю; отклонение ноты считается от
+ближайшего узла этой сетки. Варианты переключаются вкладками; в каждом можно запустить
+воспроизведение (▶ или пробел), протянуть ползунок или выбрать кадр. Окно
+растягивается за правый нижний угол.</p>
+
+<div class="tabs" id="tabs"></div>
+<p id="desc"></p>
+
+<div class="window">
+  <div class="controls">
+    <div class="line">
+      <span>Mode:</span><span class="combo"><span id="mode"></span><span>▾</span></span>
+      <span class="gap"></span>
+      <span>Tolerance, ms:</span><span class="edit" id="tol"></span>
+      <span class="gap"></span>
+      <span>Input:</span><span class="combo"><span>1: Input 1</span><span>▾</span></span>
+      <span class="gap"></span>
+      <label class="check"><input type="checkbox" id="numbers" checked>Bar numbers</label>
+      <label class="check"><input type="checkbox" id="stats" checked>Mean/spread</label>
+    </div>
+    <div class="line">
+      <span>Silence, dBFS:</span><span class="edit">-50</span>
+      <span class="gap"></span>
+      <span id="status"></span>
+    </div>
+  </div>
+  <div class="rows" id="rows"></div>
+</div>
+
+<div class="transport">
+  <button id="play" title="Пробел">▶</button>
+  <input type="range" id="scrub" min="0" max="1000" value="0">
+  <span id="pos"></span>
+  <label>Скорость
+    <select id="speed">
+      <option value="1">1×</option>
+      <option value="0.5" selected>0.5×</option>
+      <option value="0.25">0.25×</option>
+    </select>
+  </label>
+</div>
+<div class="frames" id="frames"></div>
+<div id="caption"></div>
+
+<div class="legend">
+  <span><span class="sw" style="background: var(--good)"></span>в пределах допуска</span>
+  <span><span class="sw" style="background: var(--bad)"></span>за допуском</span>
+  <span><span class="sw" style="background: var(--neutral)"></span>доля, на которой нот нет</span>
+  <span><span class="sw" style="background: var(--beat)"></span>текущая доля воспроизведения</span>
+  <span><span class="sw" style="background: var(--change)"></span>маркер смены темпа или размера</span>
+  <span><span class="sw" style="background: #fff; box-shadow: 0 0 6px #fff, 0 0 0 1px #999"></span>число только что появилось</span>
+</div>
+
+<details open>
+  <summary>Допущения макета — уточнить в требованиях</summary>
+  <ul>
+    <li>Доля — единица знаменателя размера, как у метронома REAPER: в 4/4 — четверти, в 7/8 и 6/8 — восьмые.</li>
+    <li>Mode задаёт число узлов сетки на долю: Quarters — 1, Eighths — 2, Eighth triplets — 3, Sixteenths — 4, Sixteenth triplets — 6. Нота относится к ближайшему узлу, отклонение считается от него — как сейчас.</li>
+    <li>Смена Mode действует со следующей доли: начатая доля доводится в прежнем Mode — как сейчас.</li>
+    <li>Точкой отмечаются только доли. Узел между долями без ноты пустой.</li>
+    <li>Число стоит на месте узла сетки, а не на месте самой ноты, поэтому числа стоят ровными столбцами.</li>
+    <li>Строка заводится на каждый такт, пока идёт воспроизведение; новые сверху, видно восемь. Пауза в игре — две строки с точками: первого такта паузы и верхняя. Пока пауза идёт, при входе в следующий такт верхняя пустая строка просто меняет номер — строки не добавляются и не убираются. Позднее значение в такт, чья строка уже сменила номер, возвращает его строку под верхнюю.</li>
+    <li>Кегль строки задаёт самая мелкая сетка Mode в её такте: крупный — по ширине доли, высоте строки и расстоянию между узлами, мелкий — 0.6 крупного. Посреди такта кегль не меняется; в мелкой сетке (триоли шестнадцатыми) числа мельче.</li>
+    <li>Слева от строки — только номер такта, без размера и темпа: их смены видны по маркерам. Колонка номера вмещает пять цифр — до такта 10000. Номер такта, среднее и разброс набраны мелко, колонки узкие: место отдано шкале такта.</li>
+    <li>Такт отделён тонкими неяркими вертикальными линиями: слева — от номера такта, справа, на конце последней доли, — от среднего и разброса. Перед первой долей — ровно столько места, чтобы влезло её число.</li>
+    <li>Смена размера или темпа — синий флажок над долей, на которой смена, с подписью «было → стало», например «4/4 → 7/8», «120 → 150». Смена в начале такта — над первой долей, смена темпа внутри такта — над той долей, где она стоит. Размер и темп, сменившиеся вместе, — один маркер.</li>
+    <li>Среднее и разброс — по такту, у законченных тактов.</li>
+    <li>Номера тактов (Bar numbers) и среднее с разбросом (Mean/spread) включаются и выключаются флажками в настройках окна; по умолчанию включены. Выключенная колонка исчезает вместе со своей линией, и шкала такта занимает её место. Флажки сохраняются глобально, как остальные настройки.</li>
+    <li>Цвет числа — по допуску, который действовал, когда число появилось в окне; цвет среднего — по допуску на конец такта.</li>
+    <li>Ранняя нота к первой доле следующего такта, пришедшая до его начала, ждёт, пока появится его строка (в макете не показано).</li>
+  </ul>
+</details>
+
+<script>
+'use strict';
+
+/** Сколько строк видно в окне. */
+const KEEP = 8;
+
+/** Рисунки на одну долю: места сыгранных нот в долях от её начала. */
+const PATTERNS = {
+  q: [0],
+  e: [0, 1 / 2],
+  t: [0, 1 / 3, 2 / 3],
+  s: [0, 1 / 4, 1 / 2, 3 / 4],
+  x: [0, 1 / 6, 2 / 6, 3 / 6, 4 / 6, 5 / 6],
+  '-': [],
+};
+
+/** Mode — число узлов сетки на долю — и его название в окне. */
+const MODES = { 1: 'Quarters', 2: 'Eighths', 3: 'Eighth triplets', 4: 'Sixteenths', 6: 'Sixteenth triplets' };
+
+// Сценарий: такты подряд с номера `first`. У такта — сыгранный рисунок по
+// долям (`play`, буквы из PATTERNS через пробел), отклонения нот от мест
+// рисунка — случайные со сдвигом `bias` и разбросом `sd`, мс; `set` задаёт
+// отклонение ноты точно: [место в долях, отклонение]; `add` — ещё одна нота
+// туда же. Узел и отклонение ноты считаются по сетке Mode. `mode` — Mode на
+// старте, `modeAt` и `tolAt` — моменты смены Mode и допуска: [такт, место в
+// долях, мс после него, значение]. `bpmAt` — смена темпа внутри такта:
+// [место в долях, темп]. `lag` — задержка показа числа после удара, мс.
+// Кадр `at` — [такт, место в долях, мс после него].
+const VARIANTS = [
+  {
+    id: 'base',
+    title: 'Такт на строку',
+    desc: '4/4, 120 BPM, Mode — Sixteenths; гитарист играет четверти, восьмые и шестнадцатые. ' +
+      'Строка — такт на всю ширину окна, его доли (здесь четверти) отмечены точками. Нота на ' +
+      'доле — крупное число, нота между долями — мельче. Верхняя строка — такт, который сейчас ' +
+      'играет.',
+    first: 15, sig: [4, 4], bpm: 120, mode: 4, seed: 7, lag: 40, latency: 32, tol0: 10, bias: 2, sd: 8,
+    bars: [
+      { play: 'q q q q', bias: 3, sd: 6 },
+      { play: 'e e e e' },
+      { play: 's s s s', bias: -2, sd: 9 },
+      { play: 's s - s', set: [[1.5, -13]], add: [[1.5, -31]] },
+      { play: '- - e e' },
+      { play: '' },
+      { play: 'e e e e' },
+      { play: 's s s s', bias: 5, set: [[1, 3]] },
+      { play: 'e e q q' },
+      { play: 'q q q q' },
+      { play: 'q q q q' },
+    ],
+    frames: [
+      { at: [22, 1, 10], text: 'Только началась вторая доля такта 22: её точка жёлтая, место ' +
+        'доли подсвечено. Точки третьей и четвёртой долей нарисованы сразу, как только начался ' +
+        'такт. Ноты первой доли уже показаны: на доле — крупно, шестнадцатые между долями — мельче.' },
+      { at: [22, 1, 200], text: 'Через 40 мс после удара число пришло и встало на место точки; ' +
+        'подсветка доли держится до следующей доли.' },
+      { at: [23, 0, 60], text: 'Начался такт 23 — его строка сверху, такт 22 ушёл строкой ниже. ' +
+        'Справа у законченных тактов — среднее отклонение и разброс по такту.' },
+      { at: [23, 2, 100], text: 'Такт 20 — пауза в игре: строка всё равно есть, все четыре точки ' +
+        'на месте. Такт 18: точка на третьей доле — нота не сыграна; «−13*» — к этому месту ' +
+        'пришли две ноты, показана ближайшая.' },
+    ],
+  },
+  {
+    id: 'pause',
+    title: 'Пауза в игре',
+    desc: '4/4, 120 BPM, Mode — Sixteenths. Гитарист играет до такта 55, в тактах 56–59 не ' +
+      'играет и снова играет с такта 60. Пауза — строка её первого такта и верхняя строка, ' +
+      'которая при входе в следующий такт просто меняет номер.',
+    first: 53, sig: [4, 4], bpm: 120, mode: 4, seed: 71, lag: 40, latency: 32, tol0: 10, bias: 2, sd: 8,
+    bars: [
+      { play: 's s s s' },
+      { play: 'e e e e' },
+      { play: 's s s s' },
+      { play: '' },
+      { play: '' },
+      { play: '' },
+      { play: '' },
+      { play: 'e e e e' },
+      { play: 's s s s' },
+      { play: 'q q q q' },
+    ],
+    frames: [
+      { at: [57, 3, 300], text: 'Гитарист не играет с такта 56. Под верхней строкой — такт 56, ' +
+        'первый пустой такт паузы; сверху — текущий такт 57 с точками: на нём видно, где ' +
+        'воспроизведение.' },
+      { at: [58, 0, 30], text: 'Воспроизведение перешло в такт 58: верхняя строка просто сменила ' +
+        'номер 57 → 58. Строки не добавились и не убрались — окно не дёргается.' },
+      { at: [60, 1, 200], text: 'Гитарист снова играет с такта 60: верхняя строка сменила номер ' +
+        'на 60, и в ней появились значения. Пауза 56–59 видна одной строкой 56 с точками.' },
+    ],
+  },
+  {
+    id: 'mode',
+    title: 'Смена Mode',
+    desc: '4/4, 100 BPM. Гитарист играет восьмые в Mode Eighths, на второй доле такта 33 ' +
+      'переходит на триоли, а Mode переключают на Eighth triplets чуть позже — посреди этой доли. ' +
+      'Потом шестнадцатые и триоли шестнадцатыми; Mode переключают на последней доле такта перед ' +
+      'ними.',
+    first: 31, sig: [4, 4], bpm: 100, mode: 2, seed: 11, lag: 40, latency: 32, tol0: 10, bias: 3, sd: 6,
+    modeAt: [[33, 1, 300, 3], [34, 3, 400, 4], [36, 3, 300, 6]],
+    bars: [
+      { play: 'e e e e' },
+      { play: 'e e e e' },
+      { play: 'e t t t' },
+      { play: 't t t t' },
+      { play: 's s s s' },
+      { play: 's s s s' },
+      { play: 'x x x x' },
+      { play: 'x x x x' },
+      { play: 'q q q q' },
+    ],
+    frames: [
+      { at: [33, 2, 300], text: 'На второй доле такта 33 гитарист заиграл триоли, а Mode ещё ' +
+        'Eighths: ноты отнесены к ближайшим восьмым. Вторая и третья триоль попали в один узел — ' +
+        'отклонение около 100 мс и пометка лишней ноты «*». Mode переключили посреди второй доли, ' +
+        'поэтому она доведена в Eighths, а с третьей доли сетка уже триольная и отклонения снова ' +
+        'маленькие.' },
+      { at: [35, 1, 100], text: 'Mode переключили на Sixteenths на последней доле такта 34 — такт ' +
+        '35 меряется шестнадцатыми.' },
+      { at: [37, 2, 150], text: 'С такта 37 Mode — Sixteenth triplets: шесть узлов на долю, 24 в ' +
+        'строке. Кегль строки задаёт её Mode, поэтому в этой строке числа мельче с самого начала ' +
+        'такта и посреди такта не меняются. Растяните окно за правый нижний угол и посмотрите, ' +
+        'как меняется кегль.' },
+    ],
+  },
+  {
+    id: 'tempo',
+    title: 'Смена темпа',
+    desc: '4/4, Mode — Sixteenths. С такта 42 темп 150 вместо 120, в такте 44 на третьей доле — ' +
+      '100. Сетка такта сразу считается по темпу, который стоит в проекте на этом месте.',
+    first: 40, sig: [4, 4], bpm: 120, mode: 4, seed: 21, lag: 40, latency: 32, tol0: 10, bias: 2, sd: 6,
+    bars: [
+      { play: 's s s s' },
+      { play: 's s s s' },
+      { play: 'e e e e', bpm: 150, bias: 22 },
+      { play: 'e e e e', bias: 6 },
+      { play: 'e e e e', bpmAt: [[2, 100]], set: [[2, -24], [2.5, -20], [3, -15], [3.5, -12]] },
+      { play: 'e e e e', bias: -4 },
+      { play: 's s s s' },
+      { play: 'q q q q' },
+      { play: 'q q q q' },
+    ],
+    frames: [
+      { at: [42, 1, 80], text: 'С такта 42 темп 150: в начале строки маркер «120 → 150». ' +
+        'Отклонения такта 42 уже считаются по 150 — гитарист ещё играет медленнее и отстаёт, ' +
+        'числа красные.' },
+      { at: [44, 2, 150], text: 'Темп сменился посреди такта 44, на третьей доле: маркер ' +
+        '«150 → 100» стоит ровно над этой долей. Гитарист ещё в старом темпе и ' +
+        'спешит. Доли после смены длиннее по времени, но шкала строки делится по долям, поэтому ' +
+        'место у них то же.' },
+      { at: [47, 1, 60], text: 'Маркеры остаются в строках своих тактов: видно, где менялся темп и ' +
+        'как гитарист под него подстраивался.' },
+    ],
+  },
+  {
+    id: 'meter',
+    title: 'Смена размера',
+    desc: 'Размер меняется: 4/4 → 7/8 → 6/8 → 3/4 → 4/4, темп 120; на последней смене вместе с ' +
+      'размером меняется и темп, 120 → 150. Каждая строка делится на доли своего такта — в 7/8 и ' +
+      '6/8 это восьмые, как стучит метроном REAPER. Mode — Eighths: два узла на долю, в 6/8 это ' +
+      'шестнадцатые.',
+    first: 50, sig: [4, 4], bpm: 120, mode: 2, seed: 31, lag: 40, latency: 32, tol0: 10, bias: 2, sd: 7,
+    bars: [
+      { play: 'e e e e' },
+      { play: 'e e e e' },
+      { play: 'q q q q q q q', sig: [7, 8] },
+      { play: 'q q - q q q -' },
+      { play: 'e e e e e e', sig: [6, 8] },
+      { play: 'q e q q e q' },
+      { play: 'e e e', sig: [3, 4] },
+      { play: 'q q q q', sig: [4, 4], bpm: 150 },
+      { play: 'e e e e' },
+    ],
+    frames: [
+      { at: [52, 3, 60], text: 'Такт 52 в 7/8: в начале строки маркер «4/4 → 7/8», семь ' +
+        'долей-восьмых на всю ширину строки. Строки 4/4 ниже размечены по-своему — на четыре доли.' },
+      { at: [54, 2, 60], text: 'Такт 54: маркер «7/8 → 6/8», шесть долей, шестнадцатые между ' +
+        'ними — мелкие числа. В такте 53 две доли без нот — точки остались.' },
+      { at: [57, 1, 60], text: 'Такт 56 — маркер «6/8 → 3/4», три доли с восьмыми. В такте 57 ' +
+        'размер и темп сменились вместе — один маркер «3/4 → 4/4 · 120 → 150».' },
+    ],
+  },
+  {
+    id: 'delay',
+    title: 'Задержка показа',
+    desc: 'Число появляется не сразу после удара: звук проходит буфер звуковой карты, поиск атаки ' +
+      'и таймер окна. Здесь показ отстаёт от удара на 180 мс (большой буфер), 140 BPM, ' +
+      'Mode — Sixteenths. Верхняя строка всё равно идёт вместе с воспроизведением, а число, ' +
+      'пришедшее уже в следующем такте, дорисовывается в строку своего такта.',
+    first: 60, sig: [4, 4], bpm: 140, mode: 4, seed: 41, lag: 180, latency: 92.9, tol0: 10, bias: 3, sd: 7,
+    bars: [
+      { play: 's s s s' },
+      { play: 's s s s' },
+      { play: 's s s s' },
+      { play: 's s s s', set: [[3.75, 8]] },
+      { play: 's s s s', set: [[0, 4]] },
+      { play: 's s s s' },
+      { play: 's s s s' },
+      { play: 's s s s' },
+    ],
+    frames: [
+      { at: [64, 0, 30], text: 'Воспроизведение перешло в такт 64: его строка сверху, первая доля ' +
+        'жёлтая. Последняя шестнадцатая такта 63 уже сыграна, но её число ещё не пришло — её ' +
+        'место в строке 63 пустое.' },
+      { at: [64, 0, 110], text: 'Число последней шестнадцатой такта 63 («+8») появилось постфактум ' +
+        'в строке 63 — подсвечено как новое. Среднее и разброс такта 63 пересчитались вместе с ним.' },
+      { at: [64, 0, 200], text: 'Через 180 мс после удара пришло и число первой доли такта 64 и ' +
+        'встало на место жёлтой точки.' },
+    ],
+  },
+  {
+    id: 'tolerance',
+    title: 'Смена допуска',
+    desc: 'Гитарист стабильно отстаёт примерно на 13 мс, 110 BPM, Mode — Eighths. На второй доле такта 73 ' +
+      'допуск (Tolerance) меняют с 10 на 20 мс. Порог тишины (Silence) меняется так же — с момента ' +
+      'смены; на вид строк он не влияет, а решает, какие ноты вообще находятся, поэтому отдельно ' +
+      'не показан.',
+    first: 70, sig: [4, 4], bpm: 110, mode: 2, seed: 51, lag: 40, latency: 32, tol0: 10, bias: 13, sd: 3,
+    tolAt: [[73, 1, 0, 20]],
+    bars: [
+      { play: 'e e e e' },
+      { play: 'e e e e' },
+      { play: 'e e e e' },
+      { play: 'e e e e' },
+      { play: 'e e e e' },
+      { play: 'e e e e' },
+      { play: 'e e e e' },
+      { play: 'e e e e' },
+    ],
+    frames: [
+      { at: [73, 0, 400], text: 'Допуск 10 мс: отклонения около +13 — красные.' },
+      { at: [73, 3, 100], text: 'Допуск сменили на 20 мс на второй доле такта 73. Числа, появившиеся ' +
+        'после смены, сразу красятся по новому допуску — зелёные; числа до смены, и в этом такте, ' +
+        'и в строках ниже, остались как были. В настройках и строке состояния — 20.' },
+      { at: [75, 2, 60], text: 'Такты 70–72 не перекрасились: цвет числа задаёт допуск, который ' +
+        'действовал, когда число появилось.' },
+    ],
+  },
+  {
+    id: 'long',
+    title: 'Такт 10000',
+    desc: 'Длинный проект: номера тактов четырёх- и пятизначные. Колонка номера рассчитана на пять ' +
+      'цифр — до такта 10000. 4/4, 120 BPM, Mode — Sixteenths.',
+    first: 9993, sig: [4, 4], bpm: 120, mode: 4, seed: 61, lag: 40, latency: 32, tol0: 10, bias: 2, sd: 8,
+    bars: [
+      { play: 's s s s' },
+      { play: 'e e e e' },
+      { play: 's s s s' },
+      { play: 'q q q q' },
+      { play: 'e e e e' },
+      { play: 's s s s' },
+      { play: 'e e e e' },
+      { play: 's s s s' },
+      { play: 'q q q q' },
+    ],
+    frames: [
+      { at: [10000, 1, 100], text: 'Играет такт 10000: номер умещается в колонке целиком, такт от ' +
+        'него отделён тонкой линией. Ниже — такты 9993–9999.' },
+    ],
+  },
+];
+
+/** Повторяемый генератор случайных чисел в [0, 1). */
+function random(seed) {
+  let a = seed;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Нормальная случайная величина: среднее 0, разброс 1. */
+function gauss(next) {
+  const u = 1 - next();
+  const v = next();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+/** Значение из списка смен [момент, значение], действующее в момент `time`. */
+function valueAt(changes, time) {
+  let value = changes[0][1];
+  for (const [from, v] of changes)
+    if (from <= time)
+      value = v;
+  return value;
+}
+
+/**
+ * Разворачивает сценарий: время начала и длина каждого такта, узлы сетки
+ * Mode, сыгранные ноты с их узлами и моментом, когда число появляется в окне,
+ * моменты кадров и смен Mode и допуска. Темп — в четвертях, как в REAPER:
+ * доля-восьмая при 120 BPM длится 0.25 с.
+ */
+function build(def) {
+  const next = random(def.seed);
+  let sig = def.sig;
+  let bpm = def.bpm;
+  let start = 0;
+  const bars = [];
+
+  def.bars.forEach((spec, i) => {
+    const prevSig = sig;
+    const prevBpm = bpm;
+    sig = spec.sig || sig;
+    bpm = spec.bpm || bpm;
+    const segments = [[0, bpm]];
+    for (const [pos, value] of spec.bpmAt || []) {
+      segments.push([pos, value]);
+      bpm = value;
+    }
+
+    const den = sig[1];
+    const within = (pos) => segments.reduce((sum, [from, value], j) => {
+      const to = j + 1 < segments.length ? segments[j + 1][0] : Infinity;
+      return pos > from ? sum + (Math.min(pos, to) - from) * (60 / value) * (4 / den) : sum;
+    }, 0);
+
+    // Маркеры смен: «было → стало» на месте смены. Смена размера и темпа в
+    // начале такта — один маркер.
+    const marks = [];
+    const opening = [];
+    if (i > 0 && sig.join('/') !== prevSig.join('/'))
+      opening.push(`${prevSig.join('/')} → ${sig.join('/')}`);
+    if (i > 0 && segments[0][1] !== prevBpm)
+      opening.push(`${prevBpm} → ${segments[0][1]}`);
+    if (opening.length)
+      marks.push({ pos: 0, text: opening.join(' · ') });
+    for (let j = 1; j < segments.length; j++)
+      marks.push({ pos: segments[j][0], text: `${segments[j - 1][1]} → ${segments[j][1]}` });
+
+    bars.push({
+      n: def.first + i, sig, beats: sig[0], segments, start, within, length: within(sig[0]), marks,
+    });
+    start += bars[i].length;
+  });
+
+  const moment = ([n, pos, ms]) => {
+    const bar = bars[n - def.first];
+    return bar.start + bar.within(pos) + (ms || 0) / 1000;
+  };
+  const changes = (list, first) =>
+    [[-Infinity, first], ...(list || []).map(([n, pos, ms, value]) => [moment([n, pos, ms]), value])];
+  const modes = changes(def.modeAt, def.mode);
+
+  // Узлы сетки. Доля меряется в Mode, который действовал в её начале: смена
+  // Mode посреди доли действует со следующей.
+  const nodes = [];
+  for (const bar of bars) {
+    bar.nodes = [];
+    bar.division = 1;
+    for (let k = 0; k < bar.beats; k++) {
+      const division = valueAt(modes, bar.start + bar.within(k));
+      bar.division = Math.max(bar.division, division);
+      for (let j = 0; j < division; j++) {
+        const pos = k + j / division;
+        const node = { pos, time: bar.start + bar.within(pos), notes: [] };
+        bar.nodes.push(node);
+        nodes.push(node);
+      }
+    }
+  }
+
+  // Сыгранные ноты: рисунок со случайными отклонениями. Нота относится к
+  // ближайшему узлу, в том числе к узлу соседнего такта.
+  def.bars.forEach((spec, i) => {
+    const bar = bars[i];
+    const bias = spec.bias ?? def.bias;
+    const sd = spec.sd ?? def.sd;
+    const played = [];
+    (spec.play || '').split(/\s+/).filter(Boolean).forEach((token, beat) => {
+      for (const part of PATTERNS[token])
+        played.push({ pos: beat + part, dev: Math.round(bias + sd * gauss(next)) });
+    });
+    for (const [pos, dev] of spec.set || []) {
+      const note = played.find((n) => Math.abs(n.pos - pos) < 1e-6);
+      if (note)
+        note.dev = dev;
+      else
+        played.push({ pos, dev });
+    }
+    for (const [pos, dev] of spec.add || [])
+      played.push({ pos, dev });
+
+    for (const note of played) {
+      const time = bar.start + bar.within(note.pos) + note.dev / 1000;
+      let nearest = nodes[0];
+      for (const node of nodes)
+        if (Math.abs(node.time - time) < Math.abs(nearest.time - time))
+          nearest = node;
+      nearest.notes.push({ time, shown: time + def.lag / 1000 });
+    }
+  });
+
+  return {
+    ...def,
+    bars,
+    end: start - 0.001,
+    modes,
+    tolerances: changes(def.tolAt, def.tol0),
+    frames: def.frames.map((frame) => ({ ...frame, t: moment(frame.at) })),
+  };
+}
+
+const $ = (id) => document.getElementById(id);
+const rowsEl = $('rows');
+const scrub = $('scrub');
+const playButton = $('play');
+
+let scene = null;
+let now = 0;
+let playing = false;
+let lastFrame = 0;
+
+function barAt(time) {
+  let i = 0;
+  while (i + 1 < scene.bars.length && scene.bars[i + 1].start <= time)
+    i++;
+  return i;
+}
+
+function beatAt(bar, time) {
+  const offset = time - bar.start;
+  let beat = 0;
+  while (beat + 1 < bar.beats && bar.within(beat + 1) <= offset)
+    beat++;
+  return beat;
+}
+
+/** В строку такта `index` уже пришло хотя бы одно значение. */
+const hasValues = (index) =>
+  scene.bars[index].nodes.some((node) => node.notes.some((n) => n.shown <= now));
+
+/**
+ * Такты строк сверху вниз, когда воспроизведение в такте `current`. Вход в
+ * такт заводит строку сверху, но если верхняя строка пуста и под ней тоже
+ * пустая, верхняя просто получает номер нового такта: пауза — одна строка
+ * своего первого такта и верхняя строка. Позднее значение в такт, чья строка
+ * уже сменила номер, возвращает его строку под верхнюю.
+ */
+function barsOfRows(current) {
+  const rows = [];
+  for (let i = 0; i <= current; i++) {
+    if (rows.length >= 2 && !hasValues(rows[0]) && !hasValues(rows[1]))
+      rows[0] = i;
+    else
+      rows.unshift(i);
+  }
+  return rows.slice(0, KEEP);
+}
+
+const sign = (v) => (v > 0 ? '+' : v < 0 ? '−' : '');
+const devText = (dev, extra) => (dev === 0 ? '0' : sign(dev) + Math.abs(dev)) + (extra ? '*' : '');
+const oneDecimal = (v) => {
+  const text = Math.abs(v).toFixed(1);
+  return text === '0.0' ? text : sign(v) + text;
+};
+const tone = (shown, tolerance) => (Math.abs(shown) <= tolerance ? 'var(--good)' : 'var(--bad)');
+
+function render() {
+  const width = rowsEl.clientWidth;
+  const rowHeight = rowsEl.clientHeight / KEEP;
+  const showStats = $('stats').checked;
+  // Номер такта, среднее и разброс — мелко и в узких колонках: место отдано
+  // такту.
+  // Колонка номера — под пять цифр, до такта 10000.
+  const labelSize = Math.max(10, Math.min(rowHeight * 0.34, 22));
+  const labelWidth = $('numbers').checked ? labelSize * 0.6 * 5 + 10 : 0;
+  const statsWidth = showStats ? Math.max(90, width * 0.09) : 0;
+  const scaleWidth = width - labelWidth - statsWidth;
+  const current = barAt(now);
+  const out = [];
+
+  const box = (left, top, w, h, background) =>
+    out.push(`<div style="left:${left}px;top:${top}px;width:${w}px;height:${h}px;background:${background}"></div>`);
+  const text = (x, y, size, color, html, cls = '') =>
+    out.push(`<div class="tx ${cls}" style="left:${x}px;top:${y}px;font-size:${size}px;color:${color}">${html}</div>`);
+
+  const shownBars = barsOfRows(current);
+
+  for (let r = 0; r < shownBars.length; r++) {
+    const bar = scene.bars[shownBars[r]];
+    const top = r * rowHeight;
+    const middle = top + rowHeight / 2;
+    // Кегль строки задаёт самая мелкая сетка Mode в такте: в триолях
+    // шестнадцатыми крупное число на доле иначе наезжает на соседние.
+    const fonts = (step) => {
+      const gap = step / bar.division;
+      const big = Math.max(9, Math.min(rowHeight * 0.62, step / 2.3, gap / 1.55));
+      return { big, small: Math.max(8, Math.min(big * 0.6, gap / 2)) };
+    };
+    // Доля — равная часть шкалы. Перед первой долей — ровно столько места,
+    // чтобы влезло её число; после последней — хвост её доли с узлами.
+    const pad = fonts(scaleWidth / bar.beats).big * 0.95 + 6;
+    const step = (scaleWidth - pad) / bar.beats;
+    const x = (pos) => labelWidth + pad + step * pos;
+    const { big, small } = fonts(step);
+
+    // Число узла — по ближайшей к нему из пришедших нот; больше одной ноты —
+    // пометка лишней.
+    const visible = [];
+    for (const node of bar.nodes) {
+      const arrived = node.notes.filter((n) => n.shown <= now);
+      if (!arrived.length)
+        continue;
+      const nearest = arrived.reduce((a, b) =>
+        (Math.abs(b.time - node.time) < Math.abs(a.time - node.time) ? b : a));
+      visible.push({
+        pos: node.pos, shown: nearest.shown, extra: arrived.length > 1,
+        dev: Math.round((nearest.time - node.time) * 1000),
+        fresh: now - Math.max(...arrived.map((n) => n.shown)) < 0.25,
+      });
+    }
+    const beat = r === 0 ? beatAt(bar, now) : -1;
+
+    if (r === 0) {
+      box(0, top, width, rowHeight, 'rgba(255,255,255,.05)');
+      const left = Math.max(labelWidth + 1, x(beat) - step * 0.125);
+      box(left, top, x(beat) + step * 0.875 - left, rowHeight, 'rgba(255,190,60,.15)');
+    }
+    // Маркер смены — флажок над строкой чисел, как на линейке REAPER: древко
+    // ровно над долей, на которой смена, подпись справа от него.
+    const markSize = Math.max(9, Math.min(rowHeight * 0.2, 14));
+    for (const mark of bar.marks) {
+      box(x(mark.pos) - 1, top + 2, 2, markSize + 2, 'var(--change)');
+      out.push(`<div class="mark" style="left:${x(mark.pos) + 4}px;top:${top + 3}px;font-size:${markSize}px">${mark.text}</div>`);
+    }
+
+    if (labelWidth)
+      text(labelWidth / 2, middle, labelSize, 'var(--neutral)', bar.n);
+
+    for (let k = 0; k < bar.beats; k++) {
+      if (visible.some((n) => Math.abs(n.pos - k) < 1e-6))
+        continue;
+      const size = Math.max(4, big * (k === beat ? 0.3 : 0.2));
+      out.push(`<div class="dot" style="left:${x(k)}px;top:${middle}px;width:${size}px;height:${size}px;` +
+               `background:${k === beat ? 'var(--beat)' : 'var(--neutral)'}"></div>`);
+    }
+    for (const note of visible) {
+      const onBeat = Math.abs(note.pos - Math.round(note.pos)) < 1e-6;
+      text(x(note.pos), middle, onBeat ? big : small, tone(note.dev, valueAt(scene.tolerances, note.shown)),
+           devText(note.dev, note.extra), note.fresh ? 'glow' : '');
+    }
+
+    if (showStats && r > 0 && visible.length > 1) {
+      const mean = visible.reduce((sum, n) => sum + n.dev, 0) / visible.length;
+      const spread = Math.sqrt(visible.reduce((sum, n) => sum + (n.dev - mean) ** 2, 0) / visible.length);
+      const size = Math.min(rowHeight * 0.34, statsWidth / 2 / 3.0);
+      text(width - statsWidth * 0.72, middle, size,
+           tone(Math.round(mean * 10) / 10, valueAt(scene.tolerances, bar.start + bar.length)), oneDecimal(mean));
+      text(width - statsWidth * 0.25, middle, size, 'var(--neutral)', spread.toFixed(1));
+    }
+  }
+  // Тонкие линии на начале и конце такта отделяют его от номера такта и от
+  // среднего с разбросом.
+  if (labelWidth)
+    box(labelWidth, 0, 1, rowsEl.clientHeight, 'rgba(255,255,255,.14)');
+  if (showStats)
+    box(labelWidth + scaleWidth, 0, 1, rowsEl.clientHeight, 'rgba(255,255,255,.14)');
+  rowsEl.innerHTML = out.join('');
+
+  const mode = MODES[valueAt(scene.modes, now)];
+  const tolerance = valueAt(scene.tolerances, now);
+  $('mode').textContent = mode;
+  $('tol').textContent = tolerance;
+  $('status').textContent =
+    `${mode}, tolerance ${tolerance} ms, latency ${scene.latency.toFixed(1)} ms — measuring`;
+
+  const bar = scene.bars[current];
+  $('pos').textContent = `такт ${bar.n}, доля ${beatAt(bar, now) + 1} · ${now.toFixed(3)} с`;
+  scrub.value = Math.round(now * 1000);
+
+  let active = -1;
+  scene.frames.forEach((frame, i) => {
+    if (frame.t <= now + 1e-6)
+      active = i;
+  });
+  [...$('frames').children].forEach((button, i) => button.classList.toggle('active', i === active));
+  $('caption').textContent = active >= 0 ? scene.frames[active].text : 'Нажмите ▶ или выберите кадр.';
+}
+
+function loop(time) {
+  if (!playing)
+    return;
+  now = Math.min(scene.end, now + ((time - lastFrame) / 1000) * Number($('speed').value));
+  lastFrame = time;
+  if (now >= scene.end)
+    setPlaying(false);
+  render();
+  if (playing)
+    requestAnimationFrame(loop);
+}
+
+function setPlaying(on) {
+  playing = on;
+  playButton.textContent = on ? '⏸' : '▶';
+  if (!on)
+    return;
+  if (now >= scene.end)
+    now = 0;
+  lastFrame = performance.now();
+  requestAnimationFrame(loop);
+}
+
+function select(id) {
+  const def = VARIANTS.find((v) => v.id === id) || VARIANTS[0];
+  scene = build(def);
+  history.replaceState(null, '', `#${def.id}`);
+  [...$('tabs').children].forEach((button) => button.classList.toggle('active', button.dataset.id === def.id));
+  $('desc').textContent = def.desc;
+  scrub.max = Math.round(scene.end * 1000);
+
+  const frames = $('frames');
+  frames.innerHTML = '';
+  scene.frames.forEach((frame, i) => {
+    const button = document.createElement('button');
+    button.textContent = `Кадр ${i + 1}`;
+    button.onclick = () => {
+      setPlaying(false);
+      now = frame.t;
+      render();
+    };
+    frames.append(button);
+  });
+
+  setPlaying(false);
+  now = scene.frames[0].t;
+  render();
+}
+
+for (const v of VARIANTS) {
+  const button = document.createElement('button');
+  button.textContent = v.title;
+  button.dataset.id = v.id;
+  button.onclick = () => select(v.id);
+  $('tabs').append(button);
+}
+
+playButton.onclick = () => setPlaying(!playing);
+scrub.oninput = () => {
+  now = Number(scrub.value) / 1000;
+  render();
+};
+$('stats').onchange = render;
+$('numbers').onchange = render;
+document.addEventListener('keydown', (event) => {
+  if (event.code === 'Space' && event.target.tagName !== 'INPUT') {
+    event.preventDefault();
+    setPlaying(!playing);
+  }
+});
+new ResizeObserver(() => scene && render()).observe(rowsEl);
+
+select(location.hash.slice(1));
+</script>
+</body>
+</html>

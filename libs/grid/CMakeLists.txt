@@ -1,8 +1,8 @@
-# Время ноты, сетка режима, свод ударов в строки и модель показа (design.md
-# D2, D5, D6). От ОС и хоста не зависит (design.md D9): это проверяет тест
-# grid_isolation.
+# Время ноты, сетка режима, свод нот в строки тактов и модель показа (архив
+# add-timing-trainer, design.md D2, D5, D9; design.md D1–D7). От ОС и хоста не
+# зависит: это проверяет тест grid_isolation.
 add_library(training_grid STATIC
-  src/beats.cpp
+  src/bars.cpp
   src/display.cpp
   src/nodes.cpp
   src/note_time.cpp)

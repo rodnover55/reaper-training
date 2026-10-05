@@ -11,10 +11,11 @@ add_executable(training_tests
   onset_synth_test.cpp
   wav.cpp
   onset_recordings_test.cpp
-  grid_beats_test.cpp
-  grid_display_test.cpp
+  grid_bar_display_test.cpp
+  grid_bars_test.cpp
   grid_nodes_test.cpp
-  grid_note_time_test.cpp)
+  grid_note_time_test.cpp
+  grid_timeline_test.cpp)
 
 target_link_libraries(training_tests PRIVATE
   doctest::doctest

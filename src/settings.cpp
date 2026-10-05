@@ -75,6 +75,10 @@ Settings loadSettings() {
     settings.channel = *channel - 1;
   if (const auto silence = numberOf("silence_db"))
     settings.silenceDb = *silence;
+  if (const auto numbers = numberOf("show_bar_numbers"))
+    settings.showBarNumbers = *numbers != 0;
+  if (const auto stats = numberOf("show_bar_stats"))
+    settings.showBarStats = *stats != 0;
   return clamped(settings);
 }
 
@@ -84,6 +88,8 @@ void saveSettings(const Settings &settings) {
         fmt::format("{}", static_cast<int>(std::lround(settings.toleranceMs))));
   store("channel", fmt::format("{}", settings.channel + 1));
   store("silence_db", fmt::format("{}", static_cast<int>(std::lround(settings.silenceDb))));
+  store("show_bar_numbers", settings.showBarNumbers ? "1" : "0");
+  store("show_bar_stats", settings.showBarStats ? "1" : "0");
 }
 
 } // namespace training::reaper

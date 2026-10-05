@@ -3,7 +3,7 @@
 #define REAPERAPI_WANT_GetInputChannelName
 #define REAPERAPI_WANT_GetInputOutputLatency
 #define REAPERAPI_WANT_GetPlayStateEx
-#define REAPERAPI_WANT_GetPlayPosition2Ex
+#define REAPERAPI_WANT_GetPlayPositionEx
 #define REAPERAPI_WANT_Master_GetPlayRate
 #define REAPERAPI_WANT_GetSetRepeat
 #define REAPERAPI_WANT_GetSet_LoopTimeRange2
@@ -56,7 +56,7 @@ void onMainTimer() {
 Trainer::Trainer() : settings_(loadSettings()) {
   input_.setChannel(settings_.channel);
   input_.setSilenceDb(settings_.silenceDb);
-  beats_.setMode(settings_.mode);
+  bars_.setMode(settings_.mode);
 }
 
 void Trainer::setSettings(const Settings &settings) {
@@ -64,7 +64,7 @@ void Trainer::setSettings(const Settings &settings) {
   saveSettings(settings_);
   input_.setChannel(settings_.channel);
   input_.setSilenceDb(settings_.silenceDb);
-  beats_.setMode(settings_.mode);
+  bars_.setMode(settings_.mode);
 }
 
 void Trainer::takeCompensation() {
@@ -85,7 +85,7 @@ void Trainer::takeCompensation() {
 void Trainer::start() {
   // Запуск транспорта: новый список, а компенсация держится до остановки —
   // как постоянный сдвиг у записи.
-  beats_.clear();
+  bars_.clear();
   lastRun_.clear();
   minRun_ = latestRun_ + 1;
   takeCompensation();
@@ -115,10 +115,41 @@ double Trainer::loopWrapped(double time, double blockPosition) const {
   return grid::wrapIntoLoop(time, loopStart - half, loopEnd - half);
 }
 
-double Trainer::now() const {
-  const double position = GetPlayPosition2Ex(nullptr);
-  return loopWrapped(grid::noteTime(position, 0.0, sampleRate_, compensation_, rate_),
-                     position);
+double Trainer::loopBeats(double heard) const {
+  // Петля с повтором и позиция в ней: свод сравнивает места узлов с позицией по
+  // кругу петли (design.md D3).
+  if (GetSetRepeat(-1) != 1)
+    return 0.0;
+
+  double loopStart = 0.0;
+  double loopEnd = 0.0;
+  GetSet_LoopTimeRange2(nullptr, false, true, &loopStart, &loopEnd, false);
+  if (loopEnd <= loopStart || heard < loopStart || heard > loopEnd)
+    return 0.0;
+  return timeline_.beatsAt(loopEnd) - timeline_.beatsAt(loopStart);
+}
+
+void Trainer::followPlayback() {
+  // Верхняя строка и текущий удар — по слышимой позиции (design.md D2).
+  const double heard = GetPlayPositionEx(nullptr);
+  if (!bars_.play(timeline_.beatsAt(heard), loopBeats(heard), settings_.toleranceMs,
+                  timeline_))
+    return;
+
+  for (const grid::BarRow &row : bars_.rows()) {
+    if (row.entered && !row.folded) {
+      journal("bar {} entered at {:.3f}", row.bar.index + 1, heard);
+      return;
+    }
+  }
+}
+
+void Trainer::addTestNote(double time) {
+  if (!wasPlaying_)
+    return;
+  bars_.addNote(time, rate_, settings_.toleranceMs, timeline_);
+  journal("test note t={:.6f}", time);
+  refreshWindow();
 }
 
 bool Trainer::poll() {
@@ -129,10 +160,13 @@ bool Trainer::poll() {
   const bool playing = (state & kPaused) == 0 && (state & (kPlaying | kRecording)) != 0;
   // Пока транспорт стоит, строка состояния показывает компенсацию, которая
   // будет действовать при запуске.
-  if (playing && !wasPlaying_)
+  if (playing && !wasPlaying_) {
     start();
-  else if (!playing)
+  } else if (!playing) {
     takeCompensation();
+    if (wasPlaying_)
+      bars_.stop();
+  }
   wasPlaying_ = playing;
 
   rate_ = Master_GetPlayRate(nullptr);
@@ -153,6 +187,13 @@ bool Trainer::poll() {
       status.compensationMs != status_.compensationMs || status.rate != status_.rate;
   status_ = status;
 
+  // Позиция сообщается до нот этого тика: строку ноты свод выбирает по свежей
+  // позиции.
+  if (playing) {
+    followPlayback();
+    changed = true;
+  }
+
   while (const auto hit = input_.popOnset()) {
     latestRun_ = std::max(latestRun_, hit->run);
     if (!playing || hit->run < minRun_ || sampleRate_ <= 0.0)
@@ -161,7 +202,7 @@ bool Trainer::poll() {
     const double time = loopWrapped(
         grid::noteTime(hit->blockPosition, hit->offset, hit->sampleRate, compensation_, rate_),
         hit->blockPosition);
-    beats_.addNote(time, rate_, timeline_);
+    bars_.addNote(time, rate_, settings_.toleranceMs, timeline_);
     lastRun_.push_back(*hit);
     changed = true;
 
@@ -174,13 +215,6 @@ bool Trainer::poll() {
         hit->monotonic + inputLatency_;
     journal("note t={:.6f} level={:.1f} dB, shown after {:.1f} ms", time, hit->levelDb,
             age * 1000.0);
-  }
-
-  // Пока транспорт идёт, пропуски появляются сами собой, по ходу времени:
-  // окно перерисовывается на каждом тике.
-  if (playing && sampleRate_ > 0.0) {
-    beats_.advance(now(), timeline_);
-    changed = true;
   }
 
   return changed;

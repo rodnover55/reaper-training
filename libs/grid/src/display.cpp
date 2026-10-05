@@ -2,7 +2,9 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <optional>
 #include <string_view>
 
@@ -47,36 +49,83 @@ Cell meanCell(double seconds, double toleranceMs) {
   return {.text = std::move(text), .tone = toneOf(shown, toleranceMs)};
 }
 
-} // namespace
+/// Размер для маркера: «7/8».
+std::string meterText(const Meter &meter) {
+  return fmt::format("{}/{}", meter.beats, meter.unit);
+}
 
-std::vector<RowView> present(const std::deque<BeatRow> &rows, double toleranceMs) {
-  std::vector<RowView> views;
-  views.reserve(rows.size());
+/// Темп для маркера: «120», дробный — «120.5», «97.25».
+std::string tempoText(double bpm) {
+  std::string text = fmt::format("{:.2f}", bpm);
+  while (text.back() == '0')
+    text.pop_back();
+  if (text.back() == '.')
+    text.pop_back();
+  return text;
+}
 
-  for (const BeatRow &row : rows) {
-    RowView view;
-    view.label = fmt::format("{}.{}", row.label.bar, row.label.beat);
-    view.cells.reserve(row.slots.size());
+/// Подпись маркера смены: «4/4 → 7/8», «120 → 150» или обе через «·».
+std::string changeText(const Change &change) {
+  std::string text;
+  if (change.meterFrom && change.meterTo)
+    text = fmt::format("{} → {}", meterText(*change.meterFrom), meterText(*change.meterTo));
+  if (change.tempoFrom && change.tempoTo) {
+    if (!text.empty())
+      text += " · ";
+    text += fmt::format("{} → {}", tempoText(*change.tempoFrom), tempoText(*change.tempoTo));
+  }
+  return text;
+}
 
-    for (const Slot &slot : row.slots) {
-      if (slot.deviation)
-        view.cells.push_back(noteCell(*slot.deviation, slot.extra, toleranceMs));
-      else if (slot.missing)
-        view.cells.push_back({.text = ".", .tone = Tone::Neutral});
-      else
-        view.cells.push_back({});
+/// Строка такта для окна; `top` — верхняя строка, у неё текущий удар и нет
+/// среднего и разброса.
+BarView barView(const BarRow &row, bool top, const Bars &bars) {
+  BarView view;
+  view.label = fmt::format("{}", row.bar.index + 1);
+  view.beats = static_cast<int>(row.beats.size());
+
+  for (std::size_t k = 0; k < row.beats.size(); ++k) {
+    const RowBeat &beat = row.beats[k];
+    if (beat.slots.empty() || !beat.slots.front().deviation)
+      view.dots.push_back(static_cast<int>(k));
+
+    if (beat.mode)
+      view.division = std::max(view.division, divisions(*beat.mode));
+    else if (top)
+      view.division = std::max(view.division, divisions(bars.mode()));
+
+    const auto count = static_cast<double>(beat.slots.size());
+    for (std::size_t slot = 0; slot < beat.slots.size(); ++slot) {
+      const RowSlot &node = beat.slots[slot];
+      if (!node.deviation)
+        continue;
+      view.values.push_back(
+          {.beat = static_cast<double>(k) + static_cast<double>(slot) / count,
+           .onBeat = slot == 0,
+           .cell = noteCell(*node.deviation, node.extra, node.toleranceMs)});
     }
-
-    const std::optional<double> mean = row.mean;
-    const std::optional<double> spread = row.spread;
-    if (mean && spread) {
-      view.mean = meanCell(*mean, toleranceMs);
-      view.spread = Cell{.text = fmt::format("{:.1f}", *spread * 1000.0)};
-    }
-
-    views.push_back(std::move(view));
   }
 
+  for (const Change &change : row.bar.changes)
+    view.marks.push_back({.beat = change.beat, .text = changeText(change)});
+
+  if (top) {
+    view.currentBeat = bars.currentBeat();
+  } else if (row.mean && row.spread) {
+    const double toleranceMs = row.leftToleranceMs.value_or(0.0);
+    view.mean = meanCell(*row.mean, toleranceMs);
+    view.spread = Cell{.text = fmt::format("{:.1f}", *row.spread * 1000.0)};
+  }
+  return view;
+}
+
+} // namespace
+
+std::vector<BarView> present(const Bars &bars) {
+  std::vector<BarView> views;
+  for (const BarRow &row : bars.rows())
+    if (row.entered && !row.folded)
+      views.push_back(barView(row, views.empty(), bars));
   return views;
 }
 

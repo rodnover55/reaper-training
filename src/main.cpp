@@ -38,6 +38,11 @@
 #define REAPERAPI_WANT_GetInputChannelName
 #define REAPERAPI_WANT_TimeMap2_beatsToTime
 #define REAPERAPI_WANT_TimeMap2_timeToBeats
+#define REAPERAPI_WANT_CountTempoTimeSigMarkers
+#define REAPERAPI_WANT_GetTempoTimeSigMarker
+#define REAPERAPI_WANT_GetProjectTimeSignature2
+#define REAPERAPI_WANT_GetPlayPositionEx
+#define REAPERAPI_WANT_GetCursorPosition
 #define REAPERAPI_WANT_SetExtState
 #define REAPERAPI_WANT_GetExtState
 
