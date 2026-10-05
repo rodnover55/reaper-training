@@ -33,6 +33,7 @@ GitHub Actions (`.github/workflows/build.yml`) на каждый push собир
 | Система | Где собирается | Файл |
 |---|---|---|
 | Linux x86_64 | Ubuntu 22.04, GCC 13 | `reaper_training.so` |
+| Windows x64 | MSVC | `reaper_training.dll` |
 | macOS 12+, arm64 и x86_64 одним файлом | Apple clang | `reaper_training.dylib` |
 
 Файлы лежат в артефактах прогона. Линтеры в CI не идут: их результат зависит
@@ -46,7 +47,7 @@ macOS 12 не выйдет: самый новый Xcode для неё не тя�
 
 Чтобы модуль грузился на чужих машинах, пресет `release` включает
 `REAPER_TRAINING_STATIC_RUNTIME`: на Linux libstdc++ вкомпонована и скрыта
-(`cmake/reaper_training.map`).
+(`cmake/reaper_training.map`), на Windows рантайм MSVC статический.
 
 Релиз:
 
@@ -57,7 +58,7 @@ macOS 12 не выйдет: самый новый Xcode для неё не тя�
    git push origin v0.2.0
    ```
 
-Тег запускает ту же сборку и после неё создаёт релиз с двумя файлами и
+Тег запускает ту же сборку и после неё создаёт релиз с тремя файлами и
 `SHA256SUMS.txt`. Описание — `.github/release-notes.md` и список изменений,
 собранный GitHub. Если тег не совпадает с версией в `CMakeLists.txt`, релиз не
 создаётся. Тег с суффиксом (`v0.2.0-rc1`) даёт предварительный релиз.

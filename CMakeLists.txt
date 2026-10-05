@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.29)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Наименьшая версия macOS")
 
 project(reaper-training
-  VERSION 0.1.0
+  VERSION 0.2.0
   DESCRIPTION "REAPER extension: timing trainer"
   LANGUAGES CXX C)
 
@@ -41,8 +41,31 @@ if(APPLE)
   enable_language(OBJCXX)
 endif()
 
+# --- Windows ------------------------------------------------------------------
+# windows.h иначе объявляет min и max макросами — как SWELL без
+# WDL_NO_DEFINE_MINMAX. fopen MSVC объявляет устаревшей.
+if(WIN32)
+  add_compile_definitions(NOMINMAX _CRT_SECURE_NO_WARNINGS)
+endif()
+
+if(MSVC)
+  # Исходники в UTF-8 без BOM, а MSVC по умолчанию читает их в кодировке
+  # системы. Только для C и C++: компилятор ресурсов этого ключа не знает.
+  add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>")
+
+  # Без этого модулю нужен Visual C++ Redistributable, а его у пользователя
+  # может не быть: REAPER покажет расширение в списке со статусом "Error".
+  if(REAPER_TRAINING_STATIC_RUNTIME)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  endif()
+endif()
+
 # Чужой код собирается без предупреждений: чинить там нечего.
-set(training_no_warnings -w)
+if(MSVC)
+  set(training_no_warnings /w)
+else()
+  set(training_no_warnings -w)
+endif()
 
 # --- Санитайзеры --------------------------------------------------------------
 # Флаги ставятся до объявления целей и поэтому достаются всем, включая чужой
@@ -125,32 +148,36 @@ add_subdirectory(libs/onset)
 add_subdirectory(libs/grid)
 
 # --- Ресурсы форм -------------------------------------------------------------
-# Формы описаны в src/views/forms.rc. Под SWELL из него порождается таблица C++
-# скриптом WDL; поэтому для сборки нужен perl.
+# Формы описаны в src/views/forms.rc — одним исходником на все платформы. Под
+# SWELL из него порождается таблица C++ скриптом WDL; поэтому для сборки нужен
+# perl. На Windows тот же файл собирает компилятор ресурсов
+# (src/views/forms_win.rc), поэтому шаг ниже только для не-Windows.
 #
 # Генератор пишет результат рядом с входным файлом, поэтому .rc и ids.h
 # сначала копируются в каталог сборки — иначе порождённое насорит в src/.
-find_package(Perl REQUIRED)
+if(NOT WIN32)
+  find_package(Perl REQUIRED)
 
-set(swell_res_dir "${CMAKE_CURRENT_BINARY_DIR}/swellres")
-set(swell_res_dlg "${swell_res_dir}/forms.rc_mac_dlg")
+  set(swell_res_dir "${CMAKE_CURRENT_BINARY_DIR}/swellres")
+  set(swell_res_dlg "${swell_res_dir}/forms.rc_mac_dlg")
 
-add_custom_command(
-  OUTPUT "${swell_res_dlg}"
-  BYPRODUCTS "${swell_res_dir}/forms.rc_mac_menu"
-  COMMAND "${CMAKE_COMMAND}" -E make_directory "${swell_res_dir}"
-  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-          "${CMAKE_CURRENT_SOURCE_DIR}/src/views/forms.rc" "${swell_res_dir}/forms.rc"
-  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-          "${CMAKE_CURRENT_SOURCE_DIR}/src/views/ids.h" "${swell_res_dir}/ids.h"
-  COMMAND "${PERL_EXECUTABLE}" "${wdl_SOURCE_DIR}/WDL/swell/swell_resgen.pl"
-          "${swell_res_dir}/forms.rc"
-  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/views/forms.rc"
-          "${CMAKE_CURRENT_SOURCE_DIR}/src/views/ids.h"
-  COMMENT "Порождение таблицы форм SWELL из views/forms.rc"
-  VERBATIM)
+  add_custom_command(
+    OUTPUT "${swell_res_dlg}"
+    BYPRODUCTS "${swell_res_dir}/forms.rc_mac_menu"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${swell_res_dir}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/views/forms.rc" "${swell_res_dir}/forms.rc"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/views/ids.h" "${swell_res_dir}/ids.h"
+    COMMAND "${PERL_EXECUTABLE}" "${wdl_SOURCE_DIR}/WDL/swell/swell_resgen.pl"
+            "${swell_res_dir}/forms.rc"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/views/forms.rc"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/views/ids.h"
+    COMMENT "Порождение таблицы форм SWELL из views/forms.rc"
+    VERBATIM)
 
-add_custom_target(reaper_training_resources DEPENDS "${swell_res_dlg}")
+  add_custom_target(reaper_training_resources DEPENDS "${swell_res_dlg}")
+endif()
 
 # --- Плагин -------------------------------------------------------------------
 add_library(reaper_training MODULE
@@ -162,16 +189,20 @@ add_library(reaper_training MODULE
   src/project_timeline.cpp
   src/settings.cpp
   src/trainer.cpp
-  src/window.cpp
-  src/views/resources.cpp)
+  src/window.cpp)
 
-add_dependencies(reaper_training reaper_training_resources)
-target_include_directories(reaper_training PRIVATE "${swell_res_dir}")
+if(WIN32)
+  target_sources(reaper_training PRIVATE src/views/forms_win.rc)
+else()
+  target_sources(reaper_training PRIVATE src/views/resources.cpp)
+  add_dependencies(reaper_training reaper_training_resources)
+  target_include_directories(reaper_training PRIVATE "${swell_res_dir}")
 
-# Таблица диалога порождена чужим скриптом: её агрегаты инициализированы не
-# полностью, и компилятор считает это ошибкой при нашем наборе предупреждений.
-set_source_files_properties(src/views/resources.cpp PROPERTIES
-  COMPILE_OPTIONS "${training_no_warnings}")
+  # Таблица диалога порождена чужим скриптом: её агрегаты инициализированы не
+  # полностью, и компилятор считает это ошибкой при нашем наборе предупреждений.
+  set_source_files_properties(src/views/resources.cpp PROPERTIES
+    COMPILE_OPTIONS "${training_no_warnings}")
+endif()
 
 # Свои заголовки включаются от корня src/.
 target_include_directories(reaper_training PRIVATE src)
@@ -210,8 +241,8 @@ training_enable_warnings(reaper_training)
 
 # Неразрешённый символ иначе доезжает до REAPER и виден только как статус
 # "Error" в списке расширений — без имени символа и без намёка на причину.
-# Флаг переносит эту ошибку на линковку, где видно и то и другое. Линковщик
-# macOS так поступает и сам.
+# Флаг переносит эту ошибку на линковку, где видно и то и другое. Линковщики
+# macOS и Windows так поступают и сами.
 #
 # Под санитайзерами он неприменим: там часть символов рантайма остаётся
 # неразрешённой намеренно, их подставляет процесс, который модуль загрузит.
@@ -231,7 +262,8 @@ if(REAPER_TRAINING_STATIC_RUNTIME AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set_property(TARGET reaper_training APPEND PROPERTY LINK_DEPENDS "${training_exports}")
 endif()
 
-# REAPER ищет в UserPlugins файлы вида reaper_*.so (.dylib на macOS).
+# REAPER ищет в UserPlugins файлы вида reaper_*.so (.dylib на macOS, .dll на
+# Windows).
 set_target_properties(reaper_training PROPERTIES
   PREFIX ""
   OUTPUT_NAME "reaper_training")
@@ -241,23 +273,31 @@ if(APPLE)
 endif()
 
 # Реализация SWELL живёт в самом REAPER; модуль получает её через тонкую
-# заглушку, поэтому GTK-заголовки для сборки не нужны.
-target_compile_definitions(reaper_training PRIVATE SWELL_PROVIDED_BY_APP)
-if(APPLE)
-  set(swell_stub "${wdl_SOURCE_DIR}/WDL/swell/swell-modstub.mm")
-  target_link_libraries(reaper_training PRIVATE "-framework Cocoa")
-else()
-  set(swell_stub "${wdl_SOURCE_DIR}/WDL/swell/swell-modstub-generic.cpp")
+# заглушку, поэтому GTK-заголовки для сборки не нужны. На Windows SWELL нет:
+# окна там — Win32.
+if(NOT WIN32)
+  target_compile_definitions(reaper_training PRIVATE SWELL_PROVIDED_BY_APP)
+  if(APPLE)
+    set(swell_stub "${wdl_SOURCE_DIR}/WDL/swell/swell-modstub.mm")
+    target_link_libraries(reaper_training PRIVATE "-framework Cocoa")
+  else()
+    set(swell_stub "${wdl_SOURCE_DIR}/WDL/swell/swell-modstub-generic.cpp")
+  endif()
+
+  target_sources(reaper_training PRIVATE "${swell_stub}")
+
+  # Заглушка чужая и собирается в составе своей цели, то есть общий набор
+  # предупреждений достаётся и ей. Снимаем: исправить её мы всё равно не можем.
+  set_source_files_properties("${swell_stub}" PROPERTIES
+    COMPILE_OPTIONS "${training_no_warnings}")
 endif()
 
-target_sources(reaper_training PRIVATE "${swell_stub}")
-
-# Заглушка чужая и собирается в составе своей цели, то есть общий набор
-# предупреждений достаётся и ей. Снимаем: исправить её мы всё равно не можем.
-set_source_files_properties("${swell_stub}" PROPERTIES COMPILE_OPTIONS "${training_no_warnings}")
-
 # --- Установка ----------------------------------------------------------------
-if(APPLE)
+# Путь из переменной окружения Windows — с обратными косыми чертами, а CMake
+# читает их в правилах установки как экранирование.
+if(WIN32)
+  file(TO_CMAKE_PATH "$ENV{APPDATA}/REAPER" REAPER_RESOURCE_DIR)
+elseif(APPLE)
   set(REAPER_RESOURCE_DIR "$ENV{HOME}/Library/Application Support/REAPER")
 else()
   set(REAPER_RESOURCE_DIR "$ENV{HOME}/.config/REAPER")
