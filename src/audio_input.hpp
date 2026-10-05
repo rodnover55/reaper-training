@@ -100,6 +100,18 @@ public:
   /// Порог тишины поиска атак, dBFS; по умолчанию −50.
   double silenceDb() const { return silenceDb_.load(std::memory_order_relaxed); }
 
+  /// Меняет порог энергии удара по звучащей струне
+  /// (`onset::Settings::energyRatio`). Пользователю не показывается — для
+  /// проверок в отладочной сборке. Действует со следующего блока; поиск атак не
+  /// начинается заново.
+  void setEnergyRatio(double energyRatio) {
+    energyRatio_.store(energyRatio, std::memory_order_relaxed);
+  }
+
+  /// Порог энергии удара по звучащей струне; по умолчанию — как в
+  /// `onset::Settings`.
+  double energyRatio() const { return energyRatio_.load(std::memory_order_relaxed); }
+
   /// Частота дискретизации по последнему блоку, Гц; 0 — блоков ещё не было.
   double sampleRate() const { return sampleRate_.load(std::memory_order_relaxed); }
 
@@ -156,6 +168,7 @@ private:
 
   // Главный поток пишет, рабочий читает.
   std::atomic<double> silenceDb_{-50.0};
+  std::atomic<double> energyRatio_{onset::Settings{}.energyRatio};
 
   // Только звуковой поток.
   std::uint64_t nextSequence_ = 0;
@@ -163,6 +176,7 @@ private:
   // Только рабочий поток.
   double detectorRate_ = 0.0;
   double appliedSilenceDb_ = 0.0;
+  double appliedEnergyRatio_ = 0.0;
   std::uint64_t expectedSequence_ = 0;
 
   std::thread worker_;

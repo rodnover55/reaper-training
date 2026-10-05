@@ -162,6 +162,32 @@ const char *const kSetSettingsDef =
     "reaper-training (debug): set trainer settings like the window does; channel 1 is the "
     "first";
 
+/// Меняет порог энергии удара по звучащей струне
+/// (`onset::Settings::energyRatio`) — на лету и для сверки с айтемом. В окне
+/// его нет: он нужен только для проверок на записях.
+///
+/// @param energyRatio порог, больше 1.
+void setEnergyRatio(double energyRatio) {
+  if (!(energyRatio > 1.0)) {
+    say(fmt::format("порог энергии должен быть больше 1, а не {}", energyRatio));
+    return;
+  }
+
+  trainer().input().setEnergyRatio(energyRatio);
+  journal("script energy ratio: {}", energyRatio);
+}
+
+void *setEnergyRatioVararg(void **args, int count) {
+  if (count >= 1)
+    setEnergyRatio(args[0] ? *static_cast<const double *>(args[0]) : 0.0);
+  return nullptr;
+}
+
+const char *const kSetEnergyRatioDef =
+    "void\0double\0energyRatio\0"
+    "reaper-training (debug): set how much the high-frequency energy must grow for a strike "
+    "on a ringing string to count; default 2";
+
 /// Строка от скрипта проверки в журнал: так в журнале видно, где какой
 /// сценарий.
 void journalFromScript(const char *text) { journal("script: {}", text ? text : ""); }
@@ -226,8 +252,9 @@ std::vector<double> itemOnsets(double sampleRate) {
   std::vector<double> interleaved(static_cast<std::size_t>(kChunk * channels));
   std::vector<float> mono(kChunk);
   std::vector<onset::Onset> found;
-  onset::Detector detector(
-      onset::Settings{.sampleRate = sampleRate, .silenceDb = trainer().input().silenceDb()});
+  onset::Detector detector(onset::Settings{.sampleRate = sampleRate,
+                                           .silenceDb = trainer().input().silenceDb(),
+                                           .energyRatio = trainer().input().energyRatio()});
 
   for (std::int64_t chunk = 0;; ++chunk) {
     const double from = start + static_cast<double>(chunk * kChunk) / sampleRate;
@@ -270,9 +297,10 @@ void compareWithItem() {
   // реальном времени, на шкалу ложатся с её множителем (design.md D2).
   const double sampleRate = run.front().sampleRate;
   const double rate = Master_GetPlayRate(nullptr);
-  say(fmt::format(
-      "сверка с айтемом, частота {} Гц, скорость проекта {}, порог тишины {} dBFS:",
-      sampleRate, rate, trainer().input().silenceDb()));
+  say(fmt::format("сверка с айтемом, частота {} Гц, скорость проекта {}, порог тишины {} "
+                  "dBFS, порог энергии {}:",
+                  sampleRate, rate, trainer().input().silenceDb(),
+                  trainer().input().energyRatio()));
 
   std::vector<double> live;
   live.reserve(run.size());
@@ -384,6 +412,11 @@ void registerDebugActions(reaper_plugin_info_t *rec) {
                reinterpret_cast<void *>(setSettingsVararg));
   hostRegister("APIdef_TrainingDebug_SetSettings", const_cast<char *>(kSetSettingsDef));
 
+  hostRegister("API_TrainingDebug_SetEnergyRatio", reinterpret_cast<void *>(setEnergyRatio));
+  hostRegister("APIvararg_TrainingDebug_SetEnergyRatio",
+               reinterpret_cast<void *>(setEnergyRatioVararg));
+  hostRegister("APIdef_TrainingDebug_SetEnergyRatio", const_cast<char *>(kSetEnergyRatioDef));
+
   hostRegister("API_TrainingDebug_Journal", reinterpret_cast<void *>(journalFromScript));
   hostRegister("APIvararg_TrainingDebug_Journal",
                reinterpret_cast<void *>(journalFromScriptVararg));
@@ -396,6 +429,7 @@ void unregisterDebugActions() {
 
   hostRegister("-API_TrainingDebug_ConfigVar", reinterpret_cast<void *>(configVar));
   hostRegister("-API_TrainingDebug_SetSettings", reinterpret_cast<void *>(setSettings));
+  hostRegister("-API_TrainingDebug_SetEnergyRatio", reinterpret_cast<void *>(setEnergyRatio));
   hostRegister("-API_TrainingDebug_Journal", reinterpret_cast<void *>(journalFromScript));
   hostRegister("-hookcommand2", reinterpret_cast<void *>(onAction));
 

@@ -36,6 +36,7 @@ void addPluck(std::vector<double> &out, const Pluck &pluck, std::size_t stop,
   // Затухание за сэмпл из затухания за секунду.
   const double loss = std::pow(settings.decayPerSecond, 1.0 / settings.sampleRate);
   const auto mute = static_cast<std::size_t>(kMuteMs * settings.sampleRate / 1000.0);
+  const auto rise = static_cast<std::size_t>(pluck.riseMs * settings.sampleRate / 1000.0);
 
   std::size_t index = 0;
   for (std::size_t n = pluck.start; n < out.size() && n < stop; ++n) {
@@ -43,12 +44,36 @@ void addPluck(std::vector<double> &out, const Pluck &pluck, std::size_t stop,
     if (stop != out.size() && n + mute >= stop)
       gain = static_cast<double>(stop - n) / static_cast<double>(mute);
 
+    // Нарастание считается с первого сэмпла, чтобы тот остался ненулевым.
+    if (n - pluck.start < rise)
+      gain *= static_cast<double>(n - pluck.start + 1) / static_cast<double>(rise);
+
     const double sample = line[index];
     out[n] += sample * gain;
 
     const std::size_t next = (index + 1) % period;
     line[index] = loss * 0.5 * (line[index] + line[next]);
     index = next;
+  }
+}
+
+/// Сэмпл, ближайший к моменту `start + milliseconds`.
+std::size_t after(std::size_t start, double milliseconds, double sampleRate) {
+  return start + static_cast<std::size_t>(std::llround(milliseconds * sampleRate / 1000.0));
+}
+
+/// Добавляет в `out` ВЧ-всплеск с амплитудой `amplitude` от сэмпла `start` до
+/// `stop`, умножая на `fade` — множитель от номера сэмпла.
+template <class Fade>
+void addBurst(std::vector<double> &out, std::size_t start, double amplitude, std::size_t stop,
+              const RingingSettings &settings, Fade fade) {
+  // Десять постоянных затухания — всплеск стих до 5e-5.
+  const std::size_t length = after(0, 10.0 * settings.burstMs, settings.sampleRate);
+  for (std::size_t i = 0; i < length && start + i < stop; ++i) {
+    const double t = static_cast<double>(i) / settings.sampleRate;
+    out[start + i] += fade(start + i) * amplitude *
+                      std::sin(2.0 * std::numbers::pi * settings.burstHz * t) *
+                      std::exp(-t * 1000.0 / settings.burstMs);
   }
 }
 
@@ -91,6 +116,58 @@ std::vector<float> render(const std::vector<Pluck> &plucks, std::size_t length,
     out[n] = static_cast<float>(value);
   }
 
+  return out;
+}
+
+std::vector<float> renderRinging(const std::vector<Strike> &strikes, std::size_t length,
+                                 const RingingSettings &settings) {
+  std::vector<double> mix(length, 0.0);
+  const double sampleRate = settings.sampleRate;
+  const double period = sampleRate / settings.frequency;
+  const auto mute = after(0, kMuteMs, sampleRate);
+
+  for (std::size_t k = 0; k < strikes.size(); ++k) {
+    const Strike &strike = strikes[k];
+    const std::size_t stop =
+        k + 1 < strikes.size() ? std::min(length, strikes[k + 1].start) : length;
+
+    // Следующий удар глушит звон за 2 мс до своего начала, как в `render`.
+    const auto fade = [stop, length, mute](std::size_t n) {
+      return stop != length && n + mute >= stop
+                 ? static_cast<double>(stop - n) / static_cast<double>(mute)
+                 : 1.0;
+    };
+
+    for (int i = 0; i < settings.pickBursts; ++i)
+      addBurst(mix, after(strike.start, i * settings.pickSpacingMs, sampleRate),
+               strike.pickAmplitude, stop, settings, fade);
+
+    // Звон — с конца пачки медиатора: тон с нуля и всплеск в начале каждого
+    // периода, всё затухает вместе.
+    const std::size_t release =
+        after(strike.start, settings.pickBursts * settings.pickSpacingMs, sampleRate);
+    const auto decay = [&settings, release](std::size_t n) {
+      return std::pow(settings.decayPerSecond,
+                      static_cast<double>(n - release) / settings.sampleRate);
+    };
+
+    for (std::size_t n = release; n < stop; ++n)
+      mix[n] += fade(n) * decay(n) * strike.amplitude *
+                std::sin(2.0 * std::numbers::pi * settings.frequency *
+                         static_cast<double>(n - release) / sampleRate);
+
+    for (std::size_t m = 0;; ++m) {
+      const std::size_t burst =
+          release + static_cast<std::size_t>(std::llround(static_cast<double>(m) * period));
+      if (burst >= stop)
+        break;
+      addBurst(mix, burst, strike.burstAmplitude * decay(burst), stop, settings, fade);
+    }
+  }
+
+  std::vector<float> out(length);
+  std::ranges::transform(mix, out.begin(),
+                         [](double value) { return static_cast<float>(value); });
   return out;
 }
 
