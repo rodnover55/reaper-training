@@ -335,8 +335,9 @@ void paintRow(HDC context, Fonts &fonts, const Layout &layout, const grid::BarVi
   // Перед первым ударом — место под половину крупного числа.
   const double pad = bigFor(layout.scaleWidth / beats) * 0.95 + 6.0;
   const double step = (layout.scaleWidth - pad) / beats;
-  const double big = bigFor(step);
-  const double small = std::max(kMinFont - 1.0, std::min(big * 0.6, step / division / 2.0));
+  const double bigSize = bigFor(step);
+  const double smallSize =
+      std::max(kMinFont - 1.0, std::min(bigSize * 0.6, step / division / 2.0));
   const double scaleLeft = layout.left + layout.labelWidth;
   const auto x = [&](double beat) { return scaleLeft + pad + step * beat; };
 
@@ -371,12 +372,12 @@ void paintRow(HDC context, Fonts &fonts, const Layout &layout, const grid::BarVi
 
   for (const int beat : row.dots) {
     const bool current = row.currentBeat == beat;
-    drawDot(context, x(beat), middle, std::max(4.0, big * (current ? 0.3 : 0.2)),
+    drawDot(context, x(beat), middle, std::max(4.0, bigSize * (current ? 0.3 : 0.2)),
             current ? kCurrentBeat : kNeutral);
   }
 
   for (const grid::ValueView &value : row.values) {
-    fonts.use(value.onBeat ? big : small);
+    fonts.use(value.onBeat ? bigSize : smallSize);
     drawCentered(context, value.cell.text, colorOf(value.cell.tone), x(value.beat), middle,
                  step, layout.rowHeight / 2.0);
   }
