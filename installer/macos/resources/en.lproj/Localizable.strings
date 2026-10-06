@@ -1,0 +1,5 @@
+/* Сообщения проверки REAPER в distribution.xml. */
+"REAPER_NOT_FOUND_TITLE" = "REAPER was not found";
+"REAPER_NOT_FOUND_MESSAGE" = "reaper-training is an extension for REAPER 7. Install REAPER into Applications and run it once, then open this installer again.";
+"REAPER_TOO_OLD_TITLE" = "REAPER 7 or newer is needed";
+"REAPER_TOO_OLD_MESSAGE" = "reaper-training needs REAPER 7 or newer. Update REAPER, then open this installer again.";

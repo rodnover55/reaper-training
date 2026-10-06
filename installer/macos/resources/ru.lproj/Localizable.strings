@@ -1,0 +1,5 @@
+/* Сообщения проверки REAPER в distribution.xml. */
+"REAPER_NOT_FOUND_TITLE" = "REAPER не найден";
+"REAPER_NOT_FOUND_MESSAGE" = "reaper-training — расширение для REAPER 7. Поставьте REAPER в «Программы» и запустите его хотя бы раз, затем откройте установщик снова.";
+"REAPER_TOO_OLD_TITLE" = "Нужен REAPER 7 или новее";
+"REAPER_TOO_OLD_MESSAGE" = "reaper-training нужен REAPER 7 или новее. Обновите REAPER и откройте установщик снова.";
