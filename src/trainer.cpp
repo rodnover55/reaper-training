@@ -20,7 +20,7 @@
 
 #include <chrono>
 #include <cstring>
-#include <memory>
+#include <utility>
 
 namespace training::reaper {
 namespace {
@@ -30,7 +30,12 @@ constexpr int kPlaying = 1;
 constexpr int kPaused = 2;
 constexpr int kRecording = 4;
 
-std::unique_ptr<Trainer> instance;
+// Обычный указатель, а не unique_ptr: деструктор статического объекта
+// вызывает любой exit() в процессе, в том числе в копии REAPER, которую тот
+// делает fork, чтобы запустить программу. В копии нет рабочего потока
+// AudioInput, и ожидание его конца вешало её навсегда вместе с открытой
+// звуковой картой REAPER. Тренажёр уничтожает только shutdownTrainer.
+Trainer *instance = nullptr;
 
 int (*hostRegister)(const char *name, void *infostruct) = nullptr;
 
@@ -223,7 +228,7 @@ bool Trainer::poll() {
 Trainer &trainer() { return *instance; }
 
 void initTrainer(reaper_plugin_info_t *rec) {
-  instance = std::make_unique<Trainer>();
+  instance = new Trainer();
 
   if (!rec || !rec->Register)
     return;
@@ -236,7 +241,7 @@ void shutdownTrainer() {
   if (hostRegister)
     hostRegister("-timer", reinterpret_cast<void *>(onMainTimer));
 
-  instance.reset();
+  delete std::exchange(instance, nullptr);
 }
 
 } // namespace training::reaper

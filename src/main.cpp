@@ -63,9 +63,41 @@
 
 #include <string>
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
+namespace {
+
+#ifndef _WIN32
+/// Процесс, в который REAPER загрузил расширение; 0 — расширение не загружено.
+pid_t loadedProcess = 0;
+#endif
+
+/// Проверяет, идёт ли вызов в копии процесса REAPER, сделанной fork, а не в
+/// процессе, куда REAPER загрузил расширение. В копии есть только поток,
+/// вызвавший fork, а потоков расширения нет.
+///
+/// На Windows: fork нет, всегда false.
+bool inForkedCopy() {
+#ifdef _WIN32
+  return false;
+#else
+  return loadedProcess != 0 && getpid() != loadedProcess;
+#endif
+}
+
+} // namespace
+
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE instance, reaper_plugin_info_t *rec) {
   if (!rec) { // rec == nullptr — REAPER выгружает расширение
+    // Копия REAPER после fork сейчас завершится. Остановка ждала бы в ней
+    // рабочий поток тренажёра, которого там нет, — вечно, — а REAPER в копии
+    // — снимок, а не живой процесс. Освобождать в ней нечего.
+    if (inForkedCopy())
+      return 0;
+
     training::reaper::unregisterDebugActions();
     training::reaper::unregisterActions();
     training::reaper::closeWindow();
@@ -80,6 +112,10 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE instance, reaper_plugin_info_t 
 
   if (REAPERAPI_LoadAPI(rec->GetFunc) != 0)
     return 0;
+
+#ifndef _WIN32
+  loadedProcess = getpid();
+#endif
 
 #ifdef TRAINING_DEBUG_BUILD
   // Журнал лежит в каталоге ресурсов: у каждого экземпляра REAPER он свой.

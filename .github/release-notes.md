@@ -1,18 +1,23 @@
-## Что нового в 0.4.0
+## Что нового в 0.4.1
 
-Установщики для Windows, macOS и Linux. Установщик сам находит REAPER и его
-папку ресурсов, кладёт расширение в `UserPlugins` и не просит прав
-администратора. Без REAPER 7 — на Windows 64-битного — он объясняет причину и
-ничего не ставит. Тот же установщик обновляет расширение; на Windows и Linux
-он же его удаляет. На macOS больше не нужна команда `xattr`.
+Исправлено зависание на Linux. Когда звуковая карта занята, а в REAPER
+включено «Auto-suspend PulseAudio», REAPER запускает `pasuspender` через
+копию своего процесса. Если `pasuspender` в системе нет (так на системах с
+PipeWire), копия завершается, и расширение ждало в ней свой рабочий поток,
+которого там нет, — вечно. Зависшая копия держала звуковую карту и окно
+закрытого REAPER: следующий REAPER показывал «Error opening devices», а
+старое окно — «REAPER is not responding».
+
+В 0.4.0 появились установщики для Windows, macOS и Linux: они сами находят
+REAPER и его папку ресурсов и не просят прав администратора.
 
 ## Какой файл скачать
 
 | Система | Установщик | Файл для ручной установки | Состояние |
 |---|---|---|---|
-| Windows 10/11 x64 | `reaper-training-0.4.0-windows-x64-setup.exe` | `reaper_training.dll` | установщик проверен в CI на чистой машине с REAPER 7.82; **вживую ещё не проверено** |
-| macOS 12+ (Apple Silicon и Intel) | `reaper-training-0.4.0-macos.pkg` | `reaper_training.dylib` | установщик проверен в CI на чистой машине с REAPER 7.82; **окно Installer и модуль 0.4.0 на Mac ещё не проверены** |
-| Linux x86_64 (glibc 2.35+) | `reaper-training-0.4.0-linux-x86_64.run` | `reaper_training.so` | установщик проверен в CI на Ubuntu 22.04 с REAPER 7.82 и вживую |
+| Windows 10/11 x64 | `reaper-training-0.4.1-windows-x64-setup.exe` | `reaper_training.dll` | установщик проверен в CI на чистой машине с REAPER 7.82; **вживую ещё не проверено** |
+| macOS 12+ (Apple Silicon и Intel) | `reaper-training-0.4.1-macos.pkg` | `reaper_training.dylib` | установщик проверен в CI на чистой машине с REAPER 7.82; **окно Installer и модуль 0.4 на Mac ещё не проверены** |
+| Linux x86_64 (glibc 2.35+) | `reaper-training-0.4.1-linux-x86_64.run` | `reaper_training.so` | установщик проверен в CI на Ubuntu 22.04 с REAPER 7.82 и вживую; исправление зависания проверено вживую |
 
 Установщики не подписаны: при первом запуске Windows и macOS предупреждают о
 неизвестном разработчике — как продолжить, сказано в руководстве по установке.
