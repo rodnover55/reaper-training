@@ -44,6 +44,27 @@ endif()
 include("${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake")
 doctest_discover_tests(training_tests)
 
+# Копия процесса REAPER после fork завершается и с загруженным расширением
+# (fork_exit_test.cpp). Собранный модуль загружается с поддельным API REAPER.
+# Только Linux: там REAPER так запускает программы, и копия, у которой не
+# вышел exec, зовёт exit().
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(training_fork_exit_test fork_exit_test.cpp)
+  add_dependencies(training_fork_exit_test reaper_training)
+
+  # Без WDL_NO_DEFINE_MINMAX SWELL объявляет min и max макросами.
+  target_compile_definitions(training_fork_exit_test PRIVATE
+    SWELL_PROVIDED_BY_APP WDL_NO_DEFINE_MINMAX)
+  target_include_directories(training_fork_exit_test SYSTEM PRIVATE
+    "${reaper_sdk_SOURCE_DIR}/sdk"
+    "${wdl_SOURCE_DIR}")
+  target_link_libraries(training_fork_exit_test PRIVATE ${CMAKE_DL_LIBS})
+  training_enable_warnings(training_fork_exit_test)
+
+  add_test(NAME module_forked_copy_exits
+    COMMAND training_fork_exit_test "$<TARGET_FILE:reaper_training>" "${CMAKE_CURRENT_BINARY_DIR}")
+endif()
+
 # Изоляция проверяется отдельно и текстом: заголовки ОС и SDK REAPER находятся
 # в системных путях без всякой зависимости, и направление зависимостей их не
 # ловит (design.md D9). Механика общая, списки — у каждой библиотеки свои и
