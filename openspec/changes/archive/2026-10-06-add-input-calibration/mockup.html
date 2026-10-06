@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Калибровка входа — макет</title>
+<style>
+  :root {
+    --bg: rgb(24, 24, 24);
+    --row: rgb(36, 36, 36);
+    --line: rgb(56, 56, 56);
+    --neutral: rgb(170, 170, 170);
+    --dim: rgb(125, 125, 125);
+    --good: rgb(90, 210, 90);
+    --bad: rgb(235, 80, 70);
+    --beat: rgb(255, 190, 60);
+    --change: rgb(110, 170, 255);
+  }
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 16px 20px; background: #ececec; color: #222; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 4px 0 10px; max-width: 1100px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 6px; }
+  .tabs button, .frames button {
+    font: inherit; padding: 4px 12px; border: 1px solid #999; background: #fff;
+    border-radius: 4px; cursor: pointer;
+  }
+  .tabs button.active { background: #333; color: #fff; border-color: #333; }
+  .frames button.active { background: rgb(255, 222, 150); border-color: rgb(176, 128, 32); }
+  #desc { min-height: 42px; }
+
+  .window {
+    width: 1100px; height: 460px; min-width: 520px; min-height: 260px;
+    resize: both; overflow: hidden; border: 1px solid #444;
+    display: flex; flex-direction: column; box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+  }
+  .controls { flex: none; background: rgb(180, 180, 180); font: 13px Arial, sans-serif; padding: 3px 8px 5px; color: #111; }
+  .controls .line { display: flex; align-items: center; gap: 8px; height: 26px; white-space: nowrap; }
+  .controls .gap { width: 14px; }
+  .edit { background: #fff; border: 1px solid #777; padding: 1px 4px; width: 32px; }
+  .edit.changed { background: rgb(255, 236, 170); }
+  .check { display: flex; align-items: center; gap: 3px; }
+  .check input { margin: 0; }
+  .combo {
+    background: linear-gradient(#fafafa, #ddd); border: 1px solid #777; padding: 1px 6px;
+    width: 110px; display: flex; justify-content: space-between;
+  }
+  .btn {
+    font: 13px Arial, sans-serif; color: #111; background: linear-gradient(#fafafa, #ddd);
+    border: 1px solid #777; border-radius: 2px; padding: 2px 10px; cursor: pointer; white-space: nowrap;
+  }
+  .btn:disabled { color: #999; cursor: default; }
+  .btn.hot { outline: 2px solid var(--beat); outline-offset: 1px; }
+
+  .rows {
+    flex: 1; position: relative; background: var(--bg); overflow: hidden; container-type: size;
+    font-family: Arial, Helvetica, sans-serif; font-weight: bold;
+  }
+
+  /* Строки тактов — упрощённо: только чтобы видеть «до» и «после». */
+  .bar { position: absolute; left: 0; right: 0; display: flex; align-items: center; border-top: 1px solid var(--line); }
+  .bar.top { background: var(--row); border-top: none; }
+  .bar .no { width: 7%; text-align: center; color: var(--neutral); }
+  .bar .cells { flex: 1; display: flex; }
+  .bar .cells span { flex: 1; text-align: left; padding-left: 3%; }
+  .bar .stats { width: 13%; display: flex; justify-content: space-around; border-left: 1px solid var(--line); align-self: stretch; align-items: center; }
+
+  /* Панель калибровки. */
+  .cal { position: absolute; inset: 0; padding: 3cqh 2.2cqw; display: flex; flex-direction: column; color: #ddd; }
+  .cal .head { display: flex; align-items: center; gap: 1.2cqw; font-size: max(12px, 4.5cqh); color: var(--dim); }
+  .cal .head .on { color: var(--beat); }
+  .cal .head .done { color: var(--good); }
+  .cal .head .sep { flex: none; width: 3cqw; height: 1px; background: var(--line); }
+  .cal .head .grow { flex: 1; }
+  .cal .head .btn { font-size: max(12px, 3.6cqh); font-weight: normal; }
+  .cal .say { margin-top: 4cqh; font-size: max(17px, 9.5cqh); line-height: 1.1; color: #fff; }
+  .cal .say.bad { color: var(--bad); }
+  .cal .say.good { color: var(--good); }
+  .cal .hint { margin-top: 1.6cqh; font-size: max(12px, 4.6cqh); line-height: 1.25; color: var(--neutral); font-weight: normal; max-width: 92cqw; }
+  .cal .hint b { color: #ddd; }
+  .cal .alert { color: var(--beat); }
+  .cal .slots { margin-top: 4cqh; display: flex; gap: 1.2cqw; align-items: center; }
+  .cal .slots span {
+    width: 8.5cqw; height: 13cqh; display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line); border-radius: 4px; font-size: max(14px, 7.5cqh); color: var(--neutral);
+  }
+  .cal .slots span.got { color: var(--good); border-color: rgb(60, 110, 60); }
+  .cal .slots span.got.low { border-color: var(--good); }
+  .cal .slots span.flash { background: rgba(255, 255, 255, .12); }
+  .cal .slots .count { width: auto; border: none; padding-left: 1cqw; font-size: max(13px, 5.5cqh); color: var(--neutral); }
+  .cal .fill { flex: 1; }
+  .cal .progress { height: max(3px, 1.2cqh); background: var(--line); margin-bottom: 3cqh; }
+  .cal .progress div { height: 100%; background: var(--beat); }
+  .cal .table { margin-top: 3cqh; display: grid; grid-template-columns: max-content max-content; column-gap: 3cqw; row-gap: .6cqh; font-size: max(12px, 4.6cqh); font-weight: normal; color: var(--neutral); }
+  .cal .table b { color: #eee; }
+  .cal .actions { display: flex; gap: 10px; justify-content: flex-end; margin-bottom: 1cqh; }
+
+  /* Шкала уровней: −100…0 dBFS. */
+  .scale { position: relative; height: max(70px, 24cqh); margin: 0 2.5cqw; font-weight: normal; }
+  .scale .track { position: absolute; left: 0; right: 0; top: 42%; height: 18%; background: rgb(40, 40, 40); border: 1px solid var(--line); }
+  .scale .live { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, rgb(70, 70, 70), rgb(120, 120, 120)); }
+  .scale .band { position: absolute; top: 0; bottom: 0; background: rgba(90, 210, 90, .35); border-left: 2px solid var(--good); border-right: 2px solid var(--good); }
+  .scale .noise { position: absolute; top: 0; bottom: 0; left: 0; background: repeating-linear-gradient(45deg, rgba(150, 150, 150, .35) 0 4px, transparent 4px 8px); }
+  .scale .tick { position: absolute; top: 34%; height: 34%; width: 2px; margin-left: -1px; }
+  .scale .ticklabel { position: absolute; bottom: 0; transform: translateX(-50%); font-size: max(10px, 3cqh); color: var(--dim); }
+  .scale .mark { position: absolute; transform: translateX(-50%); white-space: nowrap; font-size: max(11px, 3.6cqh); line-height: 1; }
+  .scale .mark.above { top: 0; }
+  .scale .mark.below { top: 66%; }
+  .scale .vline { position: absolute; top: 30%; height: 42%; width: 0; margin-left: -1px; border-left: 2px solid var(--beat); }
+  .scale .vline.old { border-left: 2px dashed var(--dim); }
+
+  .transport { display: flex; align-items: center; gap: 12px; margin: 10px 0 6px; max-width: 1100px; }
+  .transport input[type=range] { flex: 1; }
+  .transport button { font-size: 16px; width: 40px; }
+  #pos { font-variant-numeric: tabular-nums; min-width: 70px; }
+  .frames { display: flex; gap: 6px; flex-wrap: wrap; max-width: 1100px; }
+  #caption {
+    margin-top: 8px; padding: 8px 12px; background: #fff; max-width: 1076px; min-height: 42px;
+    border-left: 4px solid rgb(230, 170, 40);
+  }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 14px 0 6px; align-items: center; }
+  .sw { display: inline-block; width: 14px; height: 12px; vertical-align: -1px; margin-right: 5px; }
+  details { max-width: 1100px; margin-top: 8px; }
+  details li { margin: 3px 0; }
+</style>
+</head>
+<body>
+
+<h1>Калибровка входа — макет</h1>
+<p>Кнопка <b>Calibrate…</b> рядом с порогом тишины (Silence) запускает калибровку
+входа: тренажёр слушает три секунды тишины, просит сыграть восемь нот, меряет
+уровень шума, уровень атаки (щелчка медиатора) и пик сигнала и сам ставит порог
+тишины. Пока идёт калибровка, её панель занимает место строк тактов — крупно,
+чтобы читалось с места гитариста. Сценарии переключаются вкладками; в каждом
+можно запустить ход калибровки (▶ или пробел), протянуть ползунок или выбрать кадр.
+Окно растягивается за правый нижний угол.</p>
+
+<div class="tabs" id="tabs"></div>
+<p id="desc"></p>
+
+<div class="window">
+  <div class="controls">
+    <div class="line">
+      <span>Mode:</span><span class="combo"><span>Quarters</span><span>▾</span></span>
+      <span class="gap"></span>
+      <span>Tolerance, ms:</span><span class="edit">10</span>
+      <span class="gap"></span>
+      <span>Input:</span><span class="combo"><span>1: Input 1</span><span>▾</span></span>
+      <span class="gap"></span>
+      <label class="check"><input type="checkbox" checked disabled>Bar numbers</label>
+      <label class="check"><input type="checkbox" checked disabled>Mean/spread</label>
+    </div>
+    <div class="line">
+      <span>Silence, dBFS:</span><span class="edit" id="silence"></span>
+      <button class="btn" id="calibrate">Calibrate…</button>
+      <span class="gap"></span>
+      <span id="status"></span>
+    </div>
+  </div>
+  <div class="rows" id="rows"></div>
+</div>
+
+<div class="transport">
+  <button id="play" title="Пробел">▶</button>
+  <input type="range" id="scrub" min="0" max="1000" value="0">
+  <span id="pos"></span>
+  <label>Скорость
+    <select id="speed">
+      <option value="1" selected>1×</option>
+      <option value="0.5">0.5×</option>
+    </select>
+  </label>
+</div>
+<div class="frames" id="frames"></div>
+<div id="caption"></div>
+
+<div class="legend">
+  <span><span class="sw" style="background: linear-gradient(90deg, rgb(70,70,70), rgb(120,120,120))"></span>уровень выше 1 кГц сейчас</span>
+  <span><span class="sw" style="background: repeating-linear-gradient(45deg, rgba(150,150,150,.6) 0 3px, transparent 3px 6px)"></span>шум</span>
+  <span><span class="sw" style="background: var(--good)"></span>щелчки медиатора</span>
+  <span><span class="sw" style="background: #fff"></span>пик сигнала</span>
+  <span><span class="sw" style="background: var(--beat)"></span>порог тишины: новый</span>
+  <span><span class="sw" style="border-left: 2px dashed var(--dim); width: 10px"></span>порог тишины: прежний</span>
+</div>
+
+<details open>
+  <summary>Допущения макета — уточнить</summary>
+  <ul>
+    <li><b>Что настраивается.</b> Только порог тишины (Silence): это единственная настройка
+      поиска атаки, которая зависит от входа. Порог энергии удара по звучащей струне
+      (energyRatio) на DI-записях годится любой от 1.4 до 4 и остаётся как есть. Задержку
+      звуковой карты калибровка не трогает: её по-прежнему берут из настроек записи REAPER.</li>
+    <li><b>Что меряется.</b> Шум и щелчок медиатора — по звуку выше 1 кГц, с которым
+      сравнивается порог тишины. Пик сигнала — по всему звуку: по нему видно перегруз входа.</li>
+    <li><b>Как выбирается порог.</b> Посередине между шумом и самым тихим щелчком, в
+      децибелах, с округлением до целого. На записях DI-гитары из тестов это −79 dBFS
+      (шум −98, щелчки −60…−54).</li>
+    <li><b>Когда порог не ставится.</b> Между шумом и самым тихим щелчком меньше 12 дБ
+      (по 6 дБ запаса в каждую сторону) или пик сигнала −1 dBFS и выше — перегруз. Тогда
+      панель объясняет, что поправить, и порог можно поставить кнопкой «Apply anyway».</li>
+    <li><b>Хороший результат применяется сразу</b>, без подтверждения: поле Silence
+      меняется и сохраняется. Прежнее значение видно в строке «−50 → −78»; вернуть его можно,
+      вписав в поле.</li>
+    <li><b>Закрытие итога.</b> Close в панели, Finish на месте Calibrate… или удар по струнам через
+      5 с после итога; запуск воспроизведения тоже закрывает итог.</li>
+    <li><b>Транспорт.</b> Калибровка идёт при остановленном транспорте; во время
+      воспроизведения кнопка недоступна. Запуск воспроизведения отменяет калибровку.</li>
+    <li><b>Тишина — 3 с.</b> Если в это время прозвучит нота (уровень выше шума больше чем на
+      20 дБ), отсчёт начинается заново.</li>
+    <li><b>Ноты — 8.</b> Глушёные, по одной; две-три — тише обычного, чтобы порог взял и
+      слабые удары. 15 с без новой ноты — калибровка обрывается.</li>
+    <li><b>Тексты в окне — по-английски</b>, как остальные контролы.</li>
+  </ul>
+</details>
+
+<script>
+// --- Сценарии ---------------------------------------------------------------
+
+const QUIET_CLICKS = [-54, -58, -54, -60, -59, -55, -59, -56];
+const NOTE_GAP = 0.9;
+
+const BEFORE_ROWS = [
+  [27, 31, 24, 29], [22, 33, 26, 30], [29, 25, null, 32], [31, 24, 28, 26], [25, 30, 33, 21],
+];
+const AFTER_ROWS = [
+  [-3, 4, -6, 2], [1, -2, 5, -4], [-5, 3, 0, 6], [2, -1, -3, 4],
+];
+
+const SCENARIOS = [
+  {
+    name: 'Тихий DI-вход',
+    desc: 'Гитара через Quad Cortex по USB, сухой вход: пики около −22 dBFS, щелчок медиатора −60…−54 dBFS. ' +
+      'С порогом −50 щелчок не проходит, тренажёр замечает ноту, когда разгорится её звук, — все ноты «опаздывают» ' +
+      'на 20–35 мс. Калибровка ставит −78, и после неё те же ноты меряются правильно.',
+    noise: -97, clicks: QUIET_CLICKS, peak: -22, rowsBefore: BEFORE_ROWS, playAfter: true,
+  },
+  {
+    name: 'Шумный вход',
+    desc: 'Сингл рядом с монитором: фон выше 1 кГц −66 dBFS, а самый тихий щелчок −60. Зазор 6 дБ: любой ' +
+      'порог либо пропускает шум как ноты, либо теряет тихие удары. Порог не ставится, панель говорит, что поправить.',
+    noise: -66, clicks: [-57, -60, -55, -59, -58, -56, -60, -57], peak: -24,
+  },
+  {
+    name: 'Перегруз входа',
+    desc: 'Усиление на звуковой карте выкручено: пик −0.1 dBFS. Перегруз сглаживает удар по струне, а после ' +
+      'того как гитарист убавит усиление, уровни будут другими, — порог не ставится.',
+    noise: -92, clicks: [-30, -28, -33, -27, -31, -29, -26, -30], peak: -0.1,
+  },
+  {
+    name: 'Звук в тишине',
+    desc: 'Во время шага тишины задели струну. Отсчёт тишины начинается заново: иначе удар посчитался бы шумом.',
+    noise: -95, clicks: QUIET_CLICKS, peak: -21, disturb: 1.8,
+  },
+  {
+    name: 'Нот не слышно',
+    desc: 'Гитара подключена ко входу 2, а выбран Input 1. Шкала стоит на месте, щелчков нет; через 15 с без нот ' +
+      'калибровка обрывается и подсказывает проверить вход.',
+    noise: -104, clicks: [], peak: -90,
+  },
+  {
+    name: 'Пуск воспроизведения',
+    desc: 'Посреди шага нот гитарист запустил воспроизведение. Калибровка отменяется, порог не меняется, окно ' +
+      'возвращается к строкам тактов. Пока транспорт идёт, Calibrate… недоступна.',
+    noise: -97, clicks: QUIET_CLICKS.slice(0, 3), peak: -22, cancelAt: 3,
+  },
+];
+
+const PRESS = 1.0;          // гитарист нажимает Calibrate…
+const SILENCE = 3.0;        // длина шага тишины
+const NOTES_TIMEOUT = 15.0; // без новой ноты дольше — обрыв
+const SETTLE = 1.0;         // после восьмой ноты — до результата
+
+/// Ход сценария: времена шагов и нот, итог.
+function plan(s) {
+  const p = { s };
+  p.silenceFrom = PRESS;
+  p.silenceRestart = s.disturb !== undefined ? PRESS + s.disturb : null;
+  p.notesFrom = (p.silenceRestart ?? PRESS) + SILENCE;
+  p.noteTimes = s.clicks.map((_, i) => p.notesFrom + 0.8 + i * NOTE_GAP);
+
+  if (s.cancelAt !== undefined) {
+    p.cancel = p.noteTimes[s.cancelAt - 1] + 0.6;
+    p.end = p.cancel + 4;
+    return p;
+  }
+  if (s.clicks.length === 0) {
+    p.resultAt = p.notesFrom + NOTES_TIMEOUT;
+  } else {
+    p.resultAt = p.noteTimes[p.noteTimes.length - 1] + SETTLE;
+  }
+  p.result = judge(s);
+  // Удачный итог закрывает удар по струнам через 5 с, остальные — Close.
+  p.closeAt = p.resultAt + (s.playAfter ? 6.0 : 3.5);
+  p.end = s.playAfter ? p.closeAt + 5 : p.closeAt + 1.5;
+  return p;
+}
+
+/// Итог калибровки по шуму, щелчкам и пику.
+function judge(s) {
+  if (s.clicks.length === 0) return { kind: 'nonotes' };
+  const softest = Math.min(...s.clicks);
+  const loudest = Math.max(...s.clicks);
+  const threshold = Math.round((s.noise + softest) / 2);
+  const r = { softest, loudest, threshold, gap: softest - s.noise };
+  if (s.peak >= -1) r.kind = 'clip';
+  else if (r.gap < 12) r.kind = 'close';
+  else r.kind = 'ok';
+  return r;
+}
+
+/// Ключевые кадры сценария для кнопок под окном.
+function frames(p) {
+  const s = p.s;
+  const f = [{ t: 0.3, label: 'До калибровки', caption: s.rowsBefore
+      ? 'Порог тишины −50. Гитарист играет ровно, но щелчок медиатора тише порога: ноты замечаются поздно, все красные, ' +
+        'среднее около +28 мс.'
+      : 'Окно до калибровки: порог тишины −50, транспорт остановлен. Гитарист нажимает Calibrate….' }];
+  f.push({ t: p.silenceFrom + 1.2, label: 'Шаг 1: тишина', caption:
+    'Панель занимает место строк. Гитарист глушит струны ладонью; три секунды тренажёр слушает фон. Серая полоса — ' +
+    'уровень выше 1 кГц сейчас, пунктир — нынешний порог тишины.' });
+  if (p.silenceRestart !== null)
+    f.push({ t: p.silenceRestart + 0.4, label: 'Задели струну', caption:
+      'Уровень подскочил выше фона больше чем на 20 дБ — это не шум. Отсчёт тишины начинается заново, на шкале — ' +
+      'подсказка.' });
+  f.push({ t: p.notesFrom + 0.3, label: 'Шаг 2: ноты', caption:
+    'Шум измерен — штриховка на шкале. Теперь — восемь глушёных нот по одной. Ячейки ждут ноты.' });
+  if (s.clicks.length > 0)
+    f.push({ t: p.noteTimes[Math.min(3, s.clicks.length - 1)] + 0.3, label: 'Ноты идут', caption:
+      'Каждая найденная нота заполняет ячейку уровнем своего щелчка, на шкале — зелёный штрих. Самый тихий щелчок ' +
+      'обведён: по нему считается порог.' });
+  else
+    f.push({ t: p.notesFrom + 6, label: 'Тишина в ответ', caption:
+      'Нот нет, шкала не двигается. Через 5 с без нот появляется подсказка проверить вход.' });
+
+  if (p.cancel !== undefined) {
+    f.push({ t: p.cancel + 0.5, label: 'Воспроизведение', caption:
+      'Транспорт пошёл — калибровка отменена, порог −50 не тронут, окно снова показывает такты. Calibrate… ' +
+      'серая, пока транспорт не остановится.' });
+    return f;
+  }
+
+  const captions = {
+    ok: 'Калибровка закончена. Шкала показывает всё сразу: шум, разброс щелчков, пик и порог — новый посередине ' +
+      'между шумом и самым тихим щелчком. Порог уже стоит в поле Silence и сохранён.',
+    close: 'Зазор между шумом и щелчком 6 дБ — меньше 12. Порог не меняется; панель объясняет, что поправить. ' +
+      '«Apply anyway» всё же ставит посчитанный порог.',
+    clip: 'Пик −0.1 dBFS — перегруз. Порог не меняется: после того как гитарист убавит усиление, уровни будут другими.',
+    nonotes: 'За 15 с ни одной ноты. Калибровка оборвана, порог не тронут, подсказка — проверить вход.',
+  };
+  f.push({ t: p.resultAt + 0.5, label: 'Итог', caption: captions[p.result.kind] });
+  if (s.playAfter)
+    f.push({ t: p.closeAt + 0.4, label: 'Удар закрывает', caption:
+      'Через 5 с после итога гитарист ударяет по струнам — панель закрывается, как по Close или по Finish на ' +
+      'месте Calibrate…: руки не уходят с гитары. Раньше 5 с удар итог не закрывает.' });
+  if (s.playAfter)
+    f.push({ t: p.closeAt + 3, label: 'Снова играет', caption:
+      'Гитарист запускает воспроизведение и играет так же, как до калибровки: ' +
+      'теперь щелчок проходит порог, отклонения в пределах допуска.' });
+  return f;
+}
+
+// --- Состояние в момент t ---------------------------------------------------------
+
+function jitter(t) {
+  return 1.6 * Math.sin(t * 37.1) + 1.1 * Math.sin(t * 91.7 + 1.3) + 0.7 * Math.sin(t * 13.3);
+}
+
+/// Уровень выше 1 кГц, dBFS: шум, щелчок и звук ноты, спадающий после него.
+function liveLevel(p, t) {
+  let level = p.s.noise + jitter(t);
+  if (p.silenceRestart !== null && t >= p.silenceRestart && t < p.silenceRestart + 0.6)
+    level = Math.max(level, -46 - (t - p.silenceRestart) * 60);
+  p.noteTimes.forEach((nt, i) => {
+    if (t < nt) return;
+    const body = Math.min(-38, p.s.clicks[i] + 18) - (t - nt) * 45;
+    level = Math.max(level, body);
+  });
+  return Math.max(-100, Math.min(0, level));
+}
+
+function state(p, t) {
+  const s = p.s;
+  const v = { silence: -50, changed: false, playing: false, rows: s.rowsBefore || null };
+
+  if (t < p.silenceFrom) return { ...v, view: 'rows' };
+
+  if (p.cancel !== undefined && t >= p.cancel)
+    return { ...v, view: 'rows', playing: true, rows: BEFORE_ROWS.slice(0, 1).map(r => r.slice(0, 2)), base: 1, cancelled: true };
+
+  if (t < p.notesFrom) {
+    const start = p.silenceRestart !== null && t >= p.silenceRestart ? p.silenceRestart : p.silenceFrom;
+    return { ...v, view: 'silence', level: liveLevel(p, t), left: SILENCE - (t - start),
+      restarted: start !== p.silenceFrom && t - start < 2.2 };
+  }
+
+  if (p.resultAt === undefined || t < p.resultAt) {
+    const got = p.noteTimes.filter(nt => nt <= t).length;
+    const last = got ? p.noteTimes[got - 1] : p.notesFrom;
+    return { ...v, view: 'notes', level: liveLevel(p, t), got, flash: got && t - last < 0.25,
+      quiet: s.clicks.length === 0 && t - p.notesFrom > 5, waited: t - p.notesFrom };
+  }
+
+  const r = p.result;
+  const applied = r.kind === 'ok';
+  if (applied) { v.silence = r.threshold; v.changed = true; }
+  if (t < p.closeAt) return { ...v, view: 'result' };
+
+  if (s.playAfter && t >= p.closeAt + 1.2) {
+    const n = Math.min(AFTER_ROWS.length, Math.floor((t - p.closeAt - 1.2) / 0.9) + 1);
+    return { ...v, view: 'rows', playing: true, rows: AFTER_ROWS.slice(0, n).reverse(), base: n };
+  }
+  return { ...v, view: 'rows' };
+}
+
+// --- Рисование ------------------------------------------------------------------
+
+const $ = id => document.getElementById(id);
+const sign = n => n > 0 ? '+' + n : n < 0 ? '−' + (-n) : '0';
+const dbText = n => n < 0 ? '−' + String(-n) : String(n);
+const pct = db => Math.max(0, Math.min(100, db + 100));
+/// Место подписи: у краёв шкалы подпись не вылезает за окно.
+const at = db => Math.max(4, Math.min(95, pct(db)));
+
+function statusText(v) {
+  if (v.view === 'silence' || v.view === 'notes' || v.view === 'result')
+    return v.view === 'result' ? 'Calibration finished' :
+      'Calibrating Input 1: step ' + (v.view === 'silence' ? '1 of 2 — silence' : '2 of 2 — notes');
+  const base = 'Quarters, tolerance 10 ms, latency 10.7 ms — ';
+  if (v.cancelled) return base + 'measuring · calibration cancelled: playback started';
+  return base + (v.playing ? 'measuring' : 'waiting for playback');
+}
+
+function renderRows(rows, base) {
+  if (!rows) return '';
+  const h = 100 / 8;
+  return rows.map((vals, i) => {
+    const played = vals.filter(x => x !== null);
+    const mean = played.reduce((a, b) => a + b, 0) / played.length;
+    const spread = Math.sqrt(played.reduce((a, b) => a + (b - mean) ** 2, 0) / played.length);
+    const cell = x => x === null
+      ? '<span style="color: var(--neutral); font-size: 4cqh">●</span>'
+      : `<span style="color: ${Math.abs(x) <= 10 ? 'var(--good)' : 'var(--bad)'}">${sign(x)}</span>`;
+    const stats = i === 0 ? '' :
+      `<span style="color: ${Math.abs(mean) <= 10 ? 'var(--good)' : 'var(--bad)'}">${mean > 0 ? '+' : mean < 0 ? '−' : ''}${Math.abs(mean).toFixed(1)}</span>` +
+      `<span style="color: var(--neutral)">${spread.toFixed(1)}</span>`;
+    return `<div class="bar${i === 0 ? ' top' : ''}" style="top: ${i * h}cqh; height: ${h}cqh; font-size: 6.5cqh">
+      <span class="no">${base - i}</span><span class="cells">${vals.map(cell).join('')}</span>
+      <span class="stats" style="font-size: 4cqh">${stats}</span></div>`;
+  }).join('');
+}
+
+function head(step, button) {
+  const cls = n => n < step ? 'done' : n === step ? 'on' : '';
+  return `<div class="head">
+    <span class="${cls(1)}">${step > 1 ? '✓' : '①'} Silence</span><span class="sep"></span>
+    <span class="${cls(2)}">${step > 2 ? '✓' : '②'} Notes</span><span class="sep"></span>
+    <span class="${cls(3)}">Result</span>
+    <span class="grow"></span>${button}</div>`;
+}
+
+/// Шкала −100…0 dBFS с отметками.
+function scale(o) {
+  let html = '<div class="scale"><div class="track">';
+  if (o.noise !== undefined) html += `<div class="noise" style="width: ${pct(o.noise + 3)}%"></div>`;
+  if (o.level !== undefined) html += `<div class="live" style="width: ${pct(o.level)}%"></div>`;
+  if (o.band) html += `<div class="band" style="left: ${pct(o.band[0])}%; width: ${o.band[1] - o.band[0]}%"></div>`;
+  html += '</div>';
+  (o.clicks || []).forEach(c => {
+    html += `<div class="tick" style="left: ${pct(c)}%; background: var(--good)"></div>`;
+  });
+  if (o.peak !== undefined) {
+    html += `<div class="tick" style="left: ${pct(o.peak)}%; background: #fff"></div>`;
+    html += `<div class="mark below" style="left: ${at(o.peak)}%; color: #fff">peak ${dbText(o.peak)}</div>`;
+  }
+  if (o.old !== undefined) {
+    html += `<div class="vline old" style="left: ${pct(o.old)}%"></div>`;
+    html += `<div class="mark above" style="left: ${at(o.old)}%; color: var(--dim)">${o.threshold !== undefined ? 'was' : 'Silence'} ${dbText(o.old)}</div>`;
+  }
+  if (o.threshold !== undefined) {
+    html += `<div class="vline" style="left: ${pct(o.threshold)}%"></div>`;
+    html += `<div class="mark above" style="left: ${at(o.threshold)}%; color: var(--beat)">Silence ${dbText(o.threshold)}</div>`;
+  }
+  if (o.noise !== undefined)
+    html += `<div class="mark below" style="left: ${at(o.noise - pct(o.noise) / 2)}%; color: var(--neutral)">noise ${dbText(o.noise)}</div>`;
+  if (o.band)
+    html += `<div class="mark below" style="left: ${at((o.band[0] + o.band[1]) / 2)}%; color: var(--good)">pick ${dbText(o.band[0])}…${dbText(o.band[1])}</div>`;
+  for (let db = -100; db <= 0; db += 10)
+    html += `<div class="ticklabel" style="left: ${pct(db)}%">${db === 0 ? '0' : dbText(db)}</div>`;
+  return html + '</div>';
+}
+
+function renderPanel(p, v) {
+  const s = p.s;
+  if (v.view === 'silence') {
+    const done = (SILENCE - v.left) / SILENCE * 100;
+    return `<div class="cal">${head(1, '<button class="btn">Cancel</button>')}
+      <div class="say">Mute the strings and don't play</div>
+      <div class="hint">${v.restarted
+        ? '<span class="alert">Heard a sound — starting over.</span> Rest your palm on the strings.'
+        : 'Listening to the background noise… ' + Math.max(0, v.left).toFixed(0) + ' s'}</div>
+      <div class="fill"></div>
+      <div class="progress"><div style="width: ${done}%"></div></div>
+      ${scale({ level: v.level, old: v.silence })}</div>`;
+  }
+
+  if (v.view === 'notes') {
+    const slots = [];
+    for (let i = 0; i < 8; ++i) {
+      if (i < v.got) {
+        const low = s.clicks[i] === Math.min(...s.clicks.slice(0, v.got));
+        slots.push(`<span class="got${low ? ' low' : ''}${v.flash && i === v.got - 1 ? ' flash' : ''}">${dbText(s.clicks[i])}</span>`);
+      } else slots.push('<span>·</span>');
+    }
+    const hint = v.quiet
+      ? `<span class="alert">No notes heard on Input 1.</span> Is the guitar connected to this input? Stops in ${Math.max(0, NOTES_TIMEOUT - v.waited).toFixed(0)} s.`
+      : 'One at a time, muting each. Play as you practice; make two or three of them softer.';
+    return `<div class="cal">${head(2, '<button class="btn">Cancel</button>')}
+      <div class="say">Play 8 single notes</div>
+      <div class="hint">${hint}</div>
+      <div class="slots">${slots.join('')}<span class="count">${v.got} of 8</span></div>
+      <div class="fill"></div>
+      ${scale({ level: v.level, noise: s.noise, clicks: s.clicks.slice(0, v.got), old: v.silence })}</div>`;
+  }
+
+  const r = p.result;
+  if (r.kind === 'nonotes')
+    return `<div class="cal">${head(3, '')}
+      <div class="say bad">No notes heard on Input 1</div>
+      <div class="hint">Nothing above the background noise for ${NOTES_TIMEOUT} s. Check that the guitar is connected
+        to the input selected in <b>Input</b> and that its volume is up, then calibrate again.
+        Silence threshold stays <b>${dbText(-50)} dBFS</b>.</div>
+      <div class="fill"></div>
+      <div class="actions"><button class="btn">Calibrate again</button><button class="btn">Close</button></div></div>`;
+
+  const scaleHtml = scale({ noise: s.noise, band: [r.softest, r.loudest], clicks: s.clicks, peak: s.peak,
+    old: -50, threshold: r.kind === 'ok' ? r.threshold : undefined });
+  const table = `<div class="table">
+      <span>Noise above 1 kHz</span><b>${dbText(s.noise)} dBFS</b>
+      <span>Pick attack above 1 kHz</span><b>${dbText(r.softest)} … ${dbText(r.loudest)} dBFS</b>
+      <span>Signal peak</span><b>${dbText(s.peak)} dBFS</b></div>`;
+
+  if (r.kind === 'ok')
+    return `<div class="cal">${head(4, '')}
+      <div class="say good">Silence threshold: ${dbText(-50)} → ${dbText(r.threshold)} dBFS</div>
+      <div class="hint">Set halfway between the noise and the softest pick — ${r.gap} dB apart.</div>
+      ${table}<div class="fill"></div>${scaleHtml}
+      <div class="actions"><button class="btn">Calibrate again</button><button class="btn hot">Close</button></div></div>`;
+
+  const problem = r.kind === 'clip'
+    ? { say: 'The input clips',
+        hint: `The loudest note reached <b>${dbText(s.peak)} dBFS</b>. Turn the input gain down on the audio interface so
+          the hardest notes stay below −6 dBFS, then calibrate again.` }
+    : { say: 'Noise is too close to the pick',
+        hint: `Only <b>${r.gap} dB</b> between the noise and the softest pick: notes will be missed or noise will count as notes.
+          Raise the input gain, turn the guitar volume up, or move away from what hums, then calibrate again.` };
+  return `<div class="cal">${head(4, '')}
+    <div class="say bad">${problem.say}</div>
+    <div class="hint">${problem.hint} Silence threshold stays <b>${dbText(-50)} dBFS</b>.</div>
+    ${table}<div class="fill"></div>${scaleHtml}
+    <div class="actions"><button class="btn">Apply ${dbText(r.threshold)} anyway</button>
+      <button class="btn hot">Calibrate again</button><button class="btn">Close</button></div></div>`;
+}
+
+// --- Управление -----------------------------------------------------------------
+
+let current = 0, plans = SCENARIOS.map(plan), t = 0, playing = false, last = null;
+
+function render() {
+  const p = plans[current];
+  const v = state(p, t);
+  $('silence').textContent = String(v.silence);
+  $('silence').classList.toggle('changed', v.changed);
+  // На итоге Calibrate… называется Finish и закрывает панель.
+  $('calibrate').textContent = v.view === 'result' ? 'Finish' : 'Calibrate…';
+  $('calibrate').disabled = v.view === 'result' ? false : v.playing || v.view !== 'rows';
+  $('status').textContent = statusText(v);
+  $('rows').innerHTML = v.view === 'rows' ? renderRows(v.rows, v.base ?? 40) : renderPanel(p, v);
+  $('scrub').value = Math.round(t / p.end * 1000);
+  $('pos').textContent = t.toFixed(1) + ' с';
+
+  const fr = frames(p);
+  let active = -1;
+  fr.forEach((f, i) => { if (t >= f.t - 0.31) active = i; });
+  [...$('frames').children].forEach((b, i) => b.classList.toggle('active', i === active));
+  $('caption').textContent = active >= 0 ? fr[active].caption : '';
+}
+
+function select(i) {
+  current = i;
+  [...$('tabs').children].forEach((b, j) => b.classList.toggle('active', j === i));
+  $('desc').textContent = SCENARIOS[i].desc;
+  $('frames').innerHTML = '';
+  frames(plans[i]).forEach(f => {
+    const b = document.createElement('button');
+    b.textContent = f.label;
+    b.onclick = () => { stop(); t = f.t; render(); };
+    $('frames').appendChild(b);
+  });
+  stop();
+  t = 0.3;
+  render();
+}
+
+function stop() { playing = false; $('play').textContent = '▶'; }
+
+function tick(now) {
+  if (playing) {
+    if (last !== null) t += (now - last) / 1000 * +$('speed').value;
+    const p = plans[current];
+    if (t >= p.end) { t = p.end; stop(); }
+    render();
+  }
+  last = now;
+  requestAnimationFrame(tick);
+}
+
+SCENARIOS.forEach((s, i) => {
+  const b = document.createElement('button');
+  b.textContent = s.name;
+  b.onclick = () => select(i);
+  $('tabs').appendChild(b);
+});
+$('play').onclick = () => {
+  if (playing) { stop(); return; }
+  if (t >= plans[current].end - 0.01) t = 0;
+  playing = true; $('play').textContent = '❚❚';
+};
+$('scrub').oninput = e => { stop(); t = e.target.value / 1000 * plans[current].end; render(); };
+$('calibrate').onclick = () => {
+  if ($('calibrate').textContent === 'Finish') { stop(); t = plans[current].closeAt + 0.01; render(); return; }
+  t = PRESS; playing = true; $('play').textContent = '❚❚';
+};
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && e.target.tagName !== 'INPUT') { e.preventDefault(); $('play').click(); }
+});
+new ResizeObserver(render).observe(document.querySelector('.window'));
+
+select(0);
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
