@@ -118,7 +118,7 @@ sh reaper-training-<версия>-linux-x86_64.run -- --resource-path ~/REAPER
 console output»):
 
 ```
-reaper-training 0.4.0 loaded (сборка 2026-10-06 21:37:12)
+reaper-training 0.4.1 loaded (сборка 2026-10-06 21:37:12)
 ```
 
 В строке — версия расширения, в скобках — дата и время сборки: по ним видно,
