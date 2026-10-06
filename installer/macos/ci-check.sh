@@ -79,7 +79,9 @@ rm -rf /Applications/REAPER.app
 
 step "REAPER ставится из образа в /Applications"
 mnt=$(mktemp -d)
-hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg" >/dev/null
+# В образе REAPER — лицензионное соглашение: hdiutil показывает его и ждёт
+# согласия, без ответа подключение отменяется.
+yes | PAGER=cat hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg" >/dev/null
 app=$(find "$mnt" -maxdepth 2 -name REAPER.app -type d | head -n 1)
 [ -n "$app" ] || fail "в образе нет REAPER.app"
 cp -R "$app" /Applications/
