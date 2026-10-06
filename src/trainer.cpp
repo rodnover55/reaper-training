@@ -8,6 +8,8 @@
 #define REAPERAPI_WANT_GetSetRepeat
 #define REAPERAPI_WANT_GetSet_LoopTimeRange2
 #define REAPERAPI_WANT_get_config_var
+#define REAPERAPI_WANT_Audio_IsRunning
+#define REAPERAPI_WANT_Audio_Init
 
 #include "trainer.hpp"
 
@@ -18,6 +20,7 @@
 
 #include "training/grid/note_time.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <utility>
@@ -51,6 +54,27 @@ int intConfig(const char *name, int fallback) {
   return value;
 }
 
+/// Сколько секунд без звука от хука обрывают калибровку.
+constexpr double kNoSoundSeconds = 2.0;
+
+/// Не чаще чем через столько калибровка пробует открыть закрытую звуковую
+/// карту.
+constexpr auto kOpenDeviceInterval = std::chrono::seconds(1);
+
+const char *verdictName(onset::Verdict verdict) {
+  switch (verdict) {
+  case onset::Verdict::Good:
+    return "good";
+  case onset::Verdict::NoiseTooClose:
+    return "noise too close";
+  case onset::Verdict::Clipping:
+    return "clipping";
+  case onset::Verdict::NotEnoughNotes:
+    return "not enough notes";
+  }
+  return "?";
+}
+
 void onMainTimer() {
   if (instance && instance->poll())
     refreshWindow();
@@ -65,6 +89,10 @@ Trainer::Trainer() : settings_(loadSettings()) {
 }
 
 void Trainer::setSettings(const Settings &settings) {
+  // Смена входа прерывает калибровку: она меряла другой канал.
+  if (session_ && clamped(settings).channel != settings_.channel)
+    endCalibration();
+
   settings_ = clamped(settings);
   saveSettings(settings_);
   input_.setChannel(settings_.channel);
@@ -174,11 +202,14 @@ bool Trainer::poll() {
   }
   wasPlaying_ = playing;
 
+  stopCalibrationOnPlayback(playing);
+
   rate_ = Master_GetPlayRate(nullptr);
 
   Status status;
   status.rate = rate_;
   status.compensationMs = compensation_ * 1000.0;
+  status.calibrationCancelled = calibrationCancelled_;
   if (settings_.channel < channels)
     if (const char *name = GetInputChannelName(settings_.channel))
       status.channelName = name;
@@ -189,8 +220,12 @@ bool Trainer::poll() {
 
   bool changed =
       status.measuring != status_.measuring || status.channelName != status_.channelName ||
-      status.compensationMs != status_.compensationMs || status.rate != status_.rate;
+      status.compensationMs != status_.compensationMs || status.rate != status_.rate ||
+      status.calibrationCancelled != status_.calibrationCancelled;
   status_ = status;
+
+  if (session_ && pollCalibration())
+    changed = true;
 
   // Позиция сообщается до нот этого тика: строку ноты свод выбирает по свежей
   // позиции.
@@ -223,6 +258,220 @@ bool Trainer::poll() {
   }
 
   return changed;
+}
+
+void Trainer::stopCalibrationOnPlayback(bool playing) {
+  if (!playing) {
+    calibrationCancelled_ = false;
+    return;
+  }
+  if (!session_)
+    return;
+
+  // Запуск транспорта прерывает шаги калибровки, а показанный итог просто
+  // закрывает.
+  const bool finished = calibrationFinished();
+  journal("calibration: {} by playback", finished ? "closed" : "cancelled");
+  endCalibration();
+  calibrationCancelled_ = !finished;
+}
+
+bool Trainer::startCalibration() {
+  if (wasPlaying_ || status_.measuring == Measuring::NoChannel)
+    return false;
+
+  endCalibration();
+  // Куски прошлой сессии, которые ещё в очереди, — не этой калибровки.
+  while (input_.popCalibration(chunkSamples_)) {
+  }
+
+  CalibrationSession &session = session_.emplace();
+  session.previousSilenceDb = settings_.silenceDb;
+  session.channelName = status_.channelName;
+  lastSound_ = std::chrono::steady_clock::now();
+  lastOpenAttempt_ = {};
+  calibrationFinished_ = false;
+  calibrationCancelled_ = false;
+  input_.setCalibrating(!testSound_);
+  journal("calibration: started on input {} ({}), silence {} dBFS", settings_.channel + 1,
+          session.channelName, settings_.silenceDb);
+  return true;
+}
+
+bool Trainer::startCalibration(std::vector<float> samples, double sampleRate) {
+  const std::size_t count = samples.size();
+  TestSound sound{.samples = std::move(samples),
+                  .sampleRate = sampleRate,
+                  .startedAt = std::chrono::steady_clock::now()};
+  endCalibration();
+  testSound_ = std::move(sound);
+  if (startCalibration()) {
+    journal("calibration: test sound, {} samples at {} Hz", count, sampleRate);
+    return true;
+  }
+  testSound_.reset();
+  return false;
+}
+
+void Trainer::endCalibration() {
+  if (!session_)
+    return;
+
+  session_.reset();
+  testSound_.reset();
+  input_.setCalibrating(false);
+  journal("calibration: ended");
+}
+
+void Trainer::applyCalibration() {
+  if (!session_ || !session_->calibration)
+    return;
+  const std::optional<onset::CalibrationResult> &result = session_->calibration->result();
+  if (!result || result->notes == 0)
+    return;
+
+  Settings settings = settings_;
+  settings.silenceDb = result->thresholdDb;
+  setSettings(settings);
+  journal("calibration: applied anyway, silence {} dBFS", settings_.silenceDb);
+  endCalibration();
+  showSettings();
+}
+
+bool Trainer::pollCalibration() {
+  if (!session_)
+    return false;
+  CalibrationSession &session = *session_;
+
+  const auto now = std::chrono::steady_clock::now();
+  bool heard = false;
+
+  if (!testSound_ && !session.noSound)
+    openAudioDevice(now);
+
+  if (testSound_) {
+    TestSound &sound = *testSound_;
+    // Звук без гитары идёт вместо входа: куски входа выбрасываются.
+    while (input_.popCalibration(chunkSamples_)) {
+    }
+    const double elapsed = std::chrono::duration<double>(now - sound.startedAt).count();
+    const std::size_t due =
+        std::min(sound.samples.size(),
+                 static_cast<std::size_t>(std::max(0.0, elapsed * sound.sampleRate)));
+    if (due > sound.fed) {
+      feedCalibration(
+          std::span<const float>(sound.samples).subspan(sound.fed, due - sound.fed),
+          sound.sampleRate, false);
+      sound.fed = due;
+      heard = true;
+    }
+  } else {
+    while (const auto chunk = input_.popCalibration(chunkSamples_)) {
+      feedCalibration(chunkSamples_, chunk->sampleRate, chunk->gap);
+      heard = true;
+    }
+  }
+
+  // После итога звук идёт в калибровку дальше: удар по струнам закрывает
+  // панель.
+  if (calibrationFinished_ && session.calibration && session.calibration->soundAfterResult()) {
+    journal("calibration: closed by sound after the result");
+    endCalibration();
+    return true;
+  }
+  if (calibrationFinished_ || session.noSound)
+    return false;
+
+  if (heard)
+    lastSound_ = now;
+
+  if (session.calibration && session.calibration->result()) {
+    finishCalibration();
+    return true;
+  }
+
+  if (std::chrono::duration<double>(now - lastSound_).count() >= kNoSoundSeconds) {
+    session.noSound = true;
+    input_.setCalibrating(false);
+    journal("calibration: no sound from the audio device for {} s", kNoSoundSeconds);
+    return true;
+  }
+  return heard;
+}
+
+void Trainer::openAudioDevice(std::chrono::steady_clock::time_point now) {
+  // REAPER закрывает звуковую карту при остановке, если так настроено; без
+  // неё хук не вызывается, и калибровке нечего слушать.
+  if (Audio_IsRunning() != 0 || now - lastOpenAttempt_ < kOpenDeviceInterval)
+    return;
+
+  lastOpenAttempt_ = now;
+  Audio_Init();
+  journal("calibration: audio device was closed, opened: {}", Audio_IsRunning() != 0);
+}
+
+void Trainer::feedCalibration(std::span<const float> samples, double sampleRate, bool gap) {
+  if (!session_ || session_->noSound)
+    return;
+
+  std::optional<onset::Calibration> &stored = session_->calibration;
+  if (stored && stored->sampleRate() == sampleRate) {
+    if (gap) {
+      stored->discontinuity();
+      journal("calibration: gap in the input");
+    }
+  } else if (calibrationFinished_) {
+    // Итог уже подведён: звук другой частоты в нём ничего не меняет.
+    return;
+  } else {
+    // Новая частота — другие уровни фильтра и другое время шагов: заново.
+    stored.emplace(sampleRate);
+    journal("calibration: {} Hz, silence step", sampleRate);
+  }
+  if (!stored)
+    return;
+  onset::Calibration &calibration = *stored;
+
+  const onset::CalibrationStep step = calibration.step();
+  const std::size_t attacks = calibration.attacksDb().size();
+  const std::optional<double> sound = calibration.secondsSinceSound();
+  calibration.process(samples);
+
+  const std::optional<double> nowSound = calibration.secondsSinceSound();
+  if (nowSound && (!sound || *nowSound < *sound))
+    journal("calibration: sound during silence, silence step counts again");
+  if (step == onset::CalibrationStep::Silence &&
+      calibration.step() != onset::CalibrationStep::Silence)
+    journal("calibration: noise {:.1f} dBFS, notes step", calibration.noiseDb());
+  for (std::size_t i = attacks; i < calibration.attacksDb().size(); ++i)
+    journal("calibration: note {} attack {:.1f} dBFS", i + 1, calibration.attacksDb()[i]);
+}
+
+void Trainer::finishCalibration() {
+  if (!session_ || !session_->calibration)
+    return;
+  const std::optional<onset::CalibrationResult> &stored = session_->calibration->result();
+  if (!stored)
+    return;
+  const onset::CalibrationResult result = *stored;
+  const double previous = session_->previousSilenceDb;
+
+  calibrationFinished_ = true;
+  journal("calibration: {}, noise {:.1f}, attacks {} from {:.1f} to {:.1f}, peak {:.1f}, "
+          "threshold {} dBFS",
+          verdictName(result.verdict), result.noiseDb, result.notes, result.softestDb,
+          result.loudestDb, result.peakDb, result.thresholdDb);
+
+  if (result.verdict != onset::Verdict::Good)
+    return;
+
+  Settings settings = settings_;
+  settings.silenceDb = result.thresholdDb;
+  setSettings(settings);
+  if (session_)
+    session_->applied = true;
+  showSettings();
+  journal("calibration: silence {} -> {} dBFS", previous, settings_.silenceDb);
 }
 
 Trainer &trainer() { return *instance; }

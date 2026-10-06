@@ -35,7 +35,8 @@ double monotonicNow() {
 } // namespace
 
 AudioInput::AudioInput()
-    : samples_(std::make_unique<concurrency::SpscRing<float, (1U << 18)>>()) {
+    : samples_(std::make_unique<concurrency::SpscRing<float, (1U << 18)>>()),
+      calibrationSamples_(std::make_unique<concurrency::SpscRing<float, (1U << 18)>>()) {
   blockSamples_.reserve(kMaxBlock);
 
   worker_ = std::thread([this] { work(); });
@@ -85,10 +86,11 @@ void AudioInput::onBlock(int length, double sampleRate, audio_hook_register_t *r
   }
 
   const bool playing = (state & kPaused) == 0 && (state & (kPlaying | kRecording)) != 0;
+  header.calibration = !playing && calibrating_.load(std::memory_order_relaxed);
   const int channel = channel_.load(std::memory_order_relaxed);
   const int channels = inputChannels_.load(std::memory_order_relaxed);
 
-  if (playing && channel >= 0 && channel < channels && length > 0 &&
+  if ((playing || header.calibration) && channel >= 0 && channel < channels && length > 0 &&
       static_cast<std::size_t>(length) <= kMaxBlock) {
     if (const ReaSample *input = registration->GetBuffer(false, channel)) {
       const auto count = static_cast<std::size_t>(length);
@@ -114,6 +116,17 @@ void AudioInput::work() {
 void AudioInput::feed(const BlockHeader &header) {
   const bool gap = header.sequence != expectedSequence_;
   expectedSequence_ = header.sequence + 1;
+
+  // Звук калибровки поиску атак не подаётся, а следующий запуск
+  // воспроизведения начинает поиск заново.
+  if (header.hasSamples && header.calibration) {
+    streaming_ = false;
+    previousPosition_.reset();
+    forwardCalibration(header, gap || !calibrationStreaming_);
+    calibrationStreaming_ = true;
+    return;
+  }
+  calibrationStreaming_ = false;
 
   if (!header.hasSamples) {
     streaming_ = false;
@@ -197,6 +210,35 @@ void AudioInput::feed(const BlockHeader &header) {
     return candidate.streamStart + keep >= now;
   });
   history_.erase(history_.begin(), stale);
+}
+
+void AudioInput::forwardCalibration(const BlockHeader &header, bool gap) {
+  const auto length = static_cast<std::size_t>(header.length);
+  blockSamples_.resize(length);
+  (void)samples_->pop(std::span<float>(blockSamples_));
+
+  // Места нет — кусок пропадает, и следующий скажет главному потоку о
+  // разрыве.
+  if (calibrationChunks_.freeSpace() == 0 || calibrationSamples_->freeSpace() < length) {
+    calibrationLost_ = true;
+    return;
+  }
+
+  (void)calibrationSamples_->push(std::span<const float>(blockSamples_));
+  (void)calibrationChunks_.push({.sampleRate = header.sampleRate,
+                                 .length = header.length,
+                                 .gap = gap || calibrationLost_});
+  calibrationLost_ = false;
+}
+
+std::optional<CalibrationChunk> AudioInput::popCalibration(std::vector<float> &samples) {
+  const auto chunk = calibrationChunks_.pop();
+  if (!chunk)
+    return std::nullopt;
+
+  samples.resize(static_cast<std::size_t>(chunk->length));
+  (void)calibrationSamples_->pop(std::span<float>(samples));
+  return chunk;
 }
 
 } // namespace training::reaper

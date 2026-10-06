@@ -24,5 +24,10 @@
 #define IDC_STATUS 1008
 #define IDC_SHOW_NUMBERS 1009
 #define IDC_SHOW_STATS 1010
+#define IDC_CALIBRATE 1011
+#define IDC_CAL_CANCEL 1012
+#define IDC_CAL_APPLY 1013
+#define IDC_CAL_AGAIN 1014
+#define IDC_CAL_CLOSE 1015
 
 // NOLINTEND(modernize-macro-to-enum,cppcoreguidelines-macro-usage)

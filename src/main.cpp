@@ -45,6 +45,8 @@
 #define REAPERAPI_WANT_GetCursorPosition
 #define REAPERAPI_WANT_SetExtState
 #define REAPERAPI_WANT_GetExtState
+#define REAPERAPI_WANT_Audio_IsRunning
+#define REAPERAPI_WANT_Audio_Init
 
 // SWELL объявляет max и min макросами, и они ломают стандартную библиотеку.
 #define WDL_NO_DEFINE_MINMAX

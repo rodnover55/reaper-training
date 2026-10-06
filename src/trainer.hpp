@@ -8,10 +8,14 @@
 #include "settings.hpp"
 
 #include "training/grid/bars.hpp"
+#include "training/onset/calibration.hpp"
 
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -41,6 +45,31 @@ struct Status {
 
   /// Скорость воспроизведения проекта.
   double rate = 1.0;
+
+  /// Правда, если калибровку входа прервал запуск воспроизведения или
+  /// записи; держится, пока транспорт не остановится.
+  bool calibrationCancelled = false;
+};
+
+/// Сессия калибровки входа: от запуска калибровки до Close, Cancel или
+/// «Apply anyway» (`input-calibration`).
+struct CalibrationSession {
+  /// Ход калибровки; пусто, пока не пришёл первый звук: до него неизвестна
+  /// частота дискретизации.
+  std::optional<onset::Calibration> calibration;
+
+  /// Порог тишины до калибровки, dBFS.
+  double previousSilenceDb = 0.0;
+
+  /// Имя калибруемого входного канала (`GetInputChannelName`).
+  std::string channelName;
+
+  /// Правда, если звук от звуковой карты не приходил 2 с и калибровка
+  /// оборвана без итога.
+  bool noSound = false;
+
+  /// Правда, если калибровка удалась и сама поставила порог тишины.
+  bool applied = false;
 };
 
 /// Тренажёр: вход звуковой карты, настройки и строки тактов.
@@ -75,6 +104,45 @@ public:
 
   AudioInput &input() { return input_; }
 
+  /// Начинает калибровку выбранного входа; прежняя сессия кончается без
+  /// изменений. Звук входа при остановленном транспорте идёт в калибровку, а
+  /// удачный итог сразу ставит порог тишины (`setSettings`). После итога звук
+  /// слушается дальше: удар по струнам через 5 с кончает сессию
+  /// (`onset::Calibration::soundAfterResult`). Пока сессия слушает вход,
+  /// закрытую звуковую карту она открывает (`Audio_Init`) и после себя не
+  /// закрывает.
+  ///
+  /// @return ложь, если транспорт воспроизводит или записывает или
+  ///   выбранного канала нет у звуковой карты: калибровка не начата.
+  bool startCalibration();
+
+  /// Начинает калибровку, как `startCalibration()`, но звук берёт не со
+  /// входа, а из `samples` в темпе реального времени. Для проверок без
+  /// гитары.
+  ///
+  /// @param samples звук одного канала, доли полной шкалы.
+  /// @param sampleRate его частота дискретизации, Гц; больше 2000.
+  bool startCalibration(std::vector<float> samples, double sampleRate);
+
+  /// Кончает сессию калибровки: Cancel, Close, закрытие окна. Порог тишины не
+  /// меняется — поставленный удачной калибровкой остаётся. Без сессии ничего
+  /// не делает.
+  void endCalibration();
+
+  /// Ставит порог тишины, посчитанный калибровкой, хотя она его не поставила
+  /// («Apply anyway»), и кончает сессию. Ничего не делает, если итога нет или
+  /// в нём нет ни одной ноты.
+  void applyCalibration();
+
+  /// Сессия калибровки; пусто, если её нет.
+  const std::optional<CalibrationSession> &calibration() const { return session_; }
+
+  /// Правда, если сессия есть и показывает итог: калибровка закончилась или
+  /// оборвалась без звука.
+  bool calibrationFinished() const {
+    return session_ && (calibrationFinished_ || session_->noSound);
+  }
+
   /// Сообщает строкам тактов слышимую позицию воспроизведения, забирает новые
   /// атаки, ставит их в строки и обновляет состояние. Зовётся таймером главного
   /// потока.
@@ -89,21 +157,46 @@ private:
   double loopBeats(double heard) const;
   void followPlayback();
   double loopWrapped(double time, double blockPosition) const;
+  void stopCalibrationOnPlayback(bool playing);
+  bool pollCalibration();
+  void openAudioDevice(std::chrono::steady_clock::time_point now);
+  void feedCalibration(std::span<const float> samples, double sampleRate, bool gap);
+  void finishCalibration();
 
+  /// Звук для калибровки без гитары (`startCalibration(samples, sampleRate)`)
+  /// и сколько его уже подано.
+  struct TestSound {
+    std::vector<float> samples;
+    double sampleRate = 0.0;
+    std::chrono::steady_clock::time_point startedAt;
+    std::size_t fed = 0;
+  };
+
+  // Поля стоят в порядке, который не оставляет дыр выравнивания.
   AudioInput input_;
   ProjectTimeline timeline_;
-  Settings settings_;
-  grid::Bars bars_;
-  Status status_;
-  std::vector<HookOnset> lastRun_;
-
-  bool wasPlaying_ = false;
   double sampleRate_ = 0.0;
   double compensation_ = 0.0;
   double inputLatency_ = 0.0;
   double rate_ = 1.0;
+  // Когда от хука или звука без гитары пришёл последний звук калибровки.
+  std::chrono::steady_clock::time_point lastSound_;
+  // Когда калибровка последний раз пробовала открыть закрытую звуковую карту.
+  std::chrono::steady_clock::time_point lastOpenAttempt_;
+  std::vector<HookOnset> lastRun_;
+  // Сэмплы куска калибровки.
+  std::vector<float> chunkSamples_;
+  Settings settings_;
+  std::optional<TestSound> testSound_;
+  Status status_;
+  grid::Bars bars_;
+  std::optional<CalibrationSession> session_;
   std::uint32_t minRun_ = 0;
   std::uint32_t latestRun_ = 0;
+  bool wasPlaying_ = false;
+  // Подведён ли итог калибровки; прервал ли её запуск транспорта.
+  bool calibrationFinished_ = false;
+  bool calibrationCancelled_ = false;
 };
 
 /// Тренажёр расширения; есть между `initTrainer` и `shutdownTrainer`.

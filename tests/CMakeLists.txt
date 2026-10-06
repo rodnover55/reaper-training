@@ -5,6 +5,7 @@ add_executable(training_tests
   main.cpp
   concurrency_spsc_ring_test.cpp
   onset_sliding_max_test.cpp
+  onset_calibration_test.cpp
   onset_detector_test.cpp
   synth.cpp
   synth_test.cpp

@@ -47,15 +47,31 @@ struct HookOnset {
   std::uint32_t run = 0;
 };
 
+/// Кусок звука для калибровки входа: подряд идущие сэмплы выбранного канала,
+/// снятые при остановленном транспорте.
+struct CalibrationChunk {
+  /// Частота дискретизации звуковой карты, Гц.
+  double sampleRate = 0.0;
+
+  /// Сколько сэмплов в куске; больше нуля.
+  int length = 0;
+
+  /// Правда, если кусок не продолжает прошлый: между ними звук пропал, шло
+  /// воспроизведение или калибровка выключалась. У первого куска — правда.
+  bool gap = false;
+};
+
 /// Вход звуковой карты: аудиохук и рабочий поток поиска атак.
 ///
 /// Существует от создания до уничтожения; хук зарегистрирован всё это время.
-/// Сэмплы берутся только при воспроизведении и записи. Атаки из блоков, где
+/// Сэмплы берутся при воспроизведении и записи — для поиска атак — и при
+/// остановленном транспорте, если включён звук калибровки. Атаки из блоков, где
 /// позиция транспорта не сдвинулась с прошлого блока (запуск, count-in), не
 /// отдаются: на шкале им места нет (findings.md, R4).
 ///
 /// Многопоточность: все методы, кроме деструктора, можно звать из любого
-/// потока, но `popOnset` — только из одного.
+/// потока, но `popOnset` — только из одного и `popCalibration` — только из
+/// одного.
 class AudioInput {
 public:
   /// Регистрирует аудиохук и запускает рабочий поток. Выбранный канал — 0.
@@ -112,6 +128,22 @@ public:
   /// `onset::Settings`.
   double energyRatio() const { return energyRatio_.load(std::memory_order_relaxed); }
 
+  /// Включает и выключает звук для калибровки входа. Пока он включён и
+  /// транспорт стоит, сэмплы выбранного канала идут в очередь калибровки
+  /// (`popCalibration`); при воспроизведении и записи — как всегда, в поиск
+  /// атак. Действует со следующего блока.
+  void setCalibrating(bool calibrating) {
+    calibrating_.store(calibrating, std::memory_order_relaxed);
+  }
+
+  /// Забирает следующий кусок звука калибровки. Если очередь калибровки
+  /// переполнена, куски пропадают, и следующий за ними помечен `gap`.
+  ///
+  /// @param samples сюда пишутся сэмплы куска; прежнее содержимое
+  ///   заменяется. Если кусков нет, не меняется.
+  /// @return кусок; пусто — новых нет.
+  std::optional<CalibrationChunk> popCalibration(std::vector<float> &samples);
+
   /// Частота дискретизации по последнему блоку, Гц; 0 — блоков ещё не было.
   double sampleRate() const { return sampleRate_.load(std::memory_order_relaxed); }
 
@@ -131,6 +163,7 @@ private:
     double monotonic = 0.0;
     int length = 0;
     bool hasSamples = false;
+    bool calibration = false;
   };
 
   /// Блок, уже поданный детектору: где он начался в потоке сэмплов и сдвинулась
@@ -149,6 +182,7 @@ private:
 
   void work();
   void feed(const BlockHeader &header);
+  void forwardCalibration(const BlockHeader &header, bool gap);
 
   // Поля стоят в порядке, который не оставляет дыр выравнивания; кто их
   // пишет — в комментарии у каждого.
@@ -160,8 +194,15 @@ private:
   // Рабочий поток пишет, главный читает.
   concurrency::SpscRing<HookOnset, 1024> onsets_;
 
+  // Рабочий поток пишет, главный читает. Сэмплы куска лежат в очереди
+  // сэмплов раньше его заголовка.
+  concurrency::SpscRing<CalibrationChunk, 1024> calibrationChunks_;
+
   // Звуковой поток пишет, рабочий читает.
   std::unique_ptr<concurrency::SpscRing<float, (1U << 18)>> samples_;
+
+  // Рабочий поток пишет, главный читает.
+  std::unique_ptr<concurrency::SpscRing<float, (1U << 18)>> calibrationSamples_;
 
   // Звуковой поток пишет, читают все.
   std::atomic<double> sampleRate_{0.0};
@@ -203,8 +244,14 @@ private:
   // Только звуковой поток: блок, переведённый в float перед отправкой.
   std::array<float, kMaxBlock> scratch_{};
 
-  // Только рабочий поток.
+  // Только рабочий поток: идёт ли поток сэмплов детектору и поток кусков
+  // калибровки, пропадали ли куски калибровки.
   bool streaming_ = false;
+  bool calibrationStreaming_ = false;
+  bool calibrationLost_ = false;
+
+  // Главный поток пишет, звуковой читает.
+  std::atomic<bool> calibrating_{false};
 
   bool registered_ = false;
   std::atomic<bool> stop_{false};

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numbers>
 
 namespace training::onset {
 namespace {
@@ -16,9 +15,6 @@ constexpr double kBackNewestMs = 5.0;
 /// Окно энергии, мс: тоже не короче периода самой низкой ноты, чтобы звон
 /// струны давал в окне почти одну и ту же энергию.
 constexpr double kEnergyMs = 20.0;
-
-/// За сколько миллисекунд огибающая спадает в e раз, когда звук стихает.
-constexpr double kReleaseMs = 10.0;
 
 double samplesOf(double milliseconds, double sampleRate) {
   return milliseconds * sampleRate / 1000.0;
@@ -44,7 +40,7 @@ double crossing(std::uint64_t index, double level, double previous, double envel
 } // namespace
 
 Detector::Detector(const Settings &settings)
-    : release_(std::exp(-1.0 / samplesOf(kReleaseMs, settings.sampleRate))),
+    : highPass_(settings.highPassHz, settings.sampleRate), envelope_(settings.sampleRate),
       threshold_(std::pow(10.0, settings.silenceDb / 20.0)), ratio_(settings.ratio),
       energyRatio_(settings.energyRatio),
       deadTime_(static_cast<std::uint64_t>(
@@ -59,24 +55,12 @@ Detector::Detector(const Settings &settings)
       recentEnergy_(static_cast<std::size_t>(energyLength_), 0.0),
       energyMax_(static_cast<std::size_t>(energyLength_ + 1)),
       rises_(static_cast<std::size_t>(2 * energyLength_)),
-      energyArmedFrom_(3 * energyLength_) {
-  // ВЧ-фильтр второго порядка по Баттерворту, формулы RBJ: alpha = sin(w0) / 2Q,
-  // а при Q = 1/√2 знаменатель 2Q равен √2.
-  const double w0 = 2.0 * std::numbers::pi * settings.highPassHz / settings.sampleRate;
-  const double cosW0 = std::cos(w0);
-  const double alpha = std::sin(w0) / std::numbers::sqrt2;
-  const double a0 = 1.0 + alpha;
-
-  b0_ = (1.0 + cosW0) / 2.0 / a0;
-  b1_ = -(1.0 + cosW0) / a0;
-  b2_ = b0_;
-  a1_ = -2.0 * cosW0 / a0;
-  a2_ = (1.0 - alpha) / a0;
-}
+      energyArmedFrom_(3 * energyLength_) {}
 
 void Detector::reset() {
-  x1_ = x2_ = y1_ = y2_ = 0.0;
-  envelope_ = 0.0;
+  highPass_.reset();
+  envelope_.reset();
+  lastFiltered_ = 0.0;
   position_ = 0;
   armedFrom_ = 0;
   energyArmedFrom_ = 3 * energyLength_;
@@ -103,16 +87,12 @@ void Detector::process(std::span<const float> samples, std::vector<Onset> &onset
 }
 
 void Detector::processSample(double sample, std::vector<Onset> &onsets) {
-  const double filtered = b0_ * sample + b1_ * x1_ + b2_ * x2_ - a1_ * y1_ - a2_ * y2_;
-  const double slope = filtered - y1_;
-  x2_ = x1_;
-  x1_ = sample;
-  y2_ = y1_;
-  y1_ = filtered;
+  const double filtered = highPass_.process(sample);
+  const double slope = filtered - lastFiltered_;
+  lastFiltered_ = filtered;
 
-  // Огибающая поднимается сразу, спадает плавно.
-  const double previous = envelope_;
-  envelope_ = std::max(std::abs(filtered), envelope_ * release_);
+  const double previous = envelope_.value();
+  const double envelope = envelope_.process(filtered);
 
   const std::uint64_t index = position_++;
 
@@ -141,7 +121,7 @@ void Detector::processSample(double sample, std::vector<Onset> &onsets) {
   // огибающую последних 5 мс.
   const auto backSlot = static_cast<std::size_t>(index % backNewest_);
   const double agedEnvelope = recentEnvelope_[backSlot];
-  recentEnvelope_[backSlot] = envelope_;
+  recentEnvelope_[backSlot] = envelope;
 
   // Пока окну нечего сравнивать, в кольце лежат не сэмплы потока, а нули.
   if (index < backNewest_)
@@ -157,19 +137,19 @@ void Detector::processSample(double sample, std::vector<Onset> &onsets) {
   // счёт.
   const double riseLevel = std::max(threshold_, reference);
   rises_.dropBefore(before(index + 1, 2 * energyLength_));
-  if (envelope_ < riseLevel) {
+  if (envelope < riseLevel) {
     rising_ = false;
   } else if (!rising_ && previous < riseLevel) {
     rising_ = true;
     rise_ = {.index = index,
-             .value = envelope_ / riseLevel,
-             .position = crossing(index, riseLevel, previous, envelope_),
-             .envelope = envelope_};
+             .value = envelope / riseLevel,
+             .position = crossing(index, riseLevel, previous, envelope),
+             .envelope = envelope};
     if (rise_.index >= armedFrom_)
       rises_.push(rise_);
-  } else if (rising_ && envelope_ / riseLevel > rise_.value) {
-    rise_.value = envelope_ / riseLevel;
-    rise_.envelope = envelope_;
+  } else if (rising_ && envelope / riseLevel > rise_.value) {
+    rise_.value = envelope / riseLevel;
+    rise_.envelope = envelope;
     if (rise_.index >= armedFrom_ && rise_.index + 2 * energyLength_ > index)
       rises_.push(rise_);
   }
@@ -182,11 +162,11 @@ void Detector::processSample(double sample, std::vector<Onset> &onsets) {
   // приходит позже начала. Рост сравнивается за последние 5 мс, и подъём,
   // начавшийся раньше, — медленное разгорание, а не начало этой атаки.
   const double level = std::max(threshold_, ratio_ * reference);
-  if (envelope_ >= level && previous < level) {
+  if (envelope >= level && previous < level) {
     if (rising_ && rise_.index >= armedFrom_ && rise_.index + backNewest_ >= index)
-      report(rise_.index, rise_.position, envelope_, onsets);
+      report(rise_.index, rise_.position, envelope, onsets);
     else
-      report(index, crossing(index, level, previous, envelope_), envelope_, onsets);
+      report(index, crossing(index, level, previous, envelope), envelope, onsets);
     return;
   }
 

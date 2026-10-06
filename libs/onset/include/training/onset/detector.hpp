@@ -1,5 +1,6 @@
 #pragma once
 
+#include "training/onset/high_band.hpp"
 #include "training/onset/sliding_max.hpp"
 
 #include <cstdint>
@@ -147,14 +148,9 @@ private:
   void report(std::uint64_t index, double position, double envelope,
               std::vector<Onset> &onsets);
 
-  // Коэффициенты ВЧ-фильтра второго порядка, нормированные на a0.
-  double b0_ = 0.0;
-  double b1_ = 0.0;
-  double b2_ = 0.0;
-  double a1_ = 0.0;
-  double a2_ = 0.0;
+  HighPass highPass_;
+  Envelope envelope_;
 
-  double release_ = 0.0;
   double threshold_ = 0.0;
   double ratio_ = 0.0;
   double energyRatio_ = 0.0;
@@ -194,13 +190,9 @@ private:
   bool energyPending_ = false;
   std::uint64_t energyDecision_ = 0;
 
-  // Состояние фильтра: прошлые два входа и выхода.
-  double x1_ = 0.0;
-  double x2_ = 0.0;
-  double y1_ = 0.0;
-  double y2_ = 0.0;
+  // Прошлый сэмпл после фильтра: разность с ним даёт энергию верха спектра.
+  double lastFiltered_ = 0.0;
 
-  double envelope_ = 0.0;
   std::uint64_t position_ = 0;
 
   // Первый сэмпл, с которого возможна следующая атака, и первый, с которого
