@@ -26,6 +26,7 @@
 
 #include "journal.hpp"
 #include "project_timeline.hpp"
+#include "settings.hpp"
 #include "trainer.hpp"
 #include "window.hpp"
 
@@ -41,7 +42,9 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace training::reaper {
@@ -52,10 +55,12 @@ namespace {
 
 int (*hostRegister)(const char *name, void *infostruct) = nullptr;
 
-/// Пишет строку в консоль REAPER и в журнал.
+/// Пишет строку в журнал, а со скрытой настройкой `console_log` — ещё и в
+/// консоль REAPER.
 void say(const std::string &line) {
   journal("console: {}", line);
-  ShowConsoleMsg((line + "\n").c_str());
+  if (consoleLogEnabled())
+    ShowConsoleMsg((line + "\n").c_str());
 }
 
 /// Адрес и размер переменной настроек REAPER по имени: сначала среди настроек
@@ -288,17 +293,32 @@ double nearest(const std::vector<double> &sorted, double value) {
   return value - before <= *above - value ? before : *above;
 }
 
-/// Начала нот в выделенном айтеме на шкале проекта: тот же детектор, что на
-/// лету, по первому каналу активного тейка. Время чтения тейка считается от
-/// начала айтема и уже пересчитано к скорости тейка (findings.md, R2), поэтому
-/// на время чтения скорость тейка ставится 1 и потом возвращается: так
-/// сэмплы идут как в файле. Пусто — айтем не выделен или нот нет.
-std::vector<double> itemOnsets(double sampleRate) {
+/// Звук выделенного айтема.
+struct ItemSound {
+  /// Первый канал активного тейка, как в файле, без скорости тейка.
+  std::vector<float> samples;
+
+  /// Место первого сэмпла на шкале проекта, с.
+  double position = 0.0;
+
+  /// Скорость тейка: сэмпл n лежит на шкале в `position + n / частота /
+  /// takeRate`.
+  double takeRate = 1.0;
+};
+
+/// Читает первый канал активного тейка выделенного айтема с частотой
+/// `sampleRate`, Гц. Время чтения тейка считается от начала айтема и уже
+/// пересчитано к скорости тейка (findings.md, R2), поэтому на время чтения
+/// скорость тейка ставится 1 и потом возвращается: так сэмплы идут как в
+/// файле. Хвост последнего куска чтения дополнен нулями.
+///
+/// @return звук; пусто — айтем не выделен, в консоль сказано, что выделить.
+std::optional<ItemSound> itemSound(double sampleRate) {
   MediaItem *item = GetSelectedMediaItem(nullptr, 0);
   MediaItem_Take *take = item ? GetActiveTake(item) : nullptr;
   if (!take) {
-    say("сверка: выделите айтем со звуком");
-    return {};
+    say("выделите айтем со звуком");
+    return std::nullopt;
   }
 
   const double itemPosition = GetMediaItemInfo_Value(item, "D_POSITION");
@@ -314,11 +334,7 @@ std::vector<double> itemOnsets(double sampleRate) {
   constexpr int kChunk = 4096;
   const auto rate = static_cast<int>(std::lround(sampleRate));
   std::vector<double> interleaved(static_cast<std::size_t>(kChunk * channels));
-  std::vector<float> mono(kChunk);
-  std::vector<onset::Onset> found;
-  onset::Detector detector(onset::Settings{.sampleRate = sampleRate,
-                                           .silenceDb = trainer().input().silenceDb(),
-                                           .energyRatio = trainer().input().energyRatio()});
+  ItemSound sound{.samples = {}, .position = itemPosition + start, .takeRate = takeRate};
 
   for (std::int64_t chunk = 0;; ++chunk) {
     const double from = start + static_cast<double>(chunk * kChunk) / sampleRate;
@@ -327,25 +343,88 @@ std::vector<double> itemOnsets(double sampleRate) {
 
     std::ranges::fill(interleaved, 0.0);
     (void)GetAudioAccessorSamples(accessor, rate, channels, from, kChunk, interleaved.data());
-    for (std::size_t i = 0; i < mono.size(); ++i)
-      mono[i] = static_cast<float>(interleaved[i * static_cast<std::size_t>(channels)]);
-
-    detector.process(mono, found);
+    for (std::size_t i = 0; i < static_cast<std::size_t>(kChunk); ++i)
+      sound.samples.push_back(
+          static_cast<float>(interleaved[i * static_cast<std::size_t>(channels)]));
   }
 
   DestroyAudioAccessor(accessor);
   if (takeRate != 1.0)
     SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", takeRate);
+  return sound;
+}
 
-  // Сэмпл n файла лежит на шкале в начале айтема плюс n / частота / скорость
-  // тейка.
+/// Начала нот в выделенном айтеме на шкале проекта: тот же детектор, что на
+/// лету, по первому каналу активного тейка. Пусто — айтем не выделен или нот
+/// нет.
+std::vector<double> itemOnsets(double sampleRate) {
+  const std::optional<ItemSound> sound = itemSound(sampleRate);
+  if (!sound)
+    return {};
+
+  std::vector<onset::Onset> found;
+  onset::Detector detector(onset::Settings{.sampleRate = sampleRate,
+                                           .silenceDb = trainer().input().silenceDb(),
+                                           .energyRatio = trainer().input().energyRatio()});
+  detector.process(sound->samples, found);
+
   std::vector<double> times;
   times.reserve(found.size());
   for (const onset::Onset &hit : found)
-    times.push_back(itemPosition + start + hit.position / sampleRate / takeRate);
-
+    times.push_back(sound->position + hit.position / sampleRate / sound->takeRate);
   return times;
 }
+
+/// Начинает калибровку входа со звуком выделенного айтема вместо входа, в
+/// темпе реального времени (`Trainer::startCalibration`): так ход калибровки
+/// проверяется без гитары. Частота — звуковой карты, а пока блоков не было —
+/// 48 кГц.
+///
+/// @return 1 — калибровка начата; 0 — айтем не выделен, транспорт идёт или
+///   выбранного канала нет.
+int calibrateFromItem() {
+  const double rate =
+      trainer().input().sampleRate() > 0.0 ? trainer().input().sampleRate() : 48000.0;
+  std::optional<ItemSound> sound = itemSound(rate);
+  if (!sound)
+    return 0;
+
+  const bool started = trainer().startCalibration(std::move(sound->samples), rate);
+  journal("script calibrate from item: {}", started);
+  refreshWindow();
+  return started ? 1 : 0;
+}
+
+void *calibrateFromItemVararg(void ** /*args*/, int /*count*/) {
+  return reinterpret_cast<void *>(static_cast<std::intptr_t>(calibrateFromItem()));
+}
+
+const char *const kCalibrateFromItemDef =
+    "int\0\0\0"
+    "reaper-training (debug): start the input calibration with the sound of the selected "
+    "item instead of the input, in real time; returns 1 when started";
+
+/// Нажимает кнопку окна по номеру контрола, как `clickButton`.
+///
+/// @return 1 — нажата; 0 — окно закрыто, кнопки нет, она скрыта или
+///   недоступна.
+int clickButtonFromScript(int control) {
+  const bool clicked = clickButton(control);
+  journal("script button {}: {}", control, clicked);
+  return clicked ? 1 : 0;
+}
+
+void *clickButtonVararg(void **args, int count) {
+  if (count < 1)
+    return nullptr;
+  return reinterpret_cast<void *>(static_cast<std::intptr_t>(
+      clickButtonFromScript(static_cast<int>(reinterpret_cast<std::intptr_t>(args[0])))));
+}
+
+const char *const kClickButtonDef =
+    "int\0int\0control\0"
+    "reaper-training (debug): click a visible enabled button of the trainer window by control "
+    "id; returns 1 when clicked";
 
 /// Сверка с айтемом (design.md D10): ноты последнего запуска, найденные на
 /// лету, против тех же нот в записанном айтеме. Печатает сдвиг «на лету −
@@ -533,6 +612,19 @@ void registerDebugActions(reaper_plugin_info_t *rec) {
                reinterpret_cast<void *>(clickCheckboxVararg));
   hostRegister("APIdef_TrainingDebug_ClickCheckbox", const_cast<char *>(kClickCheckboxDef));
 
+  hostRegister("API_TrainingDebug_CalibrateFromItem",
+               reinterpret_cast<void *>(calibrateFromItem));
+  hostRegister("APIvararg_TrainingDebug_CalibrateFromItem",
+               reinterpret_cast<void *>(calibrateFromItemVararg));
+  hostRegister("APIdef_TrainingDebug_CalibrateFromItem",
+               const_cast<char *>(kCalibrateFromItemDef));
+
+  hostRegister("API_TrainingDebug_ClickButton",
+               reinterpret_cast<void *>(clickButtonFromScript));
+  hostRegister("APIvararg_TrainingDebug_ClickButton",
+               reinterpret_cast<void *>(clickButtonVararg));
+  hostRegister("APIdef_TrainingDebug_ClickButton", const_cast<char *>(kClickButtonDef));
+
 #ifndef _WIN32
   hostRegister("API_TrainingDebug_SnapshotRows", reinterpret_cast<void *>(snapshot));
   hostRegister("APIvararg_TrainingDebug_SnapshotRows",
@@ -552,6 +644,10 @@ void unregisterDebugActions() {
   hostRegister("-API_TrainingDebug_AddNote", reinterpret_cast<void *>(addNote));
   hostRegister("-API_TrainingDebug_ClickCheckbox",
                reinterpret_cast<void *>(clickCheckboxFromScript));
+  hostRegister("-API_TrainingDebug_CalibrateFromItem",
+               reinterpret_cast<void *>(calibrateFromItem));
+  hostRegister("-API_TrainingDebug_ClickButton",
+               reinterpret_cast<void *>(clickButtonFromScript));
 #ifndef _WIN32
   hostRegister("-API_TrainingDebug_SnapshotRows", reinterpret_cast<void *>(snapshot));
 #endif

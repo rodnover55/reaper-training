@@ -65,6 +65,11 @@ Settings clamped(Settings settings) {
   return settings;
 }
 
+bool consoleLogEnabled() {
+  const auto value = numberOf("console_log");
+  return value && *value != 0;
+}
+
 Settings loadSettings() {
   Settings settings;
   if (const auto mode = numberOf("mode"))

@@ -10,6 +10,8 @@
 
 // Окно тренажёра встаёт в док REAPER, поэтому это дочерняя форма без рамки.
 // Сверху — настройки и строка состояния, ниже окно рисует строки тактов само.
+// Кнопки IDC_CAL_* — кнопки панели калибровки: место и видимость им задаёт
+// окно, они стоят поверх области строк, пока идёт калибровка.
 IDD_TRAINER DIALOG DISCARDABLE 0, 0, 444, 200
 STYLE DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
 BEGIN
@@ -23,5 +25,10 @@ BEGIN
     CHECKBOX        "Mean/spread", IDC_SHOW_STATS, 384, 3, 58, 10, BS_AUTOCHECKBOX | WS_TABSTOP
     LTEXT           "Silence, dBFS:", IDC_SILENCE_LABEL, 4, 20, 52, 10
     EDITTEXT        IDC_SILENCE, 58, 18, 24, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "", IDC_STATUS, 90, 20, 226, 10
+    PUSHBUTTON      "Calibrate...", IDC_CALIBRATE, 88, 18, 50, 12, WS_TABSTOP
+    LTEXT           "", IDC_STATUS, 144, 20, 296, 10
+    PUSHBUTTON      "Cancel", IDC_CAL_CANCEL, 0, 0, 40, 14, WS_TABSTOP
+    PUSHBUTTON      "Apply anyway", IDC_CAL_APPLY, 0, 0, 80, 14, WS_TABSTOP
+    PUSHBUTTON      "Calibrate again", IDC_CAL_AGAIN, 0, 0, 64, 14, WS_TABSTOP
+    PUSHBUTTON      "Close", IDC_CAL_CLOSE, 0, 0, 40, 14, WS_TABSTOP
 END

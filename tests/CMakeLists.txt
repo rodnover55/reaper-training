@@ -5,6 +5,7 @@ add_executable(training_tests
   main.cpp
   concurrency_spsc_ring_test.cpp
   onset_sliding_max_test.cpp
+  onset_calibration_test.cpp
   onset_detector_test.cpp
   synth.cpp
   synth_test.cpp
@@ -15,7 +16,11 @@ add_executable(training_tests
   grid_bars_test.cpp
   grid_nodes_test.cpp
   grid_note_time_test.cpp
-  grid_timeline_test.cpp)
+  grid_timeline_test.cpp
+  journal_test.cpp
+  # Журнал расширения от REAPER не зависит, и его замена файла проверяется
+  # здесь же.
+  ${CMAKE_SOURCE_DIR}/src/journal.cpp)
 
 target_link_libraries(training_tests PRIVATE
   doctest::doctest
@@ -24,7 +29,7 @@ target_link_libraries(training_tests PRIVATE
   training_onset
   training_grid)
 
-target_include_directories(training_tests PRIVATE .)
+target_include_directories(training_tests PRIVATE . ${CMAKE_SOURCE_DIR}/src)
 
 # Записи для регрессии читаются прямо из исходников: копировать их в каталог
 # сборки незачем.

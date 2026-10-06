@@ -45,6 +45,8 @@
 #define REAPERAPI_WANT_GetCursorPosition
 #define REAPERAPI_WANT_SetExtState
 #define REAPERAPI_WANT_GetExtState
+#define REAPERAPI_WANT_Audio_IsRunning
+#define REAPERAPI_WANT_Audio_Init
 
 // SWELL объявляет max и min макросами, и они ломают стандартную библиотеку.
 #define WDL_NO_DEFINE_MINMAX
@@ -56,6 +58,7 @@
 #include "build_stamp.hpp"
 #include "debug_actions.hpp"
 #include "journal.hpp"
+#include "settings.hpp"
 #include "trainer.hpp"
 #include "window.hpp"
 
@@ -117,25 +120,26 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE instance, reaper_plugin_info_t 
   loadedProcess = getpid();
 #endif
 
-#ifdef TRAINING_DEBUG_BUILD
   // Журнал лежит в каталоге ресурсов: у каждого экземпляра REAPER он свой.
   training::reaper::openJournal(std::string(GetResourcePath()) + "/reaper-training.log");
   training::reaper::journal("load (версия {}, сборка {})", training::reaper::kVersion,
                             training::reaper::kBuildStamp);
-#endif
 
   training::reaper::setResourceModule(instance);
   training::reaper::initTrainer(rec);
   training::reaper::registerActions(rec);
   training::reaper::registerDebugActions(rec);
 
-  // Версия и время сборки — чтобы по консоли было видно, тот ли модуль
-  // загружен: забытый `cmake --install` выглядит как «ничего не изменилось».
-  const std::string hello =
-      fmt::format("reaper-training {} loaded (сборка {})\n", training::reaper::kVersion,
-                  training::reaper::kBuildStamp);
-
-  ShowConsoleMsg(hello.c_str());
+  // Версия и время сборки — чтобы было видно, тот ли модуль загружен:
+  // забытый `cmake --install` выглядит как «ничего не изменилось». В журнале
+  // они есть всегда, в консоли — только по скрытой настройке: обычному
+  // пользователю окно консоли ни к чему (`platform-support`).
+  if (training::reaper::consoleLogEnabled()) {
+    const std::string hello =
+        fmt::format("reaper-training {} loaded (сборка {})\n", training::reaper::kVersion,
+                    training::reaper::kBuildStamp);
+    ShowConsoleMsg(hello.c_str());
+  }
 
   return 1;
 }

@@ -324,6 +324,6 @@ if reaper_running; then
   say "REAPER запущен: перезапустите его, чтобы загрузилось расширение." \
     "REAPER is running: restart it to load the extension."
 else
-  say "Запустите REAPER: в консоли REAPER появится строка «reaper-training … loaded»." \
-    "Start REAPER: its console shows the line \"reaper-training ... loaded\"."
+  say "Запустите REAPER: в списке действий (Actions → Show action list) появится действие «reaper-training: Show/hide timing trainer»." \
+    "Start REAPER: the action list (Actions → Show action list) has the action \"reaper-training: Show/hide timing trainer\"."
 fi

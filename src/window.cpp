@@ -72,10 +72,52 @@ std::optional<int> editValue(HWND dialog, int control) {
   return intOf(text.data());
 }
 
+/// Что показывает панель калибровки.
+enum class Panel {
+  /// Шаг тишины, в том числе до первого звука.
+  Silence,
+  /// Шаг нот.
+  Notes,
+  /// Звук от звуковой карты не приходит.
+  NoSound,
+  /// Итог калибровки.
+  Result,
+};
+
+Panel panelOf(const CalibrationSession &session) {
+  if (session.noSound)
+    return Panel::NoSound;
+  if (!session.calibration)
+    return Panel::Silence;
+
+  switch (session.calibration->step()) {
+  case onset::CalibrationStep::Silence:
+    break;
+  case onset::CalibrationStep::Notes:
+    return Panel::Notes;
+  case onset::CalibrationStep::Done:
+    return Panel::Result;
+  }
+  return Panel::Silence;
+}
+
 std::string statusText() {
   const Trainer &trainerRef = trainer();
   const Status &status = trainerRef.status();
   const Settings &settings = trainerRef.settings();
+
+  if (const auto &session = trainerRef.calibration()) {
+    switch (panelOf(*session)) {
+    case Panel::Silence:
+      return fmt::format("Calibrating {}: step 1 of 2 — silence", session->channelName);
+    case Panel::Notes:
+      return fmt::format("Calibrating {}: step 2 of 2 — notes", session->channelName);
+    case Panel::NoSound:
+    case Panel::Result:
+      break;
+    }
+    return "Calibration finished";
+  }
 
   std::string text =
       fmt::format("{}, tolerance {} ms, latency {:.1f} ms",
@@ -95,7 +137,23 @@ std::string statusText() {
     text += " — selected input is not available";
     break;
   }
+  if (status.calibrationCancelled)
+    text += " · calibration cancelled: playback started";
   return text;
+}
+
+/// Строка состояния, которая сейчас в окне.
+std::string shownStatus;
+
+/// Пишет строку состояния в окно `dialog`, а когда она меняется, — в журнал:
+/// по журналу проверки видят её без снимка экрана.
+void showStatus(HWND dialog) {
+  const std::string text = statusText();
+  if (text != shownStatus) {
+    journal("window status: {}", text);
+    shownStatus = text;
+  }
+  SetDlgItemText(dialog, IDC_STATUS, text.c_str());
 }
 
 void fillControls(HWND dialog) {
@@ -125,12 +183,43 @@ void fillControls(HWND dialog) {
                      static_cast<WPARAM>(settings.channel < channels ? settings.channel : -1),
                      0);
 
-  SetDlgItemText(dialog, IDC_STATUS, statusText().c_str());
+  showStatus(dialog);
   showingSettings = false;
+}
+
+/// Делает то, что велит кнопка калибровки `control`.
+///
+/// @return ложь, если `control` — не кнопка калибровки.
+bool onCalibrationButton(int control) {
+  switch (control) {
+  case IDC_CALIBRATE:
+    // На итоге кнопка называется Finish и закрывает панель.
+    if (trainer().calibrationFinished())
+      trainer().endCalibration();
+    else
+      trainer().startCalibration();
+    break;
+  case IDC_CAL_AGAIN:
+    trainer().startCalibration();
+    break;
+  case IDC_CAL_CANCEL:
+  case IDC_CAL_CLOSE:
+    trainer().endCalibration();
+    break;
+  case IDC_CAL_APPLY:
+    trainer().applyCalibration();
+    break;
+  default:
+    return false;
+  }
+  refreshWindow();
+  return true;
 }
 
 void onCommand(HWND dialog, int control, int notification) {
   if (showingSettings)
+    return;
+  if (notification == BN_CLICKED && onCalibrationButton(control))
     return;
 
   Settings settings = trainer().settings();
@@ -237,7 +326,7 @@ void drawCentered(HDC context, const std::string &text, int color, double x, dou
            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
 }
 
-/// Жирные шрифты Arial одного рисования по кеглю: создаются при первом
+/// Шрифты Arial одного рисования по кеглю и жирности: создаются при первом
 /// выборе, удаляются вместе с объектом, прежний шрифт контекста
 /// возвращается.
 class Fonts {
@@ -252,22 +341,23 @@ public:
   ~Fonts() {
     if (previous_)
       SelectObject(context_, previous_);
-    for (const auto &[height, font] : fonts_)
-      DeleteObject(font);
+    for (const Made &made : fonts_)
+      DeleteObject(made.font);
   }
 
   /// Выбирает в контекст шрифт кегля `size`, пикселей, — высоты цифр, как
-  /// `font-size` макета.
-  void use(double size) {
+  /// `font-size` макета; жирный, если `bold`.
+  void use(double size, bool bold = true) {
     // Высота ячейки шрифта больше высоты знаков: у Arial — примерно в 1.15 раза.
     const int height = pixel(size * 1.15);
     HFONT font = nullptr;
-    for (const auto &[known, made] : fonts_)
-      if (known == height)
-        font = made;
+    for (const Made &made : fonts_)
+      if (made.height == height && made.bold == bold)
+        font = made.font;
     if (!font) {
-      font = CreateFont(height, 0, 0, 0, FW_BOLD, 0, 0, 0, 0, 0, 0, 0, 0, "Arial");
-      fonts_.emplace_back(height, font);
+      font = CreateFont(height, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, 0, 0, 0, 0, 0, 0, 0, 0,
+                        "Arial");
+      fonts_.push_back({.height = height, .bold = bold, .font = font});
     }
     HGDIOBJ previous = SelectObject(context_, font);
     if (!previous_)
@@ -275,9 +365,15 @@ public:
   }
 
 private:
+  struct Made {
+    int height = 0;
+    bool bold = true;
+    HFONT font = nullptr;
+  };
+
   HDC context_;
   HGDIOBJ previous_ = nullptr;
-  std::vector<std::pair<int, HFONT>> fonts_;
+  std::vector<Made> fonts_;
 };
 
 /// Раскладка области строк по горизонтали и общие кегли (design.md D8).
@@ -394,9 +490,516 @@ void paintRow(HDC context, Fonts &fonts, const Layout &layout, const grid::BarVi
   }
 }
 
-/// Рисует строки тактов в области `area` контекста (design.md D8). Размеры —
-/// доли высоты строки, так что окно одинаково на любом мониторе.
+/// Цвета панели калибровки, которых нет у строк (design D7, mockup.html).
+constexpr int kGood = RGB(90, 210, 90);
+constexpr int kBad = RGB(235, 80, 70);
+constexpr int kDim = RGB(125, 125, 125);
+constexpr int kText = RGB(221, 221, 221);
+constexpr int kBright = RGB(255, 255, 255);
+constexpr int kSlotBorder = RGB(60, 110, 60);
+constexpr int kTrack = RGB(40, 40, 40);
+constexpr int kNoise = RGB(62, 62, 62);
+constexpr int kNoiseStripe = RGB(100, 100, 100);
+constexpr int kLive = RGB(115, 115, 115);
+constexpr int kBand = RGB(45, 95, 45);
+
+/// Кнопки панели калибровки, пикселей.
+constexpr int kButtonHeight = 24;
+constexpr int kButtonGap = 8;
+
+/// Знак минуса — тот же, что у отклонений.
+constexpr std::string_view kMinus = "−";
+
+/// Уровень в dBFS для панели: `decimals` знаков после запятой, минус — тот
+/// же, что у отклонений; «−0» не бывает.
+std::string dbText(double value, int decimals = 0) {
+  std::string text = fmt::format("{:.{}f}", std::abs(value), decimals);
+  const bool zero = std::ranges::all_of(text, [](char c) { return c == '0' || c == '.'; });
+  if (value < 0.0 && !zero)
+    text.insert(0, kMinus);
+  return text;
+}
+
+/// Ширина строки шрифтом, выбранным в контекст, пикселей.
+double textWidth(HDC context, const std::string &text) {
+  RECT box{.left = 0, .top = 0, .right = 0, .bottom = 0};
+  DrawText(context, text.c_str(), -1, &box, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_CALCRECT);
+  return static_cast<double>(box.right - box.left);
+}
+
+/// Пишет строку, левый верхний угол — (`x`, `y`).
+void drawLeft(HDC context, const std::string &text, int color, double x, double y) {
+  RECT box{.left = pixel(x), .top = pixel(y), .right = pixel(x) + 1, .bottom = pixel(y) + 1};
+  SetTextColor(context, color);
+  DrawText(context, text.c_str(), -1, &box, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOCLIP);
+}
+
+/// Пишет текст шрифтом, выбранным в контекст, с переносом по пробелам в
+/// полосе от `left` до `right`, верх — `top`, шаг строк — `lineHeight`.
+/// Слово шире полосы стоит в строке одно и вылезает за её край.
+///
+/// @return низ написанного текста.
+double drawWrapped(HDC context, const std::string &text, int color, double left, double top,
+                   double right, double lineHeight) {
+  // Переносит сам: DT_WORDBREAK в SWELL на Linux строку не переносит.
+  double y = top;
+  std::string line;
+  std::size_t from = 0;
+  while (from <= text.size()) {
+    const std::size_t space = std::min(text.find(' ', from), text.size());
+    const std::string word = text.substr(from, space - from);
+    std::string longer = line;
+    if (!longer.empty())
+      longer += ' ';
+    longer += word;
+    if (!line.empty() && textWidth(context, longer) > right - left) {
+      drawLeft(context, line, color, left, y);
+      y += lineHeight;
+      line = word;
+    } else {
+      line = longer;
+    }
+    from = space + 1;
+  }
+  if (!line.empty()) {
+    drawLeft(context, line, color, left, y);
+    y += lineHeight;
+  }
+  return y;
+}
+
+/// Рамка толщиной в пиксель.
+void drawFrame(HDC context, double left, double top, double right, double bottom, int color) {
+  fillBox(context, left, top, right, top + 1.0, color);
+  fillBox(context, left, bottom - 1.0, right, bottom, color);
+  fillBox(context, left, top, left + 1.0, bottom, color);
+  fillBox(context, right - 1.0, top, right, bottom, color);
+}
+
+/// Что отмечено на шкале уровней; пустое не рисуется. Уровни — dBFS.
+struct ScaleMarks {
+  std::optional<double> level = std::nullopt;
+  std::optional<double> noise = std::nullopt;
+  std::vector<double> attacks = {};
+  std::optional<double> peak = std::nullopt;
+  std::optional<double> oldThreshold = std::nullopt;
+  std::optional<double> newThreshold = std::nullopt;
+};
+
+/// Рисует шкалу уровней −100…0 dBFS в полосе от `left` до `right`, от `top`
+/// высотой `height`: дорожку с текущим уровнем, шумом, атаками, полосой атак,
+/// пиком и порогами, подписи отметок и деления.
+void paintScale(HDC context, Fonts &fonts, double left, double right, double top,
+                double height, const ScaleMarks &marks) {
+  const auto x = [&](double db) {
+    return left + (std::clamp(db, -100.0, 0.0) + 100.0) / 100.0 * (right - left);
+  };
+  const double trackTop = top + height * 0.42;
+  const double trackBottom = top + height * 0.60;
+  const double tickTop = top + height * 0.34;
+  const double tickBottom = top + height * 0.68;
+
+  fillBox(context, left, trackTop, right, trackBottom, kTrack);
+  if (marks.noise) {
+    const double edge = x(*marks.noise + 3.0);
+    fillBox(context, left, trackTop, edge, trackBottom, kNoise);
+    // Штриховка: полоска в 2 пикселя через каждые 6.
+    for (int stripe = 0; left + 6.0 * stripe + 5.0 < edge; ++stripe)
+      fillBox(context, left + 6.0 * stripe + 3.0, trackTop, left + 6.0 * stripe + 5.0,
+              trackBottom, kNoiseStripe);
+  }
+  if (marks.level)
+    fillBox(context, left, trackTop + 2.0, x(*marks.level), trackBottom - 2.0, kLive);
+  if (!marks.attacks.empty() && marks.peak) {
+    const auto [softest, loudest] = std::ranges::minmax(marks.attacks);
+    fillBox(context, x(softest), trackTop, x(loudest), trackBottom, kBand);
+  }
+  drawFrame(context, left, trackTop, right, trackBottom, kLine);
+
+  for (const double attack : marks.attacks)
+    fillBox(context, x(attack) - 1.0, tickTop, x(attack) + 1.0, tickBottom, kGood);
+
+  const double labelSize = std::max(kMinFont, height * 0.15);
+  fonts.use(labelSize, false);
+  // Подпись по центру `at`, не вылезая за края шкалы.
+  const auto label = [&](const std::string &text, int color, double at, double y) {
+    const double width = textWidth(context, text);
+    drawLeft(context, text, color, std::clamp(at - width / 2.0, left, right - width), y);
+  };
+  const double above = top;
+  const double below = tickBottom + 2.0;
+
+  if (marks.oldThreshold) {
+    const double at = x(*marks.oldThreshold);
+    // Пунктир: штрих в 4 пикселя через каждые 8.
+    const double from = tickTop - height * 0.04;
+    const double to = tickBottom + height * 0.04;
+    for (int dash = 0; from + 8.0 * dash < to; ++dash)
+      fillBox(context, at - 1.0, from + 8.0 * dash, at + 1.0,
+              std::min(from + 8.0 * dash + 4.0, to), kDim);
+    label(fmt::format("{} {}", marks.newThreshold ? "was" : "Silence",
+                      dbText(*marks.oldThreshold)),
+          kDim, at, above);
+  }
+  if (marks.newThreshold) {
+    const double at = x(*marks.newThreshold);
+    fillBox(context, at - 1.0, tickTop - height * 0.04, at + 1.0, tickBottom + height * 0.04,
+            kCurrentBeat);
+    label(fmt::format("Silence {}", dbText(*marks.newThreshold)), kCurrentBeat, at, above);
+  }
+  if (marks.noise)
+    label(fmt::format("noise {}", dbText(*marks.noise)), kNeutral,
+          (left + x(*marks.noise)) / 2.0, below);
+  if (!marks.attacks.empty() && marks.peak) {
+    const auto [softest, loudest] = std::ranges::minmax(marks.attacks);
+    label(fmt::format("pick {}…{}", dbText(softest), dbText(loudest)), kGood,
+          (x(softest) + x(loudest)) / 2.0, below);
+  }
+  if (marks.peak) {
+    fillBox(context, x(*marks.peak) - 1.0, tickTop, x(*marks.peak) + 1.0, tickBottom, kBright);
+    label(fmt::format("peak {}", dbText(*marks.peak, 1)), kBright, x(*marks.peak), below);
+  }
+
+  fonts.use(std::max(kMinFont, height * 0.125), false);
+  for (int db = -100; db <= 0; db += 10)
+    label(dbText(db), kDim, x(db), top + height - std::max(kMinFont, height * 0.125) * 1.2);
+}
+
+/// Раскладка панели калибровки в области `area` (mockup.html): края, кегли и
+/// места частей — доли высоты и ширины области.
+struct PanelLayout {
+  double left = 0.0;
+  double right = 0.0;
+  double top = 0.0;
+  double bottom = 0.0;
+  double width = 0.0;
+  double height = 0.0;
+
+  /// Верх кнопок внизу панели.
+  double buttonsTop = 0.0;
+};
+
+PanelLayout panelLayout(const RECT &area) {
+  const double width = area.right - area.left;
+  const double height = area.bottom - area.top;
+  const double pad = std::max(8.0, width * 0.022);
+  PanelLayout layout{.left = area.left + pad,
+                     .right = area.right - pad,
+                     .top = area.top + height * 0.03,
+                     .bottom = area.bottom - height * 0.03,
+                     .width = width,
+                     .height = height};
+  layout.buttonsTop = area.bottom - height * 0.02 - kButtonHeight;
+  return layout;
+}
+
+/// Сколько секунд шага нот без нот до подсказки проверить вход.
+constexpr double kQuietHintSeconds = 5.0;
+
+/// Номер шага панели для строки шагов: 1 — тишина, 2 — ноты, 3 — итог.
+int stepOf(Panel panel) {
+  switch (panel) {
+  case Panel::Silence:
+    return 1;
+  case Panel::Notes:
+    return 2;
+  case Panel::NoSound:
+  case Panel::Result:
+    break;
+  }
+  return 3;
+}
+
+/// Цвет шага `index` строки шагов, когда идёт шаг `current`: пройденный —
+/// зелёный, текущий — жёлтый, будущий — тусклый.
+int stepColor(int index, int current) {
+  if (index < current)
+    return kGood;
+  if (index == current)
+    return kCurrentBeat;
+  return kDim;
+}
+
+/// Рисует панель калибровки сессии `session` в области `area` вместо строк
+/// тактов (design D7, mockup.html): строку шагов, крупную подсказку,
+/// пояснение и то, что показывает шаг или итог.
+class PanelPainter {
+public:
+  PanelPainter(HDC context, const RECT &area, const CalibrationSession &session)
+      : context_(context), fonts_(context), layout_(panelLayout(area)), session_(session),
+        silence_(trainer().settings().silenceDb),
+        headSize_(std::max(kMinFont, layout_.height * 0.045)),
+        saySize_(std::max(kMinFont + 4.0, layout_.height * 0.095)),
+        hintSize_(std::max(kMinFont, layout_.height * 0.046)),
+        scaleHeight_(std::max(70.0, layout_.height * 0.24)) {
+    fillBox(context, area.left, area.top, area.right, area.bottom, kBackground);
+    SetBkMode(context, TRANSPARENT);
+  }
+
+  void paint() {
+    const Panel panel = panelOf(session_);
+    steps(stepOf(panel));
+    const onset::Calibration *calibration =
+        session_.calibration ? &*session_.calibration : nullptr;
+
+    switch (panel) {
+    case Panel::Silence:
+      silenceStep(calibration);
+      return;
+    case Panel::Notes:
+      if (calibration)
+        notesStep(*calibration);
+      return;
+    case Panel::NoSound:
+      noSound();
+      return;
+    case Panel::Result:
+      break;
+    }
+    if (!calibration)
+      return;
+    if (const std::optional<onset::CalibrationResult> &done = calibration->result())
+      result(*calibration, *done);
+  }
+
+private:
+  /// Строка шагов: «1. Silence — 2. Notes — Result».
+  void steps(int current) {
+    fonts_.use(headSize_);
+    double x = layout_.left;
+    const std::array<const char *, 3> names{"1. Silence", "2. Notes", "Result"};
+    for (std::size_t i = 0; i < names.size(); ++i) {
+      drawLeft(context_, names[i], stepColor(static_cast<int>(i) + 1, current), x,
+               layout_.top);
+      x += textWidth(context_, names[i]) + headSize_ * 0.6;
+      if (i + 1 < names.size()) {
+        const double y = layout_.top + headSize_ * 0.6;
+        fillBox(context_, x, y, x + layout_.width * 0.03, y + 1.0, kLine);
+        x += layout_.width * 0.03 + headSize_ * 0.6;
+      }
+    }
+  }
+
+  double sayTop() const { return layout_.top + headSize_ * 1.2 + layout_.height * 0.04; }
+
+  /// Крупная подсказка под строкой шагов.
+  void say(const std::string &text, int color) {
+    fonts_.use(saySize_);
+    drawLeft(context_, text, color, layout_.left, sayTop());
+  }
+
+  /// Пояснение под подсказкой с переносом по словам.
+  ///
+  /// @return низ пояснения.
+  double hint(const std::string &text, int color) {
+    fonts_.use(hintSize_, false);
+    return drawWrapped(context_, text, color, layout_.left, sayTop() + saySize_ * 1.3,
+                       layout_.right, hintSize_ * 1.3);
+  }
+
+  /// Шкала уровней низом на `bottom`, во всю ширину панели с отступами.
+  void scale(double bottom, const ScaleMarks &marks) {
+    paintScale(context_, fonts_, layout_.left + layout_.width * 0.025,
+               layout_.right - layout_.width * 0.025, bottom - scaleHeight_, scaleHeight_,
+               marks);
+  }
+
+  std::string stays() const {
+    return fmt::format(" Silence threshold stays {} dBFS.", dbText(silence_));
+  }
+
+  void silenceStep(const onset::Calibration *calibration) {
+    say("Mute the strings and don't play", kBright);
+    const double left =
+        calibration ? calibration->silenceLeft() : onset::kCalibrationSilenceSeconds;
+    const std::optional<double> sound =
+        calibration ? calibration->secondsSinceSound() : std::nullopt;
+    if (sound && *sound < 2.0)
+      hint("Heard a sound — starting over. Rest your palm on the strings.", kCurrentBeat);
+    else
+      hint(fmt::format("Listening to the background noise… {} s", std::ceil(left)), kNeutral);
+
+    // Полоса хода шага над шкалой.
+    const double barHeight = std::max(3.0, layout_.height * 0.012);
+    const double barTop = layout_.bottom - scaleHeight_ - layout_.height * 0.03 - barHeight;
+    const double done = 1.0 - left / onset::kCalibrationSilenceSeconds;
+    fillBox(context_, layout_.left, barTop, layout_.right, barTop + barHeight, kLine);
+    fillBox(context_, layout_.left, barTop,
+            layout_.left + (layout_.right - layout_.left) * done, barTop + barHeight,
+            kCurrentBeat);
+
+    ScaleMarks marks{.oldThreshold = silence_};
+    if (calibration)
+      marks.level = calibration->levelDb();
+    scale(layout_.bottom, marks);
+  }
+
+  void notesStep(const onset::Calibration &calibration) {
+    say(fmt::format("Play {} single notes", onset::kCalibrationNotes), kBright);
+    const std::vector<double> &attacks = calibration.attacksDb();
+    const double waited = calibration.secondsWithoutNotes();
+    const double hintBottom =
+        attacks.empty() && waited > kQuietHintSeconds
+            ? hint(fmt::format("No notes heard on {}. Is the guitar connected to this input? "
+                               "Stops in {} s.",
+                               session_.channelName,
+                               std::ceil(onset::kCalibrationNotesTimeoutSeconds - waited)),
+                   kCurrentBeat)
+            : hint("One at a time, muting each. Play as you practice; make two or three of "
+                   "them softer.",
+                   kNeutral);
+    slots(attacks, hintBottom + layout_.height * 0.04);
+    scale(layout_.bottom, ScaleMarks{.level = calibration.levelDb(),
+                                     .noise = calibration.noiseDb(),
+                                     .attacks = attacks,
+                                     .oldThreshold = silence_});
+  }
+
+  /// Ячейки нот с верхом на `top`: уровень атаки найденной ноты, самая тихая
+  /// — в яркой рамке; дальше — сколько нот из скольких.
+  void slots(const std::vector<double> &attacks, double top) {
+    const double height = layout_.height * 0.13;
+    const double width = layout_.width * 0.085;
+    const double gap = layout_.width * 0.012;
+    const double softest = attacks.empty() ? 0.0 : std::ranges::min(attacks);
+    for (int i = 0; i < onset::kCalibrationNotes; ++i) {
+      const double left = layout_.left + i * (width + gap);
+      const auto index = static_cast<std::size_t>(i);
+      if (index >= attacks.size()) {
+        drawFrame(context_, left, top, left + width, top + height, kLine);
+        // Центр — в целом пикселе: иначе точки разных ячеек выходят разными.
+        drawDot(context_, std::round(left + width / 2.0), std::round(top + height / 2.0),
+                std::round(std::max(4.0, height * 0.07)), kNeutral);
+        continue;
+      }
+      drawFrame(context_, left, top, left + width, top + height,
+                attacks[index] == softest ? kGood : kSlotBorder);
+      fonts_.use(std::max(kMinFont, layout_.height * 0.075));
+      drawCentered(context_, dbText(attacks[index]), kGood, left + width / 2.0,
+                   top + height / 2.0, width / 2.0, height / 2.0);
+    }
+    fonts_.use(std::max(kMinFont, layout_.height * 0.055));
+    drawLeft(context_, fmt::format("{} of {}", attacks.size(), onset::kCalibrationNotes),
+             kNeutral, layout_.left + onset::kCalibrationNotes * (width + gap),
+             top + height / 2.0 - layout_.height * 0.03);
+  }
+
+  void noSound() {
+    say("No sound from the audio device", kBad);
+    hint("Nothing came from the audio device for 2 s. Check the audio device in Preferences → "
+         "Audio → Device, then calibrate again." +
+             stays(),
+         kNeutral);
+  }
+
+  void result(const onset::Calibration &calibration, const onset::CalibrationResult &result) {
+    if (result.verdict == onset::Verdict::NotEnoughNotes) {
+      notEnoughNotes(result);
+      return;
+    }
+
+    const double hintBottom = verdict(result);
+    table(result, hintBottom + layout_.height * 0.03);
+    ScaleMarks marks{.noise = result.noiseDb,
+                     .attacks = calibration.attacksDb(),
+                     .peak = result.peakDb,
+                     .oldThreshold = session_.previousSilenceDb};
+    if (result.verdict == onset::Verdict::Good)
+      marks.newThreshold = silence_;
+    scale(layout_.buttonsTop - 6.0, marks);
+  }
+
+  void notEnoughNotes(const onset::CalibrationResult &result) {
+    say(result.notes == 0 ? fmt::format("No notes heard on {}", session_.channelName)
+                          : fmt::format("Heard only {} of {} notes on {}", result.notes,
+                                        onset::kCalibrationNotes, session_.channelName),
+        kBad);
+    hint(fmt::format("No new note for {} s. Check that the guitar is connected to the input "
+                     "selected in Input and that its volume is up, then calibrate again.",
+                     onset::kCalibrationNotesTimeoutSeconds) +
+             stays(),
+         kNeutral);
+  }
+
+  /// Заголовок и пояснение итога с нотами.
+  ///
+  /// @return низ пояснения.
+  double verdict(const onset::CalibrationResult &result) {
+    const double gap = std::round(result.softestDb - result.noiseDb);
+    switch (result.verdict) {
+    case onset::Verdict::Good:
+      say(fmt::format("Silence threshold: {} → {} dBFS", dbText(session_.previousSilenceDb),
+                      dbText(silence_)),
+          kGood);
+      return hint(
+          fmt::format("Set halfway between the noise and the softest pick — {} dB apart.",
+                      gap),
+          kNeutral);
+    case onset::Verdict::Clipping:
+      say("The input clips", kBad);
+      return hint(fmt::format("The loudest note reached {} dBFS. Turn the input gain down on "
+                              "the audio interface so the hardest notes stay below {}6 dBFS, "
+                              "then calibrate again.",
+                              dbText(result.peakDb, 1), kMinus) +
+                      stays(),
+                  kNeutral);
+    case onset::Verdict::NoiseTooClose:
+    case onset::Verdict::NotEnoughNotes:
+      break;
+    }
+    say("Noise is too close to the pick", kBad);
+    return hint(fmt::format("Only {} dB between the noise and the softest pick: notes will be "
+                            "missed or noise will count as notes. Raise the input gain, turn "
+                            "the guitar volume up, or move away from what hums, then "
+                            "calibrate again.",
+                            gap) +
+                    stays(),
+                kNeutral);
+  }
+
+  /// Таблица уровней итога с верхом на `top`.
+  void table(const onset::CalibrationResult &result, double top) {
+    const double size = std::max(kMinFont, layout_.height * 0.046);
+    const std::array<std::pair<std::string, std::string>, 3> rows{
+        std::pair{std::string("Noise above 1 kHz"), dbText(result.noiseDb) + " dBFS"},
+        std::pair{
+            std::string("Pick attack above 1 kHz"),
+            fmt::format("{} … {} dBFS", dbText(result.softestDb), dbText(result.loudestDb))},
+        std::pair{std::string("Signal peak"), dbText(result.peakDb, 1) + " dBFS"}};
+    fonts_.use(size, false);
+    double labelWidth = 0.0;
+    for (const auto &row : rows)
+      labelWidth = std::max(labelWidth, textWidth(context_, row.first));
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+      const double y = top + static_cast<double>(i) * size * 1.35;
+      fonts_.use(size, false);
+      drawLeft(context_, rows[i].first, kNeutral, layout_.left, y);
+      fonts_.use(size);
+      drawLeft(context_, rows[i].second, kText,
+               layout_.left + labelWidth + layout_.width * 0.03, y);
+    }
+  }
+
+  HDC context_;
+  Fonts fonts_;
+  PanelLayout layout_;
+  const CalibrationSession &session_;
+  double silence_;
+  double headSize_;
+  double saySize_;
+  double hintSize_;
+  double scaleHeight_;
+};
+
+/// Рисует в области `area` контекста строки тактов (design.md D8), а пока идёт
+/// калибровка — её панель (design D7). Размеры — доли высоты, так что окно
+/// одинаково на любом мониторе.
 void paintArea(HDC context, const RECT &area) {
+  if (const auto &session = trainer().calibration()) {
+    PanelPainter(context, area, *session).paint();
+    return;
+  }
+
   fillBox(context, area.left, area.top, area.right, area.bottom, kBackground);
 
   const Layout layout = layoutOf(area.left, area.right - area.left, area.bottom - area.top,
@@ -419,8 +1022,8 @@ void paintArea(HDC context, const RECT &area) {
             scaleLeft + layout.scaleWidth + 1.0, area.bottom, kLine);
 }
 
-/// Рисует строки тактов под контролами окна.
-void paintRows(HWND dialog, HDC context) {
+/// Область строк тактов и панели калибровки: всё под контролами окна.
+RECT rowsArea(HWND dialog) {
   RECT client{};
   GetClientRect(dialog, &client);
 
@@ -431,8 +1034,89 @@ void paintRows(HWND dialog, HDC context) {
 
   RECT area = client;
   area.top = bottom.y + 6;
+  return area;
+}
+
+/// Рисует строки тактов или панель калибровки под контролами окна.
+void paintRows(HWND dialog, HDC context) {
+  const RECT area = rowsArea(dialog);
   if (area.bottom > area.top)
     paintArea(context, area);
+}
+
+/// Показывает кнопку `control` в прямоугольнике `box` или прячет её; кнопку,
+/// которая уже такая, не трогает — так она не мерцает на каждом тике.
+void placeButton(HWND dialog, int control, bool shown, const RECT &box) {
+  HWND button = GetDlgItem(dialog, control);
+  if (!button)
+    return;
+
+  if (shown) {
+    RECT now{};
+    GetWindowRect(button, &now);
+    POINT corner{.x = now.left, .y = now.top};
+    ScreenToClient(dialog, &corner);
+    if (corner.x != box.left || corner.y != box.top ||
+        now.right - now.left != box.right - box.left ||
+        now.bottom - now.top != box.bottom - box.top)
+      SetWindowPos(button, nullptr, box.left, box.top, box.right - box.left,
+                   box.bottom - box.top, SWP_NOZORDER | SWP_NOACTIVATE);
+  }
+  if ((IsWindowVisible(button) != 0) != shown)
+    ShowWindow(button, shown ? SW_SHOW : SW_HIDE);
+}
+
+/// Меняет подпись кнопки `control`, только если она другая: так кнопка не
+/// мерцает на каждом тике.
+void setButtonText(HWND dialog, int control, const std::string &text) {
+  std::array<char, 64> now{};
+  GetDlgItemText(dialog, control, now.data(), static_cast<int>(now.size()));
+  if (text != now.data())
+    SetDlgItemText(dialog, control, text.c_str());
+}
+
+/// Ставит кнопки калибровки по состоянию тренажёра: Calibrate… доступна без
+/// сессии при остановленном транспорте и с каналом, а на итоге называется
+/// Finish; Cancel — справа вверху панели на шагах; Close, Calibrate again и
+/// Apply anyway — справа внизу на итоге (design D7).
+void placeCalibrationButtons(HWND dialog) {
+  const auto &session = trainer().calibration();
+  const bool finished = trainer().calibrationFinished();
+  setButtonText(dialog, IDC_CALIBRATE, finished ? "Finish" : "Calibrate...");
+  EnableWindow(GetDlgItem(dialog, IDC_CALIBRATE),
+               finished || (!session && trainer().status().measuring == Measuring::Waiting));
+
+  const RECT area = rowsArea(dialog);
+  const PanelLayout layout = panelLayout(area);
+  const std::optional<Panel> panel = session ? std::optional(panelOf(*session)) : std::nullopt;
+  const bool stepping = panel == Panel::Silence || panel == Panel::Notes;
+
+  // Apply anyway — у итога с нотами, где порог не поставлен.
+  std::optional<double> apply;
+  if (session && session->calibration) {
+    const std::optional<onset::CalibrationResult> &result = session->calibration->result();
+    if (result && (result->verdict == onset::Verdict::NoiseTooClose ||
+                   result->verdict == onset::Verdict::Clipping))
+      apply = clamped(Settings{.silenceDb = result->thresholdDb}).silenceDb;
+  }
+
+  const auto box = [&](double right, int width, double top) {
+    return RECT{.left = pixel(right) - width,
+                .top = pixel(top),
+                .right = pixel(right),
+                .bottom = pixel(top) + kButtonHeight};
+  };
+
+  placeButton(dialog, IDC_CAL_CANCEL, stepping, box(layout.right, 80, layout.top - 2.0));
+
+  double right = layout.right;
+  placeButton(dialog, IDC_CAL_CLOSE, finished, box(right, 80, layout.buttonsTop));
+  right -= 80 + kButtonGap;
+  placeButton(dialog, IDC_CAL_AGAIN, finished, box(right, 130, layout.buttonsTop));
+  right -= 130 + kButtonGap;
+  if (apply)
+    setButtonText(dialog, IDC_CAL_APPLY, fmt::format("Apply {} anyway", dbText(*apply)));
+  placeButton(dialog, IDC_CAL_APPLY, apply.has_value(), box(right, 160, layout.buttonsTop));
 }
 
 INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM /*lParam*/) {
@@ -441,6 +1125,7 @@ INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM /*lParam*
     for (const char *name : kModeNames)
       SendDlgItemMessage(dialog, IDC_MODE, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name));
     fillControls(dialog);
+    placeCalibrationButtons(dialog);
     return 1;
 
   case WM_COMMAND:
@@ -448,6 +1133,7 @@ INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM /*lParam*
     return 0;
 
   case WM_SIZE:
+    placeCalibrationButtons(dialog);
     InvalidateRect(dialog, nullptr, FALSE);
     return 0;
 
@@ -502,7 +1188,8 @@ void refreshWindow() {
   if (!window)
     return;
 
-  SetDlgItemText(window, IDC_STATUS, statusText().c_str());
+  showStatus(window);
+  placeCalibrationButtons(window);
   InvalidateRect(window, nullptr, FALSE);
 }
 
@@ -522,6 +1209,16 @@ std::optional<bool> clickCheckbox(int control) {
   SendMessage(window, WM_COMMAND, MAKEWPARAM(control, BN_CLICKED),
               reinterpret_cast<LPARAM>(GetDlgItem(window, control)));
   return checked;
+}
+
+bool clickButton(int control) {
+  HWND button = window ? GetDlgItem(window, control) : nullptr;
+  if (!button || !IsWindowVisible(button) || !IsWindowEnabled(button))
+    return false;
+
+  SendMessage(window, WM_COMMAND, MAKEWPARAM(control, BN_CLICKED),
+              reinterpret_cast<LPARAM>(button));
+  return true;
 }
 #endif
 
@@ -563,6 +1260,9 @@ bool snapshotRows(const char *path, int width, int height) {
 void closeWindow() {
   if (!window)
     return;
+
+  // Калибровка без окна не видна: закрытие окна её прерывает.
+  trainer().endCalibration();
 
   HWND closing = window;
   window = nullptr;
