@@ -1062,7 +1062,7 @@ void placeButton(HWND dialog, int control, bool shown, const RECT &box) {
       SetWindowPos(button, nullptr, box.left, box.top, box.right - box.left,
                    box.bottom - box.top, SWP_NOZORDER | SWP_NOACTIVATE);
   }
-  if (IsWindowVisible(button) != shown)
+  if ((IsWindowVisible(button) != 0) != shown)
     ShowWindow(button, shown ? SW_SHOW : SW_HIDE);
 }
 
