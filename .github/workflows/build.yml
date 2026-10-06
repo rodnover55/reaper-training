@@ -1,10 +1,14 @@
-# Сборка модуля для Linux, Windows и macOS и выкладка в Releases.
+# Сборка модуля и установщиков для Linux, Windows и macOS и выкладка в
+# Releases.
 #
-# Каждый push в любую ветку собирает и проверяет модуль на трёх ОС; файлы
-# модуля лежат в артефактах прогона. Тег vX.Y.Z (та же версия, что в
-# project() в CMakeLists.txt) вдобавок создаёт релиз с этими файлами.
+# Каждый push в любую ветку собирает и проверяет модуль и установщик на трёх
+# ОС, а установщики ещё и ставит на чистых машинах с настоящим REAPER. Файлы
+# релиза — три модуля, три установщика и SHA256SUMS.txt — лежат в артефакте
+# release прогона. Тег vX.Y.Z (та же версия, что в project() в CMakeLists.txt)
+# вдобавок создаёт релиз с этими файлами.
 #
-# Сборка — `cmake --workflow --preset release`: её же можно повторить у себя.
+# Сборка — `cmake --workflow --preset release` и `cmake --build --preset
+# installer`: их же можно повторить у себя.
 
 name: Сборка
 
@@ -40,11 +44,15 @@ jobs:
             cc: gcc-13
             cxx: g++-13
             file: reaper_training.so
+            system: linux
+            installer: reaper-training-*-linux-x86_64.run
           - name: Windows x64
             os: windows-latest
             cc: cl
             cxx: cl
             file: reaper_training.dll
+            system: windows
+            installer: reaper-training-*-windows-x64-setup.exe
           - name: macOS (Apple Silicon и Intel)
             os: macos-latest
             cc: clang
@@ -53,6 +61,8 @@ jobs:
             # Наименьшая macOS (12.0) задана в CMakeLists.txt.
             osx_architectures: arm64;x86_64
             file: reaper_training.dylib
+            system: macos
+            installer: reaper-training-*-macos.pkg
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
@@ -61,6 +71,7 @@ jobs:
     steps:
       # GCC 13 — первый, который собирает этот C++23; в Ubuntu 22.04 он из
       # toolchain PPA. CMake там 3.22, а пресетам нужен 3.29 — он из PyPI.
+      # makeself собирает установщик.
       - name: Инструменты (Linux)
         if: runner.os == 'Linux'
         env:
@@ -68,7 +79,8 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            software-properties-common gpg-agent ca-certificates git perl python3-pip
+            software-properties-common gpg-agent ca-certificates git perl python3-pip \
+            makeself
           add-apt-repository -y ppa:ubuntu-toolchain-r/test
           apt-get install -y --no-install-recommends g++-13
           pip3 install cmake ninja
@@ -83,6 +95,15 @@ jobs:
         if: runner.os == 'Windows'
         run: if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
 
+      # Inno Setup стоит в образе windows-2025, но из образа его уже убирали.
+      - name: Inno Setup (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $known = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+                   "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
+                   "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe"
+          if (-not ($known | Where-Object { Test-Path $_ })) { choco install innosetup -y --no-progress }
+
       - name: Ninja (macOS)
         if: runner.os == 'macOS'
         run: command -v ninja || brew install ninja
@@ -91,6 +112,9 @@ jobs:
 
       - name: Сборка и тесты
         run: cmake --workflow --preset release
+
+      - name: Установщик
+        run: cmake --build --preset installer
 
       # MacBook Pro Early 2015 не обновляется дальше macOS 12, а машин с macOS
       # 12 в GitHub Actions нет. Поэтому проверяется хотя бы то, что файл
@@ -114,10 +138,163 @@ jobs:
           path: build/release/${{ matrix.file }}
           if-no-files-found: error
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.system }}
+          path: build/release/installer/${{ matrix.installer }}
+          if-no-files-found: error
+
+  # Установщики ставятся на чистых машинах, где ничего не собиралось, —
+  # сначала без REAPER, потом с настоящим REAPER (installer/*/ci-check.*).
+  # REAPER закреплён по версии и SHA-256: reaper.fm хранит и старые версии.
+  installer-linux:
+    name: Установщик Linux на чистой машине
+    needs: build
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    env:
+      REAPER_FILE: reaper782_linux_x86_64.tar.xz
+      REAPER_SHA256: a4aa961534f22ae5ae910e4ec0c200dcb4476c9f7556806fe09a9743cd582563
+
+    steps:
+      - name: Инструменты
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl xz-utils
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-linux
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: reaper_training.so
+          path: dist
+
+      - name: REAPER
+        run: |
+          curl -fsSL -o "$REAPER_FILE" "https://www.reaper.fm/files/7.x/$REAPER_FILE"
+          echo "$REAPER_SHA256  $REAPER_FILE" | sha256sum -c
+
+      - name: Проверка установщика
+        run: sh installer/linux/ci-check.sh dist/reaper-training-*-linux-x86_64.run dist/reaper_training.so "$REAPER_FILE"
+
+  installer-macos:
+    name: Установщик macOS на чистой машине
+    needs: build
+    runs-on: macos-latest
+    env:
+      REAPER_FILE: reaper782_universal.dmg
+      REAPER_SHA256: 27b1ff603d6e7941f158e1ea6e3e8009e4d8447857e06df00241900c42ff0491
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-macos
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: reaper_training.dylib
+          path: dist
+
+      - name: REAPER
+        run: |
+          curl -fsSL -o "$REAPER_FILE" "https://www.reaper.fm/files/7.x/$REAPER_FILE"
+          echo "$REAPER_SHA256  $REAPER_FILE" | shasum -a 256 -c
+
+      - name: Проверка установщика
+        run: sh installer/macos/ci-check.sh dist/reaper-training-*-macos.pkg dist/reaper_training.dylib "$REAPER_FILE"
+
+  installer-windows:
+    name: Установщик Windows на чистой машине
+    needs: build
+    runs-on: windows-latest
+    env:
+      REAPER_FILE: reaper782_x64-install.exe
+      REAPER_SHA256: ae86dd8396673318a85275175dc8c1c9b0b8e090bf305f9cec920358e9d1e18f
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-windows
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: reaper_training.dll
+          path: dist
+
+      - name: REAPER
+        run: |
+          Invoke-WebRequest -Uri "https://www.reaper.fm/files/7.x/$env:REAPER_FILE" -OutFile $env:REAPER_FILE
+          if ((Get-FileHash $env:REAPER_FILE).Hash -ne $env:REAPER_SHA256) { throw "SHA-256 у $env:REAPER_FILE не совпадает" }
+
+      - name: Проверка установщика
+        run: |
+          $setup = (Get-Item dist/reaper-training-*-windows-x64-setup.exe).FullName
+          ./installer/windows/ci-check.ps1 -Setup $setup -Module dist/reaper_training.dll -ReaperSetup $env:REAPER_FILE
+
+  # Файлы релиза собираются на каждом прогоне: так их состав проверяется уже
+  # в PR. Выкладывает их задача release — только по тегу.
+  dist:
+    name: Файлы релиза
+    needs: [build, installer-linux, installer-macos, installer-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # По именам: при перезапуске задачи среди артефактов прогона уже есть
+      # release прошлой попытки.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reaper_training.*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: dist
+          merge-multiple: true
+
+      - name: Состав и контрольные суммы
+        working-directory: dist
+        run: |
+          version=$(sed -n 's/^  VERSION \([0-9][0-9.]*\)$/\1/p' ../CMakeLists.txt)
+          files="reaper_training.so reaper_training.dll reaper_training.dylib
+                 reaper-training-$version-linux-x86_64.run
+                 reaper-training-$version-macos.pkg
+                 reaper-training-$version-windows-x64-setup.exe"
+          for file in $files; do
+            [ -f "$file" ] || { echo "::error::Нет файла $file"; exit 1; }
+          done
+          if [ "$(ls | wc -l)" -ne 6 ]; then
+            echo "::error::Лишние файлы: $(ls | tr '\n' ' ')"
+            exit 1
+          fi
+          sha256sum $files | tee SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: Релиз
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: dist
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -139,12 +316,8 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          name: release
           path: dist
-          merge-multiple: true
-
-      - name: Контрольные суммы
-        working-directory: dist
-        run: sha256sum reaper_training.* | tee SHA256SUMS.txt
 
       # Тег с суффиксом (v0.2.0-rc1) — предварительный релиз. Повторный прогон
       # того же тега заменяет файлы в уже созданном релизе. Описание — общая

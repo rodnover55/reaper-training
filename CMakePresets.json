@@ -70,6 +70,13 @@
       "displayName": "Собрать модуль для раздачи"
     },
     {
+      "name": "installer",
+      "configurePreset": "release",
+      "displayName": "Собрать установщик",
+      "description": "Установщик для текущей системы из модуля для раздачи: Inno Setup на Windows, pkgbuild и productbuild на macOS, makeself на Linux.",
+      "targets": ["installer"]
+    },
+    {
       "name": "sanitize",
       "configurePreset": "sanitize",
       "displayName": "Собрать под санитайзерами"

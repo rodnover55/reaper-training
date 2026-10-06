@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Описание пакета reaper-training для macOS (openspec add-installers, design D3).
+  installer/CMakeLists.txt подставляет версию и идентификатор и собирает пакет
+  productbuild.
+
+  Пакет ставится только в домашнюю папку: от имени пользователя, без пароля
+  администратора. Путь из компонентного пакета отсчитывается от домашней
+  папки, и модуль ложится в ~/Library/Application Support/REAPER/UserPlugins.
+  pkg-ref без auth: с ним Installer попросил бы пароль и при такой установке.
+-->
+<installer-gui-script minSpecVersion="2">
+    <title>reaper-training</title>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <!-- Без arm64 в hostArchitectures Installer на Apple Silicon предлагает
+         поставить Rosetta. -->
+    <options customize="never" hostArchitectures="arm64,x86_64"/>
+    <domains enable_anywhere="false" enable_currentUserHome="true" enable_localSystem="false"/>
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="12.0"/>
+        </allowed-os-versions>
+    </volume-check>
+    <installation-check script="reaperInstalled()"/>
+    <script><![CDATA[
+/*
+ * Проверяет, что на компьютере есть REAPER 7 или новее. REAPER ищется в
+ * /Applications и ~/Applications; если его там нет, годится и папка ресурсов
+ * REAPER с reaper.ini — значит, REAPER стоит в другом месте и уже
+ * запускался. Версию, которую не прочитать, считает подходящей.
+ *
+ * Возвращает false и заполняет my.result сообщением, если REAPER нет или он
+ * старше 7.
+ */
+function reaperInstalled() {
+    var home = system.env.HOME;
+    var apps = [
+        '/Applications/REAPER.app',
+        '/Applications/REAPER64.app',
+        home + '/Applications/REAPER.app',
+        home + '/Applications/REAPER64.app'
+    ];
+    var tooOld = false;
+
+    for (var i = 0; i < apps.length; i++) {
+        var bundle = system.files.bundleAtPath(apps[i]);
+        if (!bundle || bundle.CFBundleIdentifier != 'com.cockos.reaper') {
+            continue;
+        }
+        // CFBundleShortVersionString у REAPER 7.82 — «7.82.0_3385784u».
+        var major = parseInt(bundle.CFBundleShortVersionString, 10);
+        if (isNaN(major) || major >= 7) {
+            return true;
+        }
+        tooOld = true;
+    }
+
+    if (!tooOld && system.files.fileExistsAtPath(
+            home + '/Library/Application Support/REAPER/reaper.ini')) {
+        return true;
+    }
+
+    my.result.type = 'Fatal';
+    if (tooOld) {
+        my.result.title = system.localizedString('REAPER_TOO_OLD_TITLE');
+        my.result.message = system.localizedString('REAPER_TOO_OLD_MESSAGE');
+    } else {
+        my.result.title = system.localizedString('REAPER_NOT_FOUND_TITLE');
+        my.result.message = system.localizedString('REAPER_NOT_FOUND_MESSAGE');
+    }
+    return false;
+}
+    ]]></script>
+    <choices-outline>
+        <line choice="default">
+            <line choice="@pkg_identifier@"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="@pkg_identifier@" visible="false">
+        <pkg-ref id="@pkg_identifier@"/>
+    </choice>
+    <pkg-ref id="@pkg_identifier@" version="@PROJECT_VERSION@" onConclusion="none">reaper-training.pkg</pkg-ref>
+    <pkg-ref id="@pkg_identifier@">
+        <must-close>
+            <app id="com.cockos.reaper"/>
+        </must-close>
+    </pkg-ref>
+</installer-gui-script>

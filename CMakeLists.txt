@@ -312,3 +312,8 @@ if(REAPER_TRAINING_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
 endif()
+
+# --- Установщик ---------------------------------------------------------------
+# После тестов: там же заводится проверка сценария установки для Linux, а
+# add_test действует только в каталогах после enable_testing().
+add_subdirectory(installer)
