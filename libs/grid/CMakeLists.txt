@@ -4,6 +4,7 @@
 add_library(training_grid STATIC
   src/bars.cpp
   src/display.cpp
+  src/hit_window.cpp
   src/nodes.cpp
   src/note_time.cpp)
 

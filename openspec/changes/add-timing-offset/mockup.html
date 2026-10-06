@@ -1,0 +1,1433 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Смещение относительно клика и окно попадания — макет</title>
+<style>
+  :root {
+    --bg: rgb(24, 24, 24);
+    --row: rgb(36, 36, 36);
+    --beat-back: rgb(69, 59, 40);
+    --line: rgb(56, 56, 56);
+    --neutral: rgb(170, 170, 170);
+    --dim: rgb(125, 125, 125);
+    --good: rgb(90, 210, 90);
+    --bad: rgb(235, 80, 70);
+    --beat: rgb(255, 190, 60);
+    --band: rgb(45, 95, 45);
+    --out: rgb(80, 40, 37);
+    --new: rgb(230, 130, 20);
+  }
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 16px 20px; background: #ececec; color: #222; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 4px 0 10px; max-width: 1100px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 6px; }
+  .tabs button {
+    font: inherit; padding: 4px 12px; border: 1px solid #999; background: #fff;
+    border-radius: 4px; cursor: pointer;
+  }
+  .tabs button.active { background: #333; color: #fff; border-color: #333; }
+  #desc { min-height: 42px; }
+
+  .window {
+    width: 1100px; height: 500px; min-width: 780px; min-height: 300px;
+    resize: both; overflow: hidden; border: 1px solid #444;
+    display: flex; flex-direction: column; box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+  }
+  .controls { flex: none; background: rgb(180, 180, 180); font: 13px Arial, sans-serif; padding: 3px 8px 5px; color: #111; }
+  .controls .line { display: flex; align-items: center; gap: 8px; height: 26px; white-space: nowrap; }
+  .controls .line.tall { height: 36px; }
+  .controls .gap { width: 14px; }
+  .controls.collapsed .settings { display: none; }
+  .toggle { cursor: pointer; width: 92px; text-align: left; }
+  .edit { font: 13px Arial, sans-serif; background: #fff; border: 1px solid #777; padding: 1px 4px; width: 34px; }
+  .static { display: inline-block; }
+  .check { display: flex; align-items: center; gap: 3px; }
+  .check input { margin: 0; }
+  .combo {
+    background: linear-gradient(#fafafa, #ddd); border: 1px solid #777; padding: 1px 6px;
+    width: 110px; display: flex; justify-content: space-between;
+  }
+  .btn {
+    font: 13px Arial, sans-serif; color: #111; background: linear-gradient(#fafafa, #ddd);
+    border: 1px solid #777; border-radius: 2px; padding: 2px 10px; white-space: nowrap;
+  }
+  .new { outline: 2px dashed var(--new); outline-offset: 3px; border-radius: 2px; }
+  body.plain .new { outline: none; }
+
+  /* Шкала окна попадания: −50…+50 мс. */
+  .gauge { position: relative; flex: none; width: 400px; height: 32px; user-select: none; touch-action: none; }
+  .gauge .track {
+    position: absolute; left: 14px; right: 14px; top: 4px; height: 16px;
+    background: var(--out); box-shadow: inset 0 0 0 1px rgb(60, 60, 60); cursor: pointer;
+  }
+  .gauge .band { position: absolute; top: 0; bottom: 0; background: var(--band); cursor: grab; }
+  .gauge .band:active { cursor: grabbing; }
+  .gauge .center { position: absolute; top: 2px; bottom: 2px; width: 0; margin-left: -1px; border-left: 2px dotted var(--good); pointer-events: none; }
+  .gauge .zero { position: absolute; top: -4px; bottom: -4px; width: 0; margin-left: -1px; border-left: 2px solid #fff; pointer-events: none; }
+  .gauge .handle {
+    position: absolute; top: -4px; bottom: -4px; width: 8px; margin-left: -4px;
+    background: linear-gradient(90deg, #f4f4f4, #cfcfcf); border: 1px solid #222; border-radius: 2px; cursor: ew-resize;
+  }
+  .gauge .handle::after {
+    content: ''; position: absolute; left: 2px; right: 2px; top: 50%; height: 5px; margin-top: -3px;
+    border-top: 1px solid #777; border-bottom: 1px solid #777;
+  }
+  .gauge .ticks { position: absolute; left: 14px; right: 14px; top: 22px; height: 10px; font: 10px Arial, sans-serif; color: #333; }
+  .gauge .ticks span { position: absolute; transform: translateX(-50%); line-height: 10px; }
+  .gauge .ticks span.zero-label { font-weight: bold; color: #000; }
+  #range { min-width: 92px; font-weight: bold; }
+
+  .rows {
+    flex: 1; position: relative; background: var(--bg); overflow: hidden;
+    font-family: Arial, Helvetica, sans-serif; font-weight: bold;
+  }
+  .rows > div { position: absolute; }
+  .tx { transform: translate(-50%, -50%); white-space: nowrap; line-height: 1; }
+  .tx.hit-fill { background: var(--good); color: rgb(20, 20, 20) !important; padding: .08em .2em; border-radius: .18em; }
+  .dot { transform: translate(-50%, -50%); border-radius: 50%; }
+
+  .mockctl { display: flex; align-items: center; gap: 14px; margin: 10px 0 6px; flex-wrap: wrap; max-width: 1100px; }
+  .mockctl label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  #caption {
+    margin-top: 8px; padding: 8px 12px; background: #fff; max-width: 1076px; min-height: 42px;
+    border-left: 4px solid rgb(230, 170, 40);
+  }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 14px 0 6px; align-items: center; max-width: 1100px; }
+  .sw { display: inline-block; width: 14px; height: 12px; vertical-align: -1px; margin-right: 5px; }
+  details { max-width: 1100px; margin-top: 8px; }
+  details li { margin: 4px 0; }
+mark.cm-hl{background:#fde68a;color:inherit;border-radius:3px;padding:0 1px;box-shadow:inset 0 -2px 0 #f59e0b;cursor:pointer}
+mark.cm-hl mark.cm-hl{background:#fcd34d}
+mark.cm-hl.cm-flash{animation:cm-flash 1.6s ease-out}
+@keyframes cm-flash{0%{background:#fb923c}100%{background:#fde68a}}
+figure.cm-fig-hl{outline:3px solid #f59e0b;outline-offset:3px}
+@media (prefers-color-scheme: dark){
+  mark.cm-hl{background:rgba(250,204,21,.3);box-shadow:inset 0 -2px 0 rgba(250,204,21,.85)}
+  mark.cm-hl mark.cm-hl{background:rgba(250,204,21,.5)}
+  @keyframes cm-flash{0%{background:rgba(251,146,60,.85)}100%{background:rgba(250,204,21,.3)}}
+}
+.cm-ui[hidden]{display:none!important}
+.cm-btn{font:inherit;font-size:13px;line-height:1.3;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:8px;padding:6px 10px;cursor:pointer}
+.cm-btn:hover{border-color:var(--accent)}
+.cm-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.cm-btn:disabled{opacity:.45;cursor:default}
+.cm-btn.cm-danger{color:var(--bad)}
+.cm-sel-btn{position:absolute;z-index:1002;box-shadow:0 6px 18px rgba(0,0,0,.2);font-weight:600}
+.cm-pop{position:absolute;z-index:1003;width:400px;max-width:calc(100vw - 16px);background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 14px 34px rgba(0,0,0,.22);padding:12px 14px}
+.cm-pop-label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+.cm-pop-quote{font-size:13.5px;line-height:1.45;color:var(--muted);border-left:3px solid #f59e0b;padding:2px 0 2px 10px;margin:6px 0 10px;max-height:6.6em;overflow:auto}
+.cm-textarea{display:block;width:100%;font:inherit;font-size:14px;line-height:1.45;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;resize:vertical}
+.cm-textarea:focus{outline:2px solid var(--accent);outline-offset:0}
+.cm-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+.cm-kbd{font-size:12px;color:var(--muted);margin-left:auto}
+.cm-fab{position:fixed;right:18px;bottom:18px;z-index:1000;box-shadow:0 6px 18px rgba(0,0,0,.18);padding:9px 14px;font-weight:600}
+.cm-count{display:inline-block;min-width:20px;margin-left:8px;padding:0 6px;border-radius:999px;background:var(--accent);color:#fff;font-size:12px;line-height:20px;text-align:center}
+.cm-drawer{position:fixed;top:0;right:0;bottom:0;width:min(440px,94vw);z-index:1001;background:var(--card);border-left:1px solid var(--line);box-shadow:-10px 0 30px rgba(0,0,0,.16);display:flex;flex-direction:column}
+.cm-head{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line)}
+.cm-title{font-size:16px;margin-right:auto}
+.cm-x{font-size:18px;line-height:1;padding:4px 10px}
+.cm-hint{font-size:13px;line-height:1.45;color:var(--muted);margin:10px 14px 0}
+.cm-warn{font-size:12.5px;color:var(--bad);margin:6px 0}
+.cm-drawer>.cm-warn{margin:8px 14px 0}
+.cm-list{list-style:none;margin:0;padding:6px 14px 80px;overflow:auto;flex:1}
+.cm-item{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0;background:var(--bg)}
+.cm-item.cm-item-flash{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.cm-path{font-size:12px;line-height:1.4;color:var(--muted);font-weight:600}
+.cm-quote{margin:6px 0;padding:2px 0 2px 10px;border-left:3px solid #f59e0b;font-size:13px;line-height:1.45;color:var(--muted)}
+.cm-item.cm-missing .cm-quote{border-left-color:var(--bad)}
+.cm-text{font-size:14px;line-height:1.5;white-space:pre-wrap}
+.cm-text.cm-empty{color:var(--muted);font-style:italic}
+.cm-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:1004;background:#1f2328;color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.cm-manual{position:fixed;inset:0;z-index:1005;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center}
+.cm-manual-box{background:var(--card);border-radius:12px;padding:16px;width:min(720px,94vw)}
+.cm-manual-box .cm-textarea{margin-top:10px}
+@media print{.cm-ui{display:none!important}mark.cm-hl{background:none;box-shadow:none}figure.cm-fig-hl{outline:none}}
+
+</style>
+</head>
+<body data-report-id="add-timing-offset-mockup" data-report-title="Смещение относительно клика и окно попадания — макет" data-report-version="5">
+<main>
+
+<h1>Смещение относительно клика и окно попадания — макет</h1>
+<p>Сейчас число в строке такта — отклонение ноты от клика, а зелёным оно становится, если
+по модулю не больше допуска (Tolerance): окно попадания всегда стоит по центру клика. В макете
+к допуску добавлено <b>смещение (Offset)</b> — центр окна попадания в миллисекундах от клика:
+минус — до клика, плюс — после. Зелёное — не дальше допуска от смещения. Рядом —
+<b>шкала окна попадания</b>: то же окно в виде диапазона «от … до» с двумя ползунками. Поля
+и ползунки — одна настройка: правка полей двигает ползунки, перетаскивание ползунков меняет
+поля. Кнопка <b>▾ Settings</b> в левом верхнем углу окна сворачивает панель настроек в одну
+строку — кнопку и строку состояния, — и строки тактов занимают освободившееся место.
+Сценарии переключаются вкладками; поля, ползунки и полосу между ними можно двигать.
+Окно растягивается за правый нижний угол.</p>
+
+<div class="tabs" id="tabs"></div>
+<p id="desc"></p>
+
+<div class="window">
+  <div class="controls" id="controls">
+    <div class="line">
+      <button class="btn toggle new" id="toggle" aria-expanded="true">▾ Settings</button>
+      <span class="gap"></span>
+      <span id="status" class="new"></span>
+    </div>
+    <div class="settings">
+    <div class="line">
+      <span>Mode:</span><span class="combo"><span>Eighths</span><span>▾</span></span>
+      <span class="gap"></span>
+      <span>Input:</span><span class="combo"><span>1: Input 1</span><span>▾</span></span>
+      <span class="gap"></span>
+      <label class="check"><input type="checkbox" checked disabled>Bar numbers</label>
+      <label class="check"><input type="checkbox" checked disabled>Mean/spread</label>
+    </div>
+    <div class="line tall">
+      <span class="new">Offset, ms: <input class="edit" id="offset" autocomplete="off"></span>
+      <span class="gap"></span>
+      <span class="new">Tolerance, ms: <input class="edit" id="tol" autocomplete="off"></span>
+      <span class="gap"></span>
+      <div class="gauge new" id="gauge">
+        <div class="track" id="track">
+          <div class="band" id="band"></div>
+          <div class="center" id="center"></div>
+          <div class="zero" style="left: 50%"></div>
+          <div class="handle" id="lo" title="Ранний край окна"></div>
+          <div class="handle" id="hi" title="Поздний край окна"></div>
+        </div>
+        <div class="ticks" id="ticks"></div>
+      </div>
+      <span id="range" class="new"></span>
+    </div>
+    <div class="line">
+      <span>Silence, dBFS:</span><span class="edit static">-50</span>
+      <span class="btn">Calibrate...</span>
+    </div>
+    </div>
+  </div>
+  <div class="rows" id="rows"></div>
+</div>
+
+<div class="mockctl">
+  <label><input type="checkbox" id="hl" checked> Подсветить новое в окне</label>
+</div>
+<div id="caption"></div>
+
+<div class="legend">
+  <span><span class="sw" style="background: var(--band)"></span>окно попадания: число здесь — зелёное</span>
+  <span><span class="sw" style="background: var(--out)"></span>вне окна: число здесь — красное</span>
+  <span><span class="sw" style="border-left: 2px solid #fff; background: #333; width: 10px"></span>клик, 0 мс</span>
+  <span><span class="sw" style="border-left: 2px dotted var(--good); background: var(--band); width: 10px"></span>смещение — центр окна</span>
+  <span><span class="sw" style="background: var(--good); border-radius: 2px"></span>число ровно в смещение</span>
+  <span><span class="sw" style="background: linear-gradient(90deg, #f4f4f4, #cfcfcf); border: 1px solid #222; width: 6px"></span>ползунки краёв окна</span>
+  <span><span class="sw" style="outline: 2px dashed var(--new); background: transparent"></span>новое или перенесённое в окне</span>
+</div>
+
+<details open>
+  <summary>Допущения макета — уточнить</summary>
+  <ul>
+    <li><b>Числа в строках — от клика, как сейчас</b> (решено). Смещение меняет только цвет:
+      «+13» при смещении +12 и допуске 8 — зелёное.</li>
+    <li><b>Попадание ровно в смещение выделяется</b>: число, равное смещению, — на зелёной
+      подложке с тёмными цифрами (решено). Если в
+      смещении половина миллисекунды, например +7.5, выделяются оба соседних числа — +7 и +8:
+      они на полмиллисекунды от смещения. Лишняя нота («+12*») выделяется так же. Среднее такта
+      не выделяется. При смещении 0 выделяется «0» — сейчас его не выделяют.</li>
+    <li><b>Окно попадания</b> — от «смещение − допуск» до «смещение + допуск», края входят в
+      окно, как сейчас входит граница допуска. При смещении 0 всё как сейчас.</li>
+    <li><b>Ползунок двигает только свой край</b> окна, с шагом 1 мс; другой край стоит. Поэтому
+      меняются и смещение, и допуск, каждый на половину сдвига, и в полях бывает половина
+      миллисекунды: диапазон −5…+20 — это Offset +7.5 и Tolerance 12.5. Поля тоже принимают шаг
+      0.5 мс. Другой вариант — ползунок шагает по 2 мс, и числа в полях всегда целые.</li>
+    <li><b>Полоса между ползунками</b> перетаскивается целиком: меняется только смещение. Щелчок
+      по шкале вне окна переносит туда ближайший ползунок.</li>
+    <li><b>Шкала — от −50 до +50 мс</b>, края окна за неё не выходят: смещение от −49 до +49,
+      допуск от 1 до 50, но не больше, чем осталось от смещения до края шкалы. Вписанное за
+      границу прижимается к ней, как сейчас прижимается допуск (решено). Граница шкалы, 50 мс, —
+      скрытая настройка в разделе расширения <code>reaper-extstate.ini</code>; в окне её нет.</li>
+    <li><b>Смена смещения действует, как смена допуска,</b> на числа, которые появятся после неё;
+      показанные не перекрашиваются. Среднее такта красится по окну на момент, когда
+      воспроизведение ушло из такта. <i>В макете строки перекрашиваются сразу — чтобы было
+      видно, что делает окно.</i></li>
+    <li><b>Смещение сохраняется</b> между запусками REAPER и общее для всех проектов, как
+      остальные настройки; по умолчанию 0.</li>
+    <li><b>Допуск переезжает</b> с первой строки настроек на новую — к смещению и шкале; на
+      первой строке остаются Mode, Input и флажки колонок.</li>
+    <li><b>Строка состояния</b> показывает окно диапазоном — «window +4…+20 ms» — вместо
+      «tolerance 10 ms».</li>
+    <li><b>Панель настроек сворачивается</b> кнопкой «▾ Settings»; в свёрнутой — «▸ Settings».
+      Свёрнутая панель — одна строка: кнопка и строка состояния, в которой видны режим, окно
+      попадания, задержка и идёт ли измерение. Строки тактов занимают освободившееся место, и
+      числа в них крупнее.</li>
+    <li><b>Строка состояния переезжает</b> на верхнюю строку, к кнопке: так она видна и в
+      свёрнутой панели.</li>
+    <li><b>Свёрнута ли панель, сохраняется</b> между запусками REAPER, как остальные настройки;
+      по умолчанию панель развёрнута.</li>
+    <li><b>Кнопка Calibrate…</b> — в панели: чтобы начать калибровку, панель разворачивают.
+      Калибровка, начатая до сворачивания, идёт дальше, и её закрывают кнопками панели
+      калибровки — Cancel или Close.</li>
+    <li><b>Тексты в окне — по-английски</b>, как остальные контролы: «Offset, ms:».</li>
+  </ul>
+</details>
+
+</main>
+
+<script>
+'use strict';
+
+/** Шкала окна попадания: от −SCALE до +SCALE мс. */
+const SCALE = 50;
+
+/** Наименьшая ширина окна, мс: допуск не меньше 1 мс. */
+const MIN_WIDTH = 2;
+
+/** Строк тактов в окне. */
+const KEEP = 8;
+
+/** Такт 4/4, Mode — Eighths: два узла на долю. */
+const BEATS = 4;
+const DIVISION = 2;
+
+// Сценарий: окно попадания (`offset`, `tol`), игра гитариста — отклонения от
+// клика со сдвигом `bias` и разбросом `sd`, мс; `set` задаёт отклонение ноты
+// точно: [строка сверху, узел, мс]; `miss` — узлы без ноты: [строка, узел].
+const SCENARIOS = [
+  {
+    id: 'now', title: 'Как сейчас', offset: 0, tol: 10, bias: 13, sd: 4, seed: 5, first: 41,
+    desc: 'Offset 0 и Tolerance 10 — окно попадания от −10 до +10 мс, как сейчас. Гитарист нарочно ' +
+      'играет позади клика, примерно на 13 мс позже, и играет ровно, но почти все числа красные.',
+    caption: 'Впишите в Offset 12 — или перетащите полосу окна вправо: окно сдвинется вслед за игрой, ' +
+      'и числа позеленеют, а «+12» — ровно в смещение — выделятся.',
+  },
+  {
+    id: 'behind', title: 'Позади клика', offset: 12, tol: 8, bias: 13, sd: 4, seed: 5, first: 41,
+    desc: 'Те же ноты, что во вкладке «Как сейчас», но Offset +12 и Tolerance 8: зелёное — от +4 до ' +
+      '+20 мс. Числа по-прежнему показывают отклонение от клика, а цвет считается от смещения.',
+    caption: 'Полоса окна на шкале — справа от белой линии клика, пунктир посередине полосы — ' +
+      'смещение. Три «+12» — ровно в смещение — выделены. «+3», «+21» и «+22» красные: они ' +
+      'дальше 8 мс от +12.',
+    set: [[2, 3, 3.2], [4, 6, 22.4]],
+  },
+  {
+    id: 'ahead', title: 'Впереди клика', offset: -10, tol: 6, bias: -9, sd: 3.5, seed: 9, first: 112,
+    desc: 'Гитарист «толкает» ритм — играет раньше клика, около −9 мс. Offset −10, Tolerance 6: ' +
+      'зелёное — от −16 до −4 мс.',
+    caption: 'Нота точно на клике, «0», здесь красная: она вне выбранного окна. Так же красная ' +
+      '«−18» — слишком рано даже для игры впереди клика.',
+    set: [[1, 4, 0.3], [3, 1, -18.2]],
+  },
+  {
+    id: 'range', title: 'Диапазон −20…+20', offset: 0, tol: 20, bias: 2, sd: 9, seed: 13, first: 7,
+    desc: 'Окно задано диапазоном: левый ползунок на −20, правый на +20. Это то же, что Offset 0 и ' +
+      'Tolerance 20: поля и ползунки — одна настройка.',
+    caption: 'Потяните левый ползунок вправо — Offset и Tolerance меняются вместе с ним. Впишите в ' +
+      'Tolerance 5 — оба ползунка съедутся к центру.',
+    set: [[2, 2, 23.6], [5, 5, -21.3]],
+  },
+  {
+    id: 'asym', title: 'Несимметричный диапазон', offset: 7.5, tol: 12.5, bias: 7, sd: 6, seed: 17, first: 64,
+    desc: 'Левый ползунок перетащили с −20 на −5, правый оставили на +20: можно заметно позже клика, ' +
+      'но раньше — не больше чем на 5 мс.',
+    caption: 'Центр окна — +7.5, половина его ширины — 12.5: поэтому в полях Offset и Tolerance ' +
+      'половины миллисекунды. Выделены и «+7», и «+8»: смещение +7.5 — между ними. «−7» ' +
+      'красное: раньше левого края.',
+    set: [[3, 4, -7.1]],
+  },
+  {
+    id: 'edge', title: 'У края шкалы', offset: 40, tol: 10, bias: 38, sd: 5, seed: 21, first: 3,
+    desc: 'Медленная баллада, гитарист сильно оттягивает — около +38 мс. Offset +40, Tolerance 10: ' +
+      'правый ползунок упёрся в край шкалы, +50.',
+    caption: 'Впишите в Tolerance 20 и уйдите из поля — допуск прижмётся к 10: край окна не выходит ' +
+      'за шкалу. Уменьшите Offset до 30 — и допуск можно будет поднять до 20.',
+    set: [[1, 0, 51.4]],
+  },
+];
+
+const state = { offset: 0, tol: 10, rows: [], scenario: null };
+
+const $ = (id) => document.getElementById(id);
+const rowsEl = $('rows');
+const offsetEl = $('offset');
+const tolEl = $('tol');
+const track = $('track');
+
+/** Повторяемый генератор случайных чисел в [0, 1). */
+function random(seed) {
+  let a = seed;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Нормальная случайная величина: среднее 0, разброс 1. */
+function gauss(next) {
+  const u = Math.max(next(), 1e-9);
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * next());
+}
+
+const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+
+/**
+ * Строки тактов сценария, новые сверху. Верхняя — текущий такт: сыграны узлы
+ * до третьей доли, воспроизведение на ней.
+ */
+function makeRows(sc) {
+  const next = random(sc.seed);
+  const rows = [];
+  for (let r = 0; r < KEEP; r++) {
+    const current = r === 0;
+    const nodes = current ? 5 : BEATS * DIVISION;
+    const values = [];
+    for (let i = 0; i < BEATS * DIVISION; i++)
+      values.push(i < nodes ? sc.bias + sc.sd * gauss(next) : null);
+    rows.push({ bar: sc.first + KEEP - 1 - r, values, current: current ? 2 : null });
+  }
+  for (const [r, i, v] of sc.set || []) rows[r].values[i] = v;
+  for (const [r, i] of sc.miss || []) rows[r].values[i] = null;
+  return rows;
+}
+
+/** Число без минуса нуля. */
+const tidy = (v) => (Object.is(v, -0) ? 0 : v);
+
+/** Миллисекунды для окна: целые или с половиной. */
+function msText(v, signed, minus = '−') {
+  const a = Math.abs(v);
+  const body = Number.isInteger(a) ? String(a) : a.toFixed(1);
+  if (!signed || v === 0) return body;
+  return (v < 0 ? minus : '+') + body;
+}
+
+/** Отклонение в строке: «−15», «+5», «0». */
+function devText(n) {
+  if (n === 0) return '0';
+  return (n < 0 ? '−' : '+') + Math.abs(n);
+}
+
+/** Среднее: «+2.0», «−0.4». */
+function meanText(v) {
+  const s = Math.abs(v).toFixed(1);
+  if (Number(s) === 0) return '0.0';
+  return (v < 0 ? '−' : '+') + s;
+}
+
+/** Лежит ли показанное число в окне попадания. */
+const inWindow = (n) => n >= state.offset - state.tol && n <= state.offset + state.tol;
+
+/**
+ * Показанное число, его цвет и выделение: число ровно в смещение — не дальше
+ * полумиллисекунды от него.
+ */
+function shown(v) {
+  const n = tidy(Math.round(v));
+  return {
+    text: devText(n),
+    color: inWindow(n) ? 'var(--good)' : 'var(--bad)',
+    hit: Math.abs(n - state.offset) <= 0.5,
+  };
+}
+
+function shownMean(m) {
+  const n = Math.round(m * 10) / 10;
+  return { text: meanText(n), color: inWindow(n) ? 'var(--good)' : 'var(--bad)' };
+}
+
+function box(left, top, width, height, color) {
+  return `<div style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;background:${color}"></div>`;
+}
+
+function text(x, y, size, color, content, extra = '') {
+  return `<div class="tx ${extra}" style="left:${x}px;top:${y}px;font-size:${size}px;color:${color}">${content}</div>`;
+}
+
+/** Строки тактов — та же раскладка, что у окна (window.cpp, paintRow). */
+function renderRows() {
+  const W = rowsEl.clientWidth;
+  const H = rowsEl.clientHeight;
+  const rowH = H / KEEP;
+  const side = Math.max(9, rowH * 0.34);
+  const labelW = side * 0.6 * 5 + 10;
+  const statsW = W * 0.09;
+  const statsSize = Math.max(9, Math.min(side, statsW / 6));
+  const scaleW = W - labelW - statsW;
+  const bigFor = (step) => Math.max(9, Math.min(rowH * 0.62, step / 2.3, step / DIVISION / 1.55));
+  const pad = bigFor(scaleW / BEATS) * 0.95 + 6;
+  const step = (scaleW - pad) / BEATS;
+  const big = bigFor(step);
+  const small = Math.max(8, Math.min(big * 0.6, step / DIVISION / 2));
+  const x = (beat) => labelW + pad + step * beat;
+
+  let html = '';
+  state.rows.forEach((row, r) => {
+    const top = r * rowH;
+    const mid = top + rowH / 2;
+    if (row.current !== null) {
+      html += box(0, top, W, rowH, 'var(--row)');
+      const left = Math.max(labelW + 1, x(row.current) - step * 0.125);
+      html += box(left, top, x(row.current) + step * 0.875 - left, rowH, 'var(--beat-back)');
+    }
+    html += text(labelW / 2, mid, side, 'var(--neutral)', row.bar);
+
+    for (let b = 0; b < BEATS; b++) {
+      if (row.values[b * DIVISION] !== null) continue;
+      const now = row.current === b;
+      const d = Math.max(4, big * (now ? 0.3 : 0.2));
+      html += `<div class="dot" style="left:${x(b)}px;top:${mid}px;width:${d}px;height:${d}px;` +
+        `background:${now ? 'var(--beat)' : 'var(--neutral)'}"></div>`;
+    }
+    row.values.forEach((v, i) => {
+      if (v === null) return;
+      const s = shown(v);
+      html += text(x(i / DIVISION), mid, i % DIVISION === 0 ? big : small, s.color, s.text,
+        s.hit ? 'hit-fill' : '');
+    });
+
+    const vals = row.values.filter((v) => v !== null);
+    if (row.current === null && vals.length > 1) {
+      const mean = vals.reduce((a, v) => a + v, 0) / vals.length;
+      const spread = Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / vals.length);
+      const m = shownMean(mean);
+      html += text(W - statsW * 0.72, mid, statsSize, m.color, m.text);
+      html += text(W - statsW * 0.25, mid, statsSize, 'var(--neutral)', spread.toFixed(1));
+    }
+  });
+  html += box(labelW, 0, 1, H, 'var(--line)');
+  html += box(labelW + scaleW, 0, 1, H, 'var(--line)');
+  rowsEl.innerHTML = html;
+}
+
+/** Место на шкале, % ширины. */
+const at = (ms) => ((ms + SCALE) / (2 * SCALE)) * 100;
+
+function renderGauge() {
+  const lo = state.offset - state.tol;
+  const hi = state.offset + state.tol;
+  $('band').style.left = at(lo) + '%';
+  $('band').style.width = at(hi) - at(lo) + '%';
+  $('lo').style.left = at(lo) + '%';
+  $('hi').style.left = at(hi) + '%';
+  $('center').style.left = at(state.offset) + '%';
+  $('lo').title = 'Ранний край окна: ' + msText(lo, true) + ' мс';
+  $('hi').title = 'Поздний край окна: ' + msText(hi, true) + ' мс';
+  $('range').textContent = msText(lo, true) + '…' + msText(hi, true) + ' ms';
+}
+
+function renderStatus() {
+  const lo = state.offset - state.tol;
+  const hi = state.offset + state.tol;
+  $('status').textContent =
+    `Eighths, window ${msText(lo, true)}…${msText(hi, true)} ms, latency 12.3 ms — measuring`;
+}
+
+/** Перерисовывает всё; поле `keep` не трогает — в нём сейчас пишут. */
+function update(keep) {
+  if (keep !== 'offset') offsetEl.value = msText(state.offset, true, '-');
+  if (keep !== 'tol') tolEl.value = msText(state.tol, false);
+  renderGauge();
+  renderStatus();
+  renderRows();
+}
+
+/** Число из поля с шагом 0.5; пусто — в поле не число. */
+function parseMs(textValue) {
+  const t = textValue.trim().replace('−', '-').replace(',', '.');
+  if (!/^[+-]?\d+(\.\d+)?$/.test(t)) return null;
+  return Math.round(Number(t) * 2) / 2;
+}
+
+offsetEl.addEventListener('input', () => {
+  const v = parseMs(offsetEl.value);
+  if (v === null) return;
+  state.offset = clamp(v, -SCALE + state.tol, SCALE - state.tol);
+  update('offset');
+});
+tolEl.addEventListener('input', () => {
+  const v = parseMs(tolEl.value);
+  if (v === null) return;
+  state.tol = clamp(v, 1, SCALE - Math.abs(state.offset));
+  update('tol');
+});
+for (const el of [offsetEl, tolEl]) {
+  el.addEventListener('blur', () => update());
+  el.addEventListener('keydown', (e) => { if (e.key === 'Enter') el.blur(); });
+}
+
+/** Ставит края окна; смещение и допуск — из них. */
+function setEdges(lo, hi) {
+  state.offset = (lo + hi) / 2;
+  state.tol = (hi - lo) / 2;
+  update();
+}
+
+let drag = null;
+
+function msAt(clientX) {
+  const rect = track.getBoundingClientRect();
+  return ((clientX - rect.left) / rect.width) * 2 * SCALE - SCALE;
+}
+
+function moveEdge(which, ms) {
+  const lo = state.offset - state.tol;
+  const hi = state.offset + state.tol;
+  const v = Math.round(ms);
+  if (which === 'lo') setEdges(clamp(v, -SCALE, hi - MIN_WIDTH), hi);
+  else setEdges(lo, clamp(v, lo + MIN_WIDTH, SCALE));
+}
+
+track.addEventListener('pointerdown', (e) => {
+  const rect = track.getBoundingClientRect();
+  const lo = state.offset - state.tol;
+  const hi = state.offset + state.tol;
+  const xLo = rect.left + (at(lo) / 100) * rect.width;
+  const xHi = rect.left + (at(hi) / 100) * rect.width;
+  const ms = msAt(e.clientX);
+  let mode;
+  if (Math.abs(e.clientX - xLo) <= 6 && Math.abs(e.clientX - xLo) <= Math.abs(e.clientX - xHi)) mode = 'lo';
+  else if (Math.abs(e.clientX - xHi) <= 6) mode = 'hi';
+  else if (ms > lo && ms < hi) mode = 'band';
+  else mode = ms < lo ? 'lo' : 'hi';
+  drag = { mode, from: ms, offset: state.offset };
+  track.setPointerCapture(e.pointerId);
+  if (mode !== 'band') moveEdge(mode, ms);
+  e.preventDefault();
+});
+track.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  const ms = msAt(e.clientX);
+  if (drag.mode === 'band') {
+    state.offset = clamp(drag.offset + Math.round(ms - drag.from), -SCALE + state.tol, SCALE - state.tol);
+    update();
+  } else {
+    moveEdge(drag.mode, ms);
+  }
+});
+const endDrag = () => { drag = null; };
+track.addEventListener('pointerup', endDrag);
+track.addEventListener('pointercancel', endDrag);
+
+for (let ms = -SCALE; ms <= SCALE; ms += 10) {
+  const span = document.createElement('span');
+  span.style.left = at(ms) + '%';
+  span.textContent = msText(ms, true);
+  if (ms === 0) span.className = 'zero-label';
+  $('ticks').appendChild(span);
+}
+
+$('hl').addEventListener('change', () => document.body.classList.toggle('plain', !$('hl').checked));
+
+$('toggle').addEventListener('click', () => {
+  const collapsed = $('controls').classList.toggle('collapsed');
+  $('toggle').textContent = collapsed ? '▸ Settings' : '▾ Settings';
+  $('toggle').setAttribute('aria-expanded', String(!collapsed));
+});
+
+function choose(sc) {
+  state.scenario = sc;
+  state.offset = sc.offset;
+  state.tol = sc.tol;
+  state.rows = makeRows(sc);
+  $('desc').textContent = sc.desc;
+  $('caption').textContent = sc.caption;
+  for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('active', b.dataset.id === sc.id);
+  update();
+}
+
+for (const sc of SCENARIOS) {
+  const b = document.createElement('button');
+  b.textContent = sc.title;
+  b.dataset.id = sc.id;
+  b.addEventListener('click', () => choose(sc));
+  $('tabs').appendChild(b);
+}
+
+new ResizeObserver(renderRows).observe(rowsEl);
+choose(SCENARIOS[0]);
+</script>
+<script>
+(function () {
+  "use strict";
+
+  var body = document.body;
+  var REPORT_ID = body.getAttribute("data-report-id") || location.pathname;
+  var REPORT_TITLE = body.getAttribute("data-report-title") || document.title;
+  var REPORT_VERSION = body.getAttribute("data-report-version") || "";
+  var KEY = "report-comments:" + REPORT_ID;
+  var root = document.querySelector("main") || body;
+  var BLOCK = /^(P|LI|TD|TH|H1|H2|H3|H4|H5|H6|DIV|DD|DT|DL|FIGCAPTION|FIGURE|BLOCKQUOTE|SECTION|HEADER|FOOTER|SUMMARY|DETAILS|UL|OL|TABLE|THEAD|TBODY|TR|MAIN|NAV)$/;
+
+  var storageOk = true;
+  var comments = load();
+  var pending = null;
+  var draft = null;
+  var ui = {};
+  var selTimer = null;
+  var toastTimer = null;
+
+  function load() {
+    try {
+      var raw = window.localStorage.getItem(KEY);
+      if (!raw) return [];
+      var data = JSON.parse(raw);
+      return data && Array.isArray(data.comments) ? data.comments : [];
+    } catch (e) {
+      storageOk = false;
+      return [];
+    }
+  }
+
+  function strip(c) {
+    return {
+      id: c.id, quote: c.quote, prefix: c.prefix, suffix: c.suffix, pos: c.pos,
+      path: c.path, anchor: c.anchor, fig: c.fig || "", text: c.text,
+      created: c.created, updated: c.updated || c.created
+    };
+  }
+
+  function persist() {
+    try {
+      window.localStorage.setItem(KEY, JSON.stringify({ v: 1, comments: comments.map(strip) }));
+      storageOk = true;
+    } catch (e) {
+      storageOk = false;
+    }
+    if (ui.storageNote) ui.storageNote.hidden = storageOk;
+  }
+
+  function elOf(node) {
+    return node && node.nodeType === 1 ? node : node && node.parentNode;
+  }
+
+  function inUi(node) {
+    var e = elOf(node);
+    return !!(e && e.closest && e.closest(".cm-ui"));
+  }
+
+  function skippable(node) {
+    for (var p = node.parentNode; p && p !== root; p = p.parentNode) {
+      if (p.nodeType !== 1) continue;
+      var tag = p.nodeName.toUpperCase();
+      if (tag === "SVG" || tag === "SCRIPT" || tag === "STYLE" || tag === "TEXTAREA") return true;
+      if (p.classList && p.classList.contains("cm-ui")) return true;
+    }
+    return false;
+  }
+
+  function blockOf(node) {
+    for (var p = node.parentNode; p && p !== root; p = p.parentNode) {
+      if (p.nodeType === 1 && BLOCK.test(p.nodeName.toUpperCase())) return p;
+    }
+    return root;
+  }
+
+  function buildIndex() {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var chars = [], nodes = [], offs = [];
+    var lastSpace = true, lastBlock = null, n;
+    while ((n = walker.nextNode())) {
+      if (!n.data || skippable(n)) continue;
+      var blk = blockOf(n);
+      if (blk !== lastBlock) {
+        if (!lastSpace && chars.length) {
+          chars.push(" ");
+          nodes.push(n);
+          offs.push(0);
+          lastSpace = true;
+        }
+        lastBlock = blk;
+      }
+      var d = n.data;
+      for (var i = 0; i < d.length; i++) {
+        var ch = d.charAt(i);
+        if (/\s/.test(ch)) {
+          if (lastSpace) continue;
+          ch = " ";
+          lastSpace = true;
+        } else {
+          lastSpace = false;
+        }
+        chars.push(ch);
+        nodes.push(n);
+        offs.push(i);
+      }
+    }
+    return { text: chars.join(""), nodes: nodes, offs: offs };
+  }
+
+  function boundaryIndex(idx, container, offset) {
+    var probe = document.createRange();
+    try {
+      probe.setStart(container, offset);
+    } catch (e) {
+      return -1;
+    }
+    probe.collapse(true);
+    var lo = 0, hi = idx.nodes.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      var c;
+      try {
+        c = probe.comparePoint(idx.nodes[mid], idx.offs[mid]);
+      } catch (e) {
+        c = 1;
+      }
+      if (c < 0) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
+
+  function textOf(e, max) {
+    var t = (e.textContent || "").replace(/\s+/g, " ").trim();
+    return max && t.length > max ? t.slice(0, max - 1) + "…" : t;
+  }
+
+  function locate(e) {
+    var parts = [];
+    var sec = e.closest("section");
+    if (sec) {
+      var h2 = sec.querySelector("h2");
+      if (h2) parts.push(textOf(h2));
+      var h3s = sec.querySelectorAll("h3"), cur = null;
+      for (var i = 0; i < h3s.length; i++) {
+        if (h3s[i] === e || h3s[i].contains(e) || (h3s[i].compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)) cur = h3s[i];
+      }
+      if (cur) parts.push(textOf(cur, 90));
+    } else if (e.closest("header")) {
+      parts.push("Шапка отчёта");
+    } else if (e.closest("footer")) {
+      parts.push("Подвал отчёта");
+    }
+    var tr = e.closest("tr");
+    if (tr && !e.closest("thead")) {
+      var td = tr.querySelector("td");
+      if (td) parts.push("строка «" + textOf(td, 60) + "»");
+    }
+    var fig = e.closest("figure");
+    if (fig) {
+      var ft = fig.querySelector(".ftitle");
+      if (ft) parts.push("график «" + textOf(ft, 70) + "»");
+    }
+    var tier = e.closest(".tier");
+    if (tier) {
+      var h4 = tier.querySelector("h4");
+      if (h4) parts.push("карточка «" + textOf(h4) + "»");
+    }
+    var kpi = e.closest(".kpi");
+    if (kpi) {
+      var b = kpi.querySelector("b");
+      if (b) parts.push("карточка «" + textOf(b) + "»");
+    }
+    var li = e.closest("ol.key > li");
+    if (li) parts.push("пункт " + (Array.prototype.indexOf.call(li.parentNode.children, li) + 1));
+    var labeled = e.closest("[data-cm-label]");
+    if (labeled) parts.push(labeled.getAttribute("data-cm-label"));
+    return parts.join(" › ");
+  }
+
+  function anchorOf(e) {
+    var a = e.closest("[id]");
+    return a ? a.id : "";
+  }
+
+  function figPos(idx, fig) {
+    for (var i = 0; i < idx.nodes.length; i++) {
+      if (fig.contains(idx.nodes[i])) return i;
+    }
+    return 0;
+  }
+
+  function describe(range) {
+    var startEl = elOf(range.startContainer);
+    var endEl = elOf(range.endContainer);
+    if (!startEl || !endEl) return null;
+    var info = { path: locate(startEl), anchor: anchorOf(startEl), fig: "" };
+    var idx = buildIndex();
+    var s = boundaryIndex(idx, range.startContainer, range.startOffset);
+    var e = boundaryIndex(idx, range.endContainer, range.endOffset);
+    if (s < 0 || e < 0) return null;
+    while (s < e && idx.text.charAt(s) === " ") s++;
+    while (e > s && idx.text.charAt(e - 1) === " ") e--;
+    if (e > s) {
+      info.quote = idx.text.slice(s, e);
+      info.prefix = idx.text.slice(Math.max(0, s - 40), s);
+      info.suffix = idx.text.slice(e, e + 40);
+      info.pos = s;
+      return info;
+    }
+    var fig = startEl.closest("figure") || endEl.closest("figure");
+    var t = range.toString().replace(/\s+/g, " ").trim();
+    if (!t || !fig || !fig.id) return null;
+    info.quote = t;
+    info.prefix = "";
+    info.suffix = "";
+    info.pos = figPos(idx, fig);
+    info.fig = fig.id;
+    return info;
+  }
+
+  function commonTail(a, b) {
+    var n = 0;
+    while (n < a.length && n < b.length && a.charAt(a.length - 1 - n) === b.charAt(b.length - 1 - n)) n++;
+    return n;
+  }
+
+  function commonHead(a, b) {
+    var n = 0;
+    while (n < a.length && n < b.length && a.charAt(n) === b.charAt(n)) n++;
+    return n;
+  }
+
+  function findQuote(idx, c) {
+    var q = c.quote;
+    if (!q) return null;
+    var hits = [], from = 0, i;
+    while ((i = idx.text.indexOf(q, from)) !== -1 && hits.length < 200) {
+      hits.push(i);
+      from = i + 1;
+    }
+    if (!hits.length) return null;
+    var best = hits[0], bestScore = -Infinity;
+    for (var k = 0; k < hits.length; k++) {
+      var h = hits[k];
+      var pre = idx.text.slice(Math.max(0, h - (c.prefix || "").length), h);
+      var suf = idx.text.slice(h + q.length, h + q.length + (c.suffix || "").length);
+      var score = commonTail(pre, c.prefix || "") + commonHead(suf, c.suffix || "") - Math.abs(h - (c.pos || 0)) / 1e6;
+      if (score > bestScore) {
+        bestScore = score;
+        best = h;
+      }
+    }
+    return [best, best + q.length];
+  }
+
+  function wrapRange(range, c) {
+    var container = range.commonAncestorContainer;
+    if (container.nodeType === 3) container = container.parentNode;
+    var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+    var parts = [], n;
+    while ((n = walker.nextNode())) {
+      if (!range.intersectsNode(n) || skippable(n)) continue;
+      var a = n === range.startContainer ? range.startOffset : 0;
+      var b = n === range.endContainer ? range.endOffset : n.data.length;
+      if (b > a && n.data.slice(a, b).trim()) parts.push([n, a, b]);
+    }
+    parts.forEach(function (p) {
+      var node = p[0], a = p[1], b = p[2];
+      if (a > 0) {
+        node = node.splitText(a);
+        b -= a;
+      }
+      if (b < node.data.length) node.splitText(b);
+      var m = document.createElement("mark");
+      m.className = "cm-hl";
+      m.setAttribute("data-cid", c.id);
+      m.title = c.text || "";
+      node.parentNode.insertBefore(m, node);
+      m.appendChild(node);
+    });
+    return parts.length;
+  }
+
+  function markFigure(f, c) {
+    f.classList.add("cm-fig-hl");
+    var ids = (f.getAttribute("data-cids") || "").split(" ").filter(Boolean);
+    if (ids.indexOf(c.id) < 0) ids.push(c.id);
+    f.setAttribute("data-cids", ids.join(" "));
+  }
+
+  function applyHighlight(c) {
+    c.missing = false;
+    if (c.fig) {
+      var f = document.getElementById(c.fig);
+      if (f) {
+        markFigure(f, c);
+        return true;
+      }
+      c.missing = true;
+      return false;
+    }
+    var idx = buildIndex();
+    var hit = findQuote(idx, c);
+    if (!hit) {
+      c.missing = true;
+      return false;
+    }
+    c.pos = hit[0];
+    var r = document.createRange();
+    r.setStart(idx.nodes[hit[0]], idx.offs[hit[0]]);
+    r.setEnd(idx.nodes[hit[1] - 1], idx.offs[hit[1] - 1] + 1);
+    wrapRange(r, c);
+    return true;
+  }
+
+  function unwrap(cid) {
+    var marks = root.querySelectorAll('mark.cm-hl[data-cid="' + cid + '"]');
+    Array.prototype.forEach.call(marks, function (m) {
+      var p = m.parentNode;
+      while (m.firstChild) p.insertBefore(m.firstChild, m);
+      p.removeChild(m);
+      p.normalize();
+    });
+    Array.prototype.forEach.call(root.querySelectorAll("figure.cm-fig-hl"), function (f) {
+      var ids = (f.getAttribute("data-cids") || "").split(" ").filter(function (x) { return x && x !== cid; });
+      if (ids.length) {
+        f.setAttribute("data-cids", ids.join(" "));
+      } else {
+        f.removeAttribute("data-cids");
+        f.classList.remove("cm-fig-hl");
+      }
+    });
+  }
+
+  function byPos(a, b) {
+    return (a.pos || 0) - (b.pos || 0);
+  }
+
+  function find(cid) {
+    for (var i = 0; i < comments.length; i++) if (comments[i].id === cid) return comments[i];
+    return null;
+  }
+
+  function clip(s, n) {
+    return s.length > n ? s.slice(0, n - 1) + "…" : s;
+  }
+
+  function newId() {
+    return "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  function make(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function button(label, act, cls) {
+    var b = make("button", "cm-btn" + (cls ? " " + cls : ""), label);
+    b.type = "button";
+    if (act) b.setAttribute("data-act", act);
+    return b;
+  }
+
+  function buildUi() {
+    ui.selBtn = button("Комментировать", "comment", "cm-ui cm-sel-btn primary");
+    ui.selBtn.hidden = true;
+    ui.selBtn.addEventListener("mousedown", function (e) { e.preventDefault(); });
+
+    ui.pop = make("div", "cm-ui cm-pop");
+    ui.pop.hidden = true;
+    ui.pop.appendChild(make("div", "cm-pop-label", "Комментарий к фрагменту"));
+    ui.popQuote = make("div", "cm-pop-quote");
+    ui.pop.appendChild(ui.popQuote);
+    ui.popText = make("textarea", "cm-textarea");
+    ui.popText.rows = 4;
+    ui.popText.placeholder = "Что поправить, уточнить или проверить";
+    ui.pop.appendChild(ui.popText);
+    var pa = make("div", "cm-row");
+    pa.appendChild(button("Сохранить", "save", "primary"));
+    pa.appendChild(button("Отмена", "cancel"));
+    pa.appendChild(make("span", "cm-kbd", "Ctrl+Enter — сохранить · Esc — отмена"));
+    ui.pop.appendChild(pa);
+
+    ui.fab = button("Комментарии", "toggle", "cm-ui cm-fab");
+    ui.fabCount = make("span", "cm-count", "0");
+    ui.fab.appendChild(ui.fabCount);
+
+    ui.drawer = make("aside", "cm-ui cm-drawer");
+    ui.drawer.hidden = true;
+    ui.drawer.setAttribute("aria-label", "Комментарии к отчёту");
+    var head = make("div", "cm-head");
+    head.appendChild(make("b", "cm-title", "Комментарии"));
+    ui.copyAll = button("Скопировать всё", "copy-all", "primary");
+    head.appendChild(ui.copyAll);
+    ui.clearAll = button("Удалить все", "clear", "cm-danger");
+    head.appendChild(ui.clearAll);
+    var x = button("×", "close", "cm-x");
+    x.setAttribute("aria-label", "Закрыть");
+    head.appendChild(x);
+    ui.drawer.appendChild(head);
+    ui.drawer.appendChild(make("p", "cm-hint", "Выделите фрагмент в отчёте — рядом появится кнопка «Комментировать». «Скопировать всё» кладёт комментарии в буфер обмена текстом, который можно вставить в чат. Комментарии хранятся в этом браузере."));
+    ui.storageNote = make("p", "cm-warn", "Браузер не даёт сохранить комментарии: после закрытия страницы они пропадут. Скопируйте их до закрытия.");
+    ui.storageNote.hidden = storageOk;
+    ui.drawer.appendChild(ui.storageNote);
+    ui.list = make("ol", "cm-list");
+    ui.drawer.appendChild(ui.list);
+
+    ui.toast = make("div", "cm-ui cm-toast");
+    ui.toast.hidden = true;
+    ui.toast.setAttribute("role", "status");
+
+    ui.manual = make("div", "cm-ui cm-manual");
+    ui.manual.hidden = true;
+    var box = make("div", "cm-manual-box");
+    box.appendChild(make("b", null, "Браузер не дал скопировать автоматически. Выделите текст и нажмите Ctrl+C."));
+    ui.manualText = make("textarea", "cm-textarea");
+    ui.manualText.rows = 14;
+    ui.manualText.readOnly = true;
+    box.appendChild(ui.manualText);
+    var mr = make("div", "cm-row");
+    mr.appendChild(button("Закрыть", "manual-close"));
+    box.appendChild(mr);
+    ui.manual.appendChild(box);
+
+    [ui.selBtn, ui.pop, ui.fab, ui.drawer, ui.toast, ui.manual].forEach(function (e) { body.appendChild(e); });
+  }
+
+  function placeNear(e, range, width, small) {
+    var rects = range.getClientRects();
+    var r = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
+    var sx = window.pageXOffset, sy = window.pageYOffset;
+    var vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+    var left = (small ? r.right - width / 2 : r.left) + sx;
+    left = Math.max(sx + 8, Math.min(left, sx + vw - width - 8));
+    var top = r.bottom + sy + 8;
+    var h = e.offsetHeight || (small ? 34 : 230);
+    if (!small && r.bottom + h + 16 > vh && r.top - h - 16 > 0) top = r.top + sy - h - 8;
+    e.style.left = left + "px";
+    e.style.top = top + "px";
+  }
+
+  function hideSelBtn() {
+    ui.selBtn.hidden = true;
+  }
+
+  function checkSelection() {
+    if (!ui.pop.hidden) return;
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+      hideSelBtn();
+      return;
+    }
+    var r = sel.getRangeAt(0);
+    if (!root.contains(r.startContainer) || !root.contains(r.endContainer) || inUi(r.startContainer) || inUi(r.endContainer) || !sel.toString().trim()) {
+      hideSelBtn();
+      return;
+    }
+    pending = r.cloneRange();
+    ui.selBtn.hidden = false;
+    placeNear(ui.selBtn, r, ui.selBtn.offsetWidth || 150, true);
+  }
+
+  function openPopover() {
+    if (!pending) return;
+    var info = describe(pending);
+    hideSelBtn();
+    if (!info) {
+      toast("Этот фрагмент нельзя прокомментировать");
+      return;
+    }
+    draft = info;
+    ui.popQuote.textContent = clip(info.quote, 280);
+    ui.popText.value = "";
+    ui.pop.hidden = false;
+    placeNear(ui.pop, pending, Math.min(400, document.documentElement.clientWidth - 16), false);
+    ui.popText.focus();
+  }
+
+  function closePopover() {
+    ui.pop.hidden = true;
+    draft = null;
+    pending = null;
+  }
+
+  function savePopover() {
+    if (!draft) {
+      closePopover();
+      return;
+    }
+    var now = new Date().toISOString();
+    var c = {
+      id: newId(), quote: draft.quote, prefix: draft.prefix, suffix: draft.suffix, pos: draft.pos,
+      path: draft.path, anchor: draft.anchor, fig: draft.fig, text: ui.popText.value.trim(),
+      created: now, updated: now
+    };
+    comments.push(c);
+    applyHighlight(c);
+    comments.sort(byPos);
+    persist();
+    renderList();
+    closePopover();
+    var sel = window.getSelection();
+    if (sel) sel.removeAllRanges();
+    toast("Комментарий сохранён · всего " + comments.length);
+    return c;
+  }
+
+  function renderList(focusId) {
+    ui.list.textContent = "";
+    ui.fabCount.textContent = String(comments.length);
+    ui.copyAll.disabled = ui.clearAll.disabled = comments.length === 0;
+    comments.forEach(function (c, i) {
+      var li = make("li", "cm-item" + (c.missing ? " cm-missing" : ""));
+      li.setAttribute("data-cid", c.id);
+      li.appendChild(make("div", "cm-path", "№" + (i + 1) + " · " + (c.path || "Без раздела")));
+      li.appendChild(make("blockquote", "cm-quote", clip(c.quote, 420)));
+      if (c.missing) li.appendChild(make("div", "cm-warn", "Фрагмент не найден в текущей версии отчёта"));
+      li.appendChild(make("div", "cm-text" + (c.text ? "" : " cm-empty"), c.text || "без текста"));
+      var row = make("div", "cm-row");
+      row.appendChild(button("Показать", "goto"));
+      row.appendChild(button("Изменить", "edit"));
+      row.appendChild(button("Копировать", "copy"));
+      row.appendChild(button("Удалить", "del", "cm-danger"));
+      li.appendChild(row);
+      ui.list.appendChild(li);
+    });
+    if (focusId) flashItem(focusId);
+  }
+
+  function flashItem(cid) {
+    var li = ui.list.querySelector('.cm-item[data-cid="' + cid + '"]');
+    if (!li) return;
+    li.scrollIntoView({ block: "nearest" });
+    li.classList.add("cm-item-flash");
+    setTimeout(function () { li.classList.remove("cm-item-flash"); }, 1600);
+  }
+
+  function openDrawer(cid) {
+    ui.drawer.hidden = false;
+    hideSelBtn();
+    if (cid) flashItem(cid);
+  }
+
+  function closeDrawer() {
+    ui.drawer.hidden = true;
+  }
+
+  function gotoComment(cid) {
+    var c = find(cid);
+    if (!c) return;
+    var marks = root.querySelectorAll('mark.cm-hl[data-cid="' + cid + '"]');
+    var target = marks[0] || (c.fig && document.getElementById(c.fig)) || (c.anchor && document.getElementById(c.anchor));
+    if (!target) return;
+    if (document.documentElement.clientWidth < 900) closeDrawer();
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    Array.prototype.forEach.call(marks, function (m) {
+      m.classList.remove("cm-flash");
+      void m.offsetWidth;
+      m.classList.add("cm-flash");
+    });
+  }
+
+  function editComment(li, cid) {
+    var c = find(cid);
+    if (!c || li.classList.contains("cm-editing")) return;
+    li.classList.add("cm-editing");
+    var textEl = li.querySelector(".cm-text");
+    var ta = make("textarea", "cm-textarea");
+    ta.rows = 4;
+    ta.value = c.text || "";
+    textEl.replaceWith(ta);
+    var row = li.querySelector(".cm-row");
+    row.textContent = "";
+    row.appendChild(button("Сохранить", "edit-save", "primary"));
+    row.appendChild(button("Отмена", "edit-cancel"));
+    ta.focus();
+  }
+
+  function finishEdit(li, cid, save) {
+    var c = find(cid);
+    if (c && save) {
+      var ta = li.querySelector("textarea");
+      c.text = ta ? ta.value.trim() : c.text;
+      c.updated = new Date().toISOString();
+      Array.prototype.forEach.call(root.querySelectorAll('mark.cm-hl[data-cid="' + cid + '"]'), function (m) { m.title = c.text; });
+      persist();
+    }
+    renderList(cid);
+  }
+
+  function removeComment(cid, quiet) {
+    var c = find(cid);
+    if (!c) return;
+    if (!quiet && !window.confirm("Удалить комментарий?")) return;
+    unwrap(cid);
+    comments = comments.filter(function (x) { return x.id !== cid; });
+    persist();
+    renderList();
+  }
+
+  function clearAll(quiet) {
+    if (!comments.length) return;
+    if (!quiet && !window.confirm("Удалить все комментарии (" + comments.length + ")?")) return;
+    comments.forEach(function (c) { unwrap(c.id); });
+    comments = [];
+    persist();
+    renderList();
+  }
+
+  function toMarkdown(list) {
+    var lines = ["Комментарии к отчёту «" + REPORT_TITLE + "»"];
+    var meta = [];
+    var file = decodeURIComponent(location.pathname || "");
+    if (file) meta.push("файл " + file);
+    if (REPORT_VERSION) meta.push("версия отчёта " + REPORT_VERSION);
+    meta.push("комментариев: " + list.length + (list.length !== comments.length ? " из " + comments.length : ""));
+    lines.push(meta.join(" · "));
+    list.forEach(function (c) {
+      lines.push("");
+      lines.push("## Комментарий " + (comments.indexOf(c) + 1) + " · " + (c.path || "Без раздела"));
+      lines.push("> " + c.quote);
+      if (c.missing) lines.push("(фрагмент не найден в текущей версии отчёта)");
+      lines.push("");
+      lines.push(c.text || "(без текста)");
+    });
+    return lines.join("\n");
+  }
+
+  function toast(msg) {
+    ui.toast.textContent = msg;
+    ui.toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { ui.toast.hidden = true; }, 2600);
+  }
+
+  function showManualCopy(text) {
+    ui.manualText.value = text;
+    ui.manual.hidden = false;
+    ui.manualText.focus();
+    ui.manualText.select();
+  }
+
+  function copyText(text, okMsg) {
+    function fallback() {
+      var ta = make("textarea", "cm-ui");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch (e) {
+        ok = false;
+      }
+      body.removeChild(ta);
+      if (ok) toast(okMsg); else showManualCopy(text);
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function () { toast(okMsg); }, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  function copyAll() {
+    if (!comments.length) return;
+    copyText(toMarkdown(comments), "Скопировано комментариев: " + comments.length + " — вставьте их в чат");
+  }
+
+  function copyOne(cid) {
+    var c = find(cid);
+    if (c) copyText(toMarkdown([c]), "Комментарий скопирован");
+  }
+
+  function handleAct(act, node) {
+    var item = node.closest(".cm-item");
+    var cid = item ? item.getAttribute("data-cid") : null;
+    switch (act) {
+      case "comment": openPopover(); break;
+      case "save": savePopover(); break;
+      case "cancel": closePopover(); break;
+      case "toggle": if (ui.drawer.hidden) openDrawer(); else closeDrawer(); break;
+      case "close": closeDrawer(); break;
+      case "copy-all": copyAll(); break;
+      case "clear": clearAll(false); break;
+      case "goto": gotoComment(cid); break;
+      case "edit": editComment(item, cid); break;
+      case "edit-save": finishEdit(item, cid, true); break;
+      case "edit-cancel": finishEdit(item, cid, false); break;
+      case "copy": copyOne(cid); break;
+      case "del": removeComment(cid, false); break;
+      case "manual-close": ui.manual.hidden = true; break;
+    }
+  }
+
+  function bind() {
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      if (!t.closest) return;
+      var actEl = t.closest(".cm-ui[data-act], .cm-ui [data-act]");
+      if (actEl) {
+        handleAct(actEl.getAttribute("data-act"), actEl);
+        return;
+      }
+      var mark = t.closest("mark.cm-hl");
+      var sel = window.getSelection();
+      if (mark && (!sel || sel.isCollapsed)) openDrawer(mark.getAttribute("data-cid"));
+    });
+    document.addEventListener("mouseup", function (e) {
+      if (!inUi(e.target)) setTimeout(checkSelection, 0);
+    });
+    document.addEventListener("selectionchange", function () {
+      clearTimeout(selTimer);
+      selTimer = setTimeout(checkSelection, 250);
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") {
+        if (!ui.manual.hidden) ui.manual.hidden = true;
+        else if (!ui.pop.hidden) closePopover();
+        else if (!ui.drawer.hidden) closeDrawer();
+        else hideSelBtn();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        var a = document.activeElement;
+        if (!ui.pop.hidden && a === ui.popText) {
+          e.preventDefault();
+          savePopover();
+          return;
+        }
+        var li = a && a.closest && a.closest(".cm-item.cm-editing");
+        if (li) {
+          e.preventDefault();
+          finishEdit(li, li.getAttribute("data-cid"), true);
+        }
+      }
+    });
+  }
+
+  function restoreAll() {
+    comments.forEach(applyHighlight);
+    comments.sort(byPos);
+  }
+
+  function reload() {
+    comments.forEach(function (c) { unwrap(c.id); });
+    comments = load();
+    restoreAll();
+    renderList();
+  }
+
+  buildUi();
+  bind();
+  restoreAll();
+  renderList();
+
+  window.ReportComments = {
+    list: function () { return comments.map(function (c) { var s = strip(c); s.missing = !!c.missing; return s; }); },
+    markdown: function () { return toMarkdown(comments); },
+    addFromRange: function (range, text) {
+      pending = range.cloneRange();
+      draft = describe(pending);
+      if (!draft) return null;
+      ui.popText.value = text || "";
+      return savePopover();
+    },
+    showFor: function (range) {
+      pending = range.cloneRange();
+      openPopover();
+    },
+    open: openDrawer,
+    close: closeDrawer,
+    remove: function (cid) { removeComment(cid, true); },
+    clear: function () { clearAll(true); },
+    reload: reload
+  };
+})();
+
+</script>
+</body>
+</html>

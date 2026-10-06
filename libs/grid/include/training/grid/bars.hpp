@@ -1,5 +1,6 @@
 #pragma once
 
+#include "training/grid/hit_window.hpp"
 #include "training/grid/mode.hpp"
 #include "training/grid/timeline.hpp"
 
@@ -20,9 +21,9 @@ struct RowSlot {
   /// К узлу пришло больше одной ноты; в `deviation` — ближайшая к узлу.
   bool extra = false;
 
-  /// Допуск, мс, который действовал, когда появилось значение `deviation`
-  /// (design.md D5).
-  double toleranceMs = 0.0;
+  /// Окно попадания, которое действовало, когда появилось значение
+  /// `deviation`.
+  HitWindow window;
 };
 
 /// Удар строки такта.
@@ -52,9 +53,9 @@ struct BarRow {
   /// D1).
   bool folded = false;
 
-  /// Допуск, мс, который действовал, когда воспроизведение ушло из такта;
-  /// пусто, пока не ушло.
-  std::optional<double> leftToleranceMs;
+  /// Окно попадания, которое действовало, когда воспроизведение ушло из
+  /// такта; пусто, пока не ушло.
+  std::optional<HitWindow> leftWindow;
 
   /// Среднее отклонение значений строки, реальные секунды; есть, когда
   /// значений больше одного. Лишние ноты не входят: у узла одно значение.
@@ -93,7 +94,7 @@ public:
   ///
   /// Вход в другой такт или прыжок позиции назад больше чем на полудара
   /// (петля, перемотка) заводит строку сверху: свободную строку ранней ноты
-  /// этого такта или новую. Уходящая строка запоминает допуск. Если она без
+  /// этого такта или новую. Уходящая строка запоминает окно попадания. Если она без
   /// значений, а видимая строка под ней — тоже, уходящая сворачивается, и
   /// новая встаёт на её место. Удары верхней строки до позиции включительно,
   /// ещё не начатые, начинаются в текущем режиме.
@@ -102,10 +103,10 @@ public:
   ///   петлю.
   /// @param loopBeats длина петли в ударах, если позиция в петле с повтором;
   ///   иначе 0.
-  /// @param toleranceMs допуск, мс, на этот момент.
+  /// @param window окно попадания на этот момент.
   /// @return правда, если сверху встала строка другого такта или нового
   ///   прохода.
-  bool play(double beats, double loopBeats, double toleranceMs, const Timeline &timeline);
+  bool play(double beats, double loopBeats, const HitWindow &window, const Timeline &timeline);
 
   /// Отмечает остановку воспроизведения: текущего удара больше нет, строки
   /// остаются. Следующий `play` не считается прыжком назад.
@@ -123,14 +124,14 @@ public:
   /// строки, далеко впереди позиции или до первого `play` не кладётся никуда.
   ///
   /// Если у узла уже есть значение, остаётся ближайшее к узлу, а узел
-  /// получает отметку лишней ноты. Значение запоминает допуск. Свёрнутая
+  /// получает отметку лишней ноты. Значение запоминает окно попадания. Свёрнутая
   /// строка, получив значение, снова видна.
   ///
   /// @param time время ноты на шкале, с.
   /// @param rate скорость воспроизведения проекта, больше нуля: отклонение на
   ///   шкале делится на неё и хранится в реальных секундах.
-  /// @param toleranceMs допуск, мс, на этот момент.
-  void addNote(double time, double rate, double toleranceMs, const Timeline &timeline);
+  /// @param window окно попадания на этот момент.
+  void addNote(double time, double rate, const HitWindow &window, const Timeline &timeline);
 
   /// Забывает все строки и позицию воспроизведения; режим остаётся.
   void clear();
@@ -146,7 +147,7 @@ public:
 private:
   BarRow *currentRow();
   BarRow *rowFor(const Bar &bar, double nodeBeats, bool create);
-  void enter(const Bar &bar, double toleranceMs);
+  void enter(const Bar &bar, const HitWindow &window);
   void trim();
 
   std::size_t keep_;

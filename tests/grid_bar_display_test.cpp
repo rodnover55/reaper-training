@@ -11,6 +11,7 @@
 
 using training::grid::Bars;
 using training::grid::BarView;
+using training::grid::HitWindow;
 using training::grid::Mode;
 using training::grid::present;
 using training::grid::Timeline;
@@ -26,10 +27,18 @@ const SteadyTimeline &steady() {
   return timeline;
 }
 
+/// Окно попадания тестов, если не сказано другое: 0 ± 10 мс.
+constexpr HitWindow kWindow{.offsetMs = 0.0, .toleranceMs = 10.0};
+
+/// Окно попадания по центру клика с допуском `toleranceMs`.
+HitWindow tolerance(double toleranceMs) {
+  return {.offsetMs = 0.0, .toleranceMs = toleranceMs};
+}
+
 /// Нота через `ms` мс после узла `beats`.
-void note(Bars &bars, double beats, double ms, double toleranceMs = 10.0,
+void note(Bars &bars, double beats, double ms, const HitWindow &window = kWindow,
           const Timeline &timeline = steady()) {
-  bars.addNote(timeline.timeAt(beats) + ms / 1000.0, 1.0, toleranceMs, timeline);
+  bars.addNote(timeline.timeAt(beats) + ms / 1000.0, 1.0, window, timeline);
 }
 
 /// Тексты значений строки по порядку.
@@ -46,7 +55,7 @@ std::vector<std::string> texts(const BarView &view) {
 TEST_CASE("показ тактов: шестнадцатые в 4/4 — четыре значения на ударах и двенадцать между") {
   Bars bars;
   bars.setMode(Mode::Sixteenths);
-  bars.play(3.9, 0.0, 10.0, steady());
+  bars.play(3.9, 0.0, kWindow, steady());
   for (int node = 0; node < 16; ++node)
     note(bars, node / 4.0, 1.0);
 
@@ -67,7 +76,7 @@ TEST_CASE("показ тактов: шестнадцатые в 4/4 — четы
 TEST_CASE("показ тактов: восьмые в режиме «шестнадцатые» — узлы между ними пустые") {
   Bars bars;
   bars.setMode(Mode::Sixteenths);
-  bars.play(3.9, 0.0, 10.0, steady());
+  bars.play(3.9, 0.0, kWindow, steady());
   for (int node = 0; node < 8; ++node)
     note(bars, node / 2.0, 2.0);
 
@@ -81,7 +90,7 @@ TEST_CASE("показ тактов: восьмые в режиме «шестн�
 TEST_CASE("показ тактов: пропуск на ударе — точка, лишняя нота — «+3*»") {
   Bars bars;
   bars.setMode(Mode::Eighths);
-  bars.play(1.9, 0.0, 10.0, steady());
+  bars.play(1.9, 0.0, kWindow, steady());
   note(bars, 0.5, 3.0);
   note(bars, 0.5, -20.0);
   note(bars, 1.0, 1.0);
@@ -95,11 +104,11 @@ TEST_CASE("показ тактов: пропуск на ударе — точк�
 TEST_CASE("показ тактов: смена допуска не перекрашивает показанные значения") {
   Bars bars;
   bars.setMode(Mode::Eighths);
-  bars.play(1.6, 0.0, 10.0, steady());
-  note(bars, 0.0, 13.0, 10.0);
-  note(bars, 0.5, 13.0, 10.0);
-  note(bars, 1.0, 13.0, 20.0);
-  note(bars, 1.5, 13.0, 20.0);
+  bars.play(1.6, 0.0, kWindow, steady());
+  note(bars, 0.0, 13.0, tolerance(10.0));
+  note(bars, 0.5, 13.0, tolerance(10.0));
+  note(bars, 1.0, 13.0, tolerance(20.0));
+  note(bars, 1.5, 13.0, tolerance(20.0));
 
   const BarView view = present(bars).front();
   REQUIRE(view.values.size() == 4);
@@ -112,12 +121,12 @@ TEST_CASE("показ тактов: смена допуска не перекр�
 TEST_CASE("показ тактов: у верхней строки текущий удар и нет среднего") {
   Bars bars;
   bars.setMode(Mode::Quarters);
-  bars.play(3.9, 0.0, 10.0, steady());
+  bars.play(3.9, 0.0, kWindow, steady());
   note(bars, 0.0, -4.0);
   note(bars, 1.0, 2.0);
   note(bars, 2.0, 6.0);
   note(bars, 3.0, 4.0);
-  bars.play(5.2, 0.0, 10.0, steady());
+  bars.play(5.2, 0.0, kWindow, steady());
   note(bars, 4.0, 1.0);
   note(bars, 5.0, 2.0);
 
@@ -140,7 +149,7 @@ TEST_CASE("показ тактов: у верхней строки текущи�
 
 TEST_CASE("показ тактов: номер такта «10000»") {
   Bars bars;
-  bars.play((10000 - 1) * 4.0 + 0.1, 0.0, 10.0, steady());
+  bars.play((10000 - 1) * 4.0 + 0.1, 0.0, kWindow, steady());
 
   const auto views = present(bars);
   REQUIRE(views.size() == 1);
@@ -151,7 +160,7 @@ TEST_CASE("показ тактов: номер такта «10000»") {
 TEST_CASE("показ тактов: самый мелкий режим такта и режим для ещё не начатых ударов") {
   Bars bars;
   bars.setMode(Mode::Eighths);
-  bars.play(0.1, 0.0, 10.0, steady());
+  bars.play(0.1, 0.0, kWindow, steady());
   CHECK(present(bars).front().division == 2);
 
   bars.setMode(Mode::SixteenthTriplets);
@@ -170,8 +179,8 @@ TEST_CASE("показ тактов: маркеры смен темпа и раз
 
   Bars bars;
   for (const double beat : {0.1, 4.1, 8.1, 15.1, 18.1, 22.1}) {
-    bars.play(beat, 0.0, 10.0, timeline);
-    note(bars, beat - 0.1, 1.0, 10.0, timeline);
+    bars.play(beat, 0.0, kWindow, timeline);
+    note(bars, beat - 0.1, 1.0, tolerance(10.0), timeline);
   }
 
   const auto views = present(bars);
@@ -200,7 +209,7 @@ TEST_CASE("показ тактов: маркеры смен темпа и раз
 TEST_CASE("показ тактов: отклонение — целые миллисекунды со знаком и цвет по допуску") {
   Bars bars;
   bars.setMode(Mode::Quarters);
-  bars.play(3.9, 0.0, 10.0, steady());
+  bars.play(3.9, 0.0, kWindow, steady());
   note(bars, 0.0, -15.3);
   note(bars, 1.0, 5.0);
   note(bars, 2.0, 10.0);
@@ -211,14 +220,15 @@ TEST_CASE("показ тактов: отклонение — целые милл
   CHECK(view.values[0].cell.tone == Tone::Bad);
   CHECK(view.values[1].cell.tone == Tone::Good);
   CHECK(view.values[2].cell.tone == Tone::Good);
-  CHECK(view.values[3].cell.tone == Tone::Good);
+  // Смещение 0: «0» — ровно в смещение.
+  CHECK(view.values[3].cell.tone == Tone::Target);
 }
 
 TEST_CASE("показ тактов: цвет — по показанному числу") {
   // 10.4 мс показывается как «+10» и при допуске 10 — зелёное; −0.4 — «0».
   Bars bars;
   bars.setMode(Mode::Quarters);
-  bars.play(1.9, 0.0, 10.0, steady());
+  bars.play(1.9, 0.0, kWindow, steady());
   note(bars, 0.0, 10.4);
   note(bars, 1.0, -0.4);
 
@@ -233,11 +243,11 @@ TEST_CASE("показ тактов: отрицательное, нулевое �
   const std::vector<std::vector<double>> bars3{{-1.0, -2.0}, {-1.0, 1.0}, {12.0, 14.0}};
   for (std::size_t i = 0; i < bars3.size(); ++i) {
     const double start = static_cast<double>(i) * 4.0;
-    bars.play(start + 1.9, 0.0, 10.0, steady());
+    bars.play(start + 1.9, 0.0, kWindow, steady());
     note(bars, start, bars3[i][0]);
     note(bars, start + 1.0, bars3[i][1]);
   }
-  bars.play(12.1, 0.0, 10.0, steady());
+  bars.play(12.1, 0.0, kWindow, steady());
 
   const auto views = present(bars);
   REQUIRE(views.size() == 4);
@@ -249,8 +259,100 @@ TEST_CASE("показ тактов: отрицательное, нулевое �
 
 TEST_CASE("показ тактов: при скорости 0.8 разница 8 мс на шкале — «+10»") {
   Bars bars;
-  bars.play(0.2, 0.0, 10.0, steady());
-  bars.addNote(steady().timeAt(0.0) + 0.008, 0.8, 10.0, steady());
+  bars.play(0.2, 0.0, kWindow, steady());
+  bars.addNote(steady().timeAt(0.0) + 0.008, 0.8, kWindow, steady());
 
   CHECK(texts(present(bars).front()) == std::vector<std::string>{"+10"});
+}
+
+TEST_CASE("показ тактов: цвет по окну попадания позади клика") {
+  // Смещение +12, допуск 8: окно от +4 до +20.
+  const HitWindow behind{.offsetMs = 12.0, .toleranceMs = 8.0};
+  Bars bars;
+  bars.setMode(Mode::Sixteenths);
+  bars.play(1.9, 0.0, behind, steady());
+  note(bars, 0.0, 3.0, behind);
+  note(bars, 0.25, 4.0, behind);
+  note(bars, 0.5, 13.0, behind);
+  note(bars, 0.75, 20.0, behind);
+  note(bars, 1.0, 21.0, behind);
+  note(bars, 1.25, 12.0, behind);
+  note(bars, 1.5, 30.0, behind);
+  note(bars, 1.5, 12.0, behind);
+
+  const BarView view = present(bars).front();
+  CHECK(texts(view) ==
+        std::vector<std::string>{"+3", "+4", "+13", "+20", "+21", "+12", "+12*"});
+  CHECK(view.values[0].cell.tone == Tone::Bad);
+  CHECK(view.values[1].cell.tone == Tone::Good);
+  CHECK(view.values[2].cell.tone == Tone::Good);
+  CHECK(view.values[3].cell.tone == Tone::Good);
+  CHECK(view.values[4].cell.tone == Tone::Bad);
+  CHECK(view.values[5].cell.tone == Tone::Target);
+  CHECK(view.values[6].cell.tone == Tone::Target);
+}
+
+TEST_CASE("показ тактов: смещение с половиной — ровно в него оба соседних числа") {
+  const HitWindow half{.offsetMs = 7.5, .toleranceMs = 12.5};
+  Bars bars;
+  bars.setMode(Mode::Quarters);
+  bars.play(2.9, 0.0, half, steady());
+  note(bars, 0.0, 7.0, half);
+  note(bars, 1.0, 8.0, half);
+  note(bars, 2.0, 9.0, half);
+
+  const BarView view = present(bars).front();
+  CHECK(texts(view) == std::vector<std::string>{"+7", "+8", "+9"});
+  CHECK(view.values[0].cell.tone == Tone::Target);
+  CHECK(view.values[1].cell.tone == Tone::Target);
+  CHECK(view.values[2].cell.tone == Tone::Good);
+}
+
+TEST_CASE("показ тактов: смена смещения не меняет показанные значения") {
+  const HitWindow before{.offsetMs = 0.0, .toleranceMs = 8.0};
+  const HitWindow target{.offsetMs = 12.0, .toleranceMs = 8.0};
+  const HitWindow after{.offsetMs = 10.0, .toleranceMs = 8.0};
+  Bars bars;
+  bars.setMode(Mode::Quarters);
+  bars.play(2.9, 0.0, before, steady());
+  note(bars, 0.0, 13.0, before);
+  note(bars, 1.0, 12.0, target);
+  note(bars, 2.0, 12.0, after);
+
+  const BarView view = present(bars).front();
+  CHECK(view.values[0].cell.tone == Tone::Bad);
+  CHECK(view.values[1].cell.tone == Tone::Target);
+  CHECK(view.values[2].cell.tone == Tone::Good);
+}
+
+TEST_CASE("показ тактов: среднее, равное смещению, — зелёное, без подложки") {
+  const HitWindow behind{.offsetMs = 12.0, .toleranceMs = 8.0};
+  Bars bars;
+  bars.setMode(Mode::Quarters);
+  bars.play(1.9, 0.0, behind, steady());
+  note(bars, 0.0, 11.0, behind);
+  note(bars, 1.0, 13.0, behind);
+  bars.play(4.1, 0.0, behind, steady());
+
+  const auto views = present(bars);
+  REQUIRE(views.size() == 2);
+  REQUIRE(views[1].mean);
+  CHECK(views[1].mean->text == "+12.0");
+  CHECK(views[1].mean->tone == Tone::Good);
+}
+
+TEST_CASE("показ тактов: среднее красится по окну, когда воспроизведение ушло из такта") {
+  Bars bars;
+  bars.setMode(Mode::Quarters);
+  bars.play(1.9, 0.0, kWindow, steady());
+  note(bars, 0.0, 14.0);
+  note(bars, 1.0, 15.0);
+  bars.play(4.1, 0.0, HitWindow{.offsetMs = 12.0, .toleranceMs = 8.0}, steady());
+
+  const auto views = present(bars);
+  REQUIRE(views.size() == 2);
+  REQUIRE(views[1].mean);
+  CHECK(views[1].mean->text == "+14.5");
+  CHECK(views[1].mean->tone == Tone::Good);
+  CHECK(views[1].values[0].cell.tone == Tone::Bad);
 }

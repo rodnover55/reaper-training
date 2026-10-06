@@ -14,6 +14,7 @@ add_executable(training_tests
   onset_recordings_test.cpp
   grid_bar_display_test.cpp
   grid_bars_test.cpp
+  grid_hit_window_test.cpp
   grid_nodes_test.cpp
   grid_note_time_test.cpp
   grid_timeline_test.cpp

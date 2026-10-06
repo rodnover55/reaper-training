@@ -99,7 +99,8 @@ BarRow *Bars::currentRow() {
   return found == rows_.end() ? nullptr : &*found;
 }
 
-bool Bars::play(double beats, double loopBeats, double toleranceMs, const Timeline &timeline) {
+bool Bars::play(double beats, double loopBeats, const HitWindow &window,
+                const Timeline &timeline) {
   const bool jumpedBack = position_ && beats < *position_ - kJumpBack;
   position_ = beats;
   loopBeats_ = loopBeats;
@@ -109,7 +110,7 @@ bool Bars::play(double beats, double loopBeats, double toleranceMs, const Timeli
   const bool entering = !top || jumpedBack || beat < top->bar.firstBeat ||
                         beat >= top->bar.firstBeat + top->bar.meter.beats;
   if (entering)
-    enter(timeline.barOf(beat), toleranceMs);
+    enter(timeline.barOf(beat), window);
 
   BarRow &row = *currentRow();
   const auto index = static_cast<int>(beat - row.bar.firstBeat);
@@ -124,11 +125,11 @@ void Bars::stop() {
   currentBeat_.reset();
 }
 
-void Bars::enter(const Bar &bar, double toleranceMs) {
+void Bars::enter(const Bar &bar, const HitWindow &window) {
   // Уходящая строка — верхняя видимая, под ней — следующая видимая.
   const auto leaving = std::ranges::find_if(rows_, visible);
   if (leaving != rows_.end()) {
-    leaving->leftToleranceMs = toleranceMs;
+    leaving->leftWindow = window;
     const auto below = std::find_if(leaving + 1, rows_.end(), visible);
     if (!leaving->hasValues() && below != rows_.end() && !below->hasValues()) {
       // Позднее значение может прийти только в последнюю свёрнутую строку:
@@ -192,7 +193,8 @@ BarRow *Bars::rowFor(const Bar &bar, double nodeBeats, bool create) {
   return nullptr;
 }
 
-void Bars::addNote(double time, double rate, double toleranceMs, const Timeline &timeline) {
+void Bars::addNote(double time, double rate, const HitWindow &window,
+                   const Timeline &timeline) {
   if (!position_)
     return;
 
@@ -244,11 +246,11 @@ void Bars::addNote(double time, double rate, double toleranceMs, const Timeline 
     target.extra = true;
     if (std::abs(deviation) < std::abs(*target.deviation)) {
       target.deviation = deviation;
-      target.toleranceMs = toleranceMs;
+      target.window = window;
     }
   } else {
     target.deviation = deviation;
-    target.toleranceMs = toleranceMs;
+    target.window = window;
   }
 
   row->folded = false;

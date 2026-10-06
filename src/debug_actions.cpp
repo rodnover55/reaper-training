@@ -30,6 +30,7 @@
 #include "trainer.hpp"
 #include "window.hpp"
 
+#include "training/grid/hit_window.hpp"
 #include "training/onset/detector.hpp"
 
 #include <fmt/format.h>
@@ -250,6 +251,105 @@ void *snapshotVararg(void **args, int count) {
 const char *const kSnapshotDef =
     "bool\0const char*,int,int\0path,width,height\0"
     "reaper-training (debug): draw the bar rows like the window does into a PPM file";
+#endif
+
+/// Ставит окно попадания, как правка полей Offset, затем Tolerance: значения
+/// округляются до 0.5 мс и прижимаются к шкале. Показывает его в окне.
+void setHitWindow(double offsetMs, double toleranceMs) {
+  Settings settings = trainer().settings();
+  const grid::HitWindow hit =
+      grid::withTolerance(grid::withOffset(settings.window(), offsetMs, settings.scaleMs),
+                          toleranceMs, settings.scaleMs);
+  settings.offsetMs = hit.offsetMs;
+  settings.toleranceMs = hit.toleranceMs;
+  trainer().setSettings(settings);
+  showSettings();
+  refreshWindow();
+  journal("script hit window: offset {} ms, tolerance {} ms", trainer().settings().offsetMs,
+          trainer().settings().toleranceMs);
+}
+
+void *setHitWindowVararg(void **args, int count) {
+  if (count < 2)
+    return nullptr;
+  const auto number = [args](int index) {
+    return args[index] ? *static_cast<const double *>(args[index]) : 0.0;
+  };
+  setHitWindow(number(0), number(1));
+  return nullptr;
+}
+
+const char *const kSetHitWindowDef =
+    "void\0double,double\0offsetMs,toleranceMs\0"
+    "reaper-training (debug): set the hit window like typing Offset, then Tolerance";
+
+/// Тянет мышью по шкале окна попадания, как `dragGauge`.
+bool dragGaugeFromScript(double fromMs, double toMs) {
+  const bool dragged = dragGauge(fromMs, toMs);
+  journal("script drag gauge {} → {} ms: {}", fromMs, toMs, dragged);
+  return dragged;
+}
+
+void *dragGaugeVararg(void **args, int count) {
+  if (count < 2)
+    return nullptr;
+  const auto number = [args](int index) {
+    return args[index] ? *static_cast<const double *>(args[index]) : 0.0;
+  };
+  return reinterpret_cast<void *>(
+      static_cast<std::intptr_t>(dragGaugeFromScript(number(0), number(1))));
+}
+
+const char *const kDragGaugeDef =
+    "bool\0double,double\0fromMs,toMs\0"
+    "reaper-training (debug): drag the mouse along the hit window gauge from one place to "
+    "another, in ms of the gauge";
+
+/// Вписывает текст в поле окна, как `typeText`, и пишет в журнал, что
+/// осталось в поле.
+///
+/// @return ложь, если окно закрыто, поля нет, оно скрыто или текст пуст.
+bool typeTextFromScript(int control, const char *text) {
+  const std::optional<std::string> left = typeText(control, text);
+  journal("script type {} «{}»: {}", control, text ? text : "",
+          left ? fmt::format("field «{}»", *left) : std::string("not typed"));
+  return left.has_value();
+}
+
+void *typeTextVararg(void **args, int count) {
+  if (count < 2)
+    return nullptr;
+  return reinterpret_cast<void *>(static_cast<std::intptr_t>(
+      typeTextFromScript(static_cast<int>(reinterpret_cast<std::intptr_t>(args[0])),
+                         static_cast<const char *>(args[1]))));
+}
+
+const char *const kTypeTextDef =
+    "bool\0int,const char*\0control,text\0"
+    "reaper-training (debug): type text into a field of the trainer window by control id and "
+    "leave the field";
+
+#ifndef _WIN32
+/// Рисует шкалу окна попадания в файл PPM, как `snapshotGauge`.
+bool gaugeSnapshot(const char *path, int width, int height) {
+  const bool written = snapshotGauge(path, width, height);
+  journal("gauge snapshot {} {}x{}: {}", path ? path : "", width, height, written);
+  return written;
+}
+
+void *gaugeSnapshotVararg(void **args, int count) {
+  if (count < 3)
+    return nullptr;
+  const bool written =
+      gaugeSnapshot(static_cast<const char *>(args[0]),
+                    static_cast<int>(reinterpret_cast<std::intptr_t>(args[1])),
+                    static_cast<int>(reinterpret_cast<std::intptr_t>(args[2])));
+  return reinterpret_cast<void *>(static_cast<std::intptr_t>(written));
+}
+
+const char *const kGaugeSnapshotDef =
+    "bool\0const char*,int,int\0path,width,height\0"
+    "reaper-training (debug): draw the hit window gauge like the window does into a PPM file";
 #endif
 
 const char *const kAddNoteDef =
@@ -625,7 +725,25 @@ void registerDebugActions(reaper_plugin_info_t *rec) {
                reinterpret_cast<void *>(clickButtonVararg));
   hostRegister("APIdef_TrainingDebug_ClickButton", const_cast<char *>(kClickButtonDef));
 
+  hostRegister("API_TrainingDebug_SetHitWindow", reinterpret_cast<void *>(setHitWindow));
+  hostRegister("APIvararg_TrainingDebug_SetHitWindow",
+               reinterpret_cast<void *>(setHitWindowVararg));
+  hostRegister("APIdef_TrainingDebug_SetHitWindow", const_cast<char *>(kSetHitWindowDef));
+
+  hostRegister("API_TrainingDebug_DragGauge", reinterpret_cast<void *>(dragGaugeFromScript));
+  hostRegister("APIvararg_TrainingDebug_DragGauge", reinterpret_cast<void *>(dragGaugeVararg));
+  hostRegister("APIdef_TrainingDebug_DragGauge", const_cast<char *>(kDragGaugeDef));
+
+  hostRegister("API_TrainingDebug_TypeText", reinterpret_cast<void *>(typeTextFromScript));
+  hostRegister("APIvararg_TrainingDebug_TypeText", reinterpret_cast<void *>(typeTextVararg));
+  hostRegister("APIdef_TrainingDebug_TypeText", const_cast<char *>(kTypeTextDef));
+
 #ifndef _WIN32
+  hostRegister("API_TrainingDebug_SnapshotGauge", reinterpret_cast<void *>(gaugeSnapshot));
+  hostRegister("APIvararg_TrainingDebug_SnapshotGauge",
+               reinterpret_cast<void *>(gaugeSnapshotVararg));
+  hostRegister("APIdef_TrainingDebug_SnapshotGauge", const_cast<char *>(kGaugeSnapshotDef));
+
   hostRegister("API_TrainingDebug_SnapshotRows", reinterpret_cast<void *>(snapshot));
   hostRegister("APIvararg_TrainingDebug_SnapshotRows",
                reinterpret_cast<void *>(snapshotVararg));
@@ -648,7 +766,11 @@ void unregisterDebugActions() {
                reinterpret_cast<void *>(calibrateFromItem));
   hostRegister("-API_TrainingDebug_ClickButton",
                reinterpret_cast<void *>(clickButtonFromScript));
+  hostRegister("-API_TrainingDebug_SetHitWindow", reinterpret_cast<void *>(setHitWindow));
+  hostRegister("-API_TrainingDebug_DragGauge", reinterpret_cast<void *>(dragGaugeFromScript));
+  hostRegister("-API_TrainingDebug_TypeText", reinterpret_cast<void *>(typeTextFromScript));
 #ifndef _WIN32
+  hostRegister("-API_TrainingDebug_SnapshotGauge", reinterpret_cast<void *>(gaugeSnapshot));
   hostRegister("-API_TrainingDebug_SnapshotRows", reinterpret_cast<void *>(snapshot));
 #endif
   hostRegister("-hookcommand2", reinterpret_cast<void *>(onAction));

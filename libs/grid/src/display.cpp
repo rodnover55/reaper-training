@@ -1,5 +1,7 @@
 #include "training/grid/display.hpp"
 
+#include "training/grid/hit_window.hpp"
+
 #include <fmt/format.h>
 
 #include <algorithm>
@@ -14,14 +16,14 @@ namespace {
 /// Знак «минус» для показа: U+2212, а не дефис.
 constexpr std::string_view kMinus = "−";
 
-/// Цвет показанного значения по допуску.
-Tone toneOf(double shown, double toleranceMs) {
-  return std::abs(shown) <= toleranceMs ? Tone::Good : Tone::Bad;
+/// Цвет показанного числа по окну попадания `window`, без `Target`.
+Tone windowTone(double shown, const HitWindow &window) {
+  return shown >= window.early() && shown <= window.late() ? Tone::Good : Tone::Bad;
 }
 
 /// Отклонение ноты для показа: целые миллисекунды со знаком, «*» после числа —
 /// у узла была лишняя нота.
-Cell noteCell(double seconds, bool extra, double toleranceMs) {
+Cell noteCell(double seconds, bool extra, const HitWindow &window) {
   const long shown = std::lround(seconds * 1000.0);
   std::string text;
   if (shown > 0)
@@ -33,11 +35,14 @@ Cell noteCell(double seconds, bool extra, double toleranceMs) {
 
   if (extra)
     text += "*";
-  return {.text = std::move(text), .tone = toneOf(static_cast<double>(shown), toleranceMs)};
+  const auto number = static_cast<double>(shown);
+  const Tone tone =
+      std::abs(number - window.offsetMs) <= 0.5 ? Tone::Target : windowTone(number, window);
+  return {.text = std::move(text), .tone = tone};
 }
 
 /// Среднее для показа: миллисекунды с одним знаком после запятой и знаком.
-Cell meanCell(double seconds, double toleranceMs) {
+Cell meanCell(double seconds, const HitWindow &window) {
   const double shown = std::round(seconds * 10000.0) / 10.0;
   std::string text;
   if (shown > 0.0)
@@ -46,7 +51,7 @@ Cell meanCell(double seconds, double toleranceMs) {
     text = fmt::format("{}{:.1f}", kMinus, -shown);
   else
     text = "0.0";
-  return {.text = std::move(text), .tone = toneOf(shown, toleranceMs)};
+  return {.text = std::move(text), .tone = windowTone(shown, window)};
 }
 
 /// Размер для маркера: «7/8».
@@ -102,7 +107,7 @@ BarView barView(const BarRow &row, bool top, const Bars &bars) {
       view.values.push_back(
           {.beat = static_cast<double>(k) + static_cast<double>(slot) / count,
            .onBeat = slot == 0,
-           .cell = noteCell(*node.deviation, node.extra, node.toleranceMs)});
+           .cell = noteCell(*node.deviation, node.extra, node.window)});
     }
   }
 
@@ -112,8 +117,8 @@ BarView barView(const BarRow &row, bool top, const Bars &bars) {
   if (top) {
     view.currentBeat = bars.currentBeat();
   } else if (row.mean && row.spread) {
-    const double toleranceMs = row.leftToleranceMs.value_or(0.0);
-    view.mean = meanCell(*row.mean, toleranceMs);
+    view.mean = meanCell(
+        *row.mean, row.leftWindow.value_or(HitWindow{.offsetMs = 0.0, .toleranceMs = 0.0}));
     view.spread = Cell{.text = fmt::format("{:.1f}", *row.spread * 1000.0)};
   }
   return view;

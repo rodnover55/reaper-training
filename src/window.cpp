@@ -24,6 +24,7 @@
 #include "views/ids.h"
 
 #include "training/grid/display.hpp"
+#include "training/grid/hit_window.hpp"
 
 #include <fmt/format.h>
 
@@ -81,6 +82,41 @@ std::optional<int> editValue(HWND dialog, int control) {
   return intOf(text.data());
 }
 
+/// Миллисекунды из поля `control`, округлённые до 0.5; пусто — в поле не
+/// число.
+std::optional<double> halfEditValue(HWND dialog, int control) {
+  std::array<char, 32> text{};
+  GetDlgItemText(dialog, control, text.data(), static_cast<int>(text.size()));
+  return grid::halfMsOf(text.data());
+}
+
+/// Ставит в настройки `settings` смещение и допуск окна попадания `hit`.
+void setWindow(Settings &settings, const grid::HitWindow &hit) {
+  settings.offsetMs = hit.offsetMs;
+  settings.toleranceMs = hit.toleranceMs;
+}
+
+/// Окно попадания диапазоном для контролов окна: «+4…+20 ms», «-5…+20 ms».
+std::string rangeText(const grid::HitWindow &hit) {
+  // Минус — дефис: контролы на Windows пишут растровым шрифтом диалога, в
+  // котором есть «…», но нет «−» (U+2212).
+  return fmt::format("{}…{} ms", grid::halfMsText(hit.early(), grid::MsStyle::Signed),
+                     grid::halfMsText(hit.late(), grid::MsStyle::Signed));
+}
+
+/// Пишет настройки в журнал строкой «`what`: mode …»: по журналу проверки
+/// видят их без снимка экрана.
+void journalSettings(std::string_view what) {
+  const Settings &settings = trainer().settings();
+  journal("{}: mode {}, offset {} ms, tolerance {} ms, channel {}, silence {} dBFS, bar "
+          "numbers {}, mean/spread {}, collapsed {}",
+          what, grid::divisions(settings.mode),
+          grid::halfMsText(settings.offsetMs, grid::MsStyle::Plain),
+          grid::halfMsText(settings.toleranceMs, grid::MsStyle::Plain), settings.channel + 1,
+          settings.silenceDb, settings.showBarNumbers, settings.showBarStats,
+          settings.panelCollapsed);
+}
+
 /// Что показывает панель калибровки.
 enum class Panel {
   /// Шаг тишины, в том числе до первого звука.
@@ -129,9 +165,9 @@ std::string statusText() {
   }
 
   std::string text =
-      fmt::format("{}, tolerance {} ms, latency {:.1f} ms",
+      fmt::format("{}, window {}, latency {:.1f} ms",
                   kModeNames[static_cast<std::size_t>(modeIndex(settings.mode))],
-                  static_cast<int>(settings.toleranceMs), status.compensationMs);
+                  rangeText(settings.window()), status.compensationMs);
   if (status.rate != 1.0)
     text += fmt::format(", rate {}", status.rate);
 
@@ -165,14 +201,33 @@ void showStatus(HWND dialog) {
   SetDlgItemText(dialog, IDC_STATUS, text.c_str());
 }
 
+/// Пишет окно попадания из настроек в поля Offset и Tolerance, кроме поля
+/// `editing`, в котором сейчас пишут (0 — в оба), и диапазоном рядом со
+/// шкалой.
+void showHitWindow(HWND dialog, int editing = 0) {
+  const bool showing = showingSettings;
+  showingSettings = true;
+  const grid::HitWindow hit = trainer().settings().window();
+  if (editing != IDC_OFFSET)
+    SetDlgItemText(dialog, IDC_OFFSET,
+                   grid::halfMsText(hit.offsetMs, grid::MsStyle::Signed).c_str());
+  if (editing != IDC_TOLERANCE)
+    SetDlgItemText(dialog, IDC_TOLERANCE,
+                   grid::halfMsText(hit.toleranceMs, grid::MsStyle::Plain).c_str());
+  SetDlgItemText(dialog, IDC_RANGE, rangeText(hit).c_str());
+  showingSettings = showing;
+}
+
+void placePanel(HWND dialog);
+RECT rowsArea(HWND dialog);
+
 void fillControls(HWND dialog) {
   showingSettings = true;
   const Settings &settings = trainer().settings();
 
   SendDlgItemMessage(dialog, IDC_MODE, CB_SETCURSEL,
                      static_cast<WPARAM>(modeIndex(settings.mode)), 0);
-  SetDlgItemText(dialog, IDC_TOLERANCE,
-                 fmt::format("{}", static_cast<int>(settings.toleranceMs)).c_str());
+  showHitWindow(dialog);
   SetDlgItemText(dialog, IDC_SILENCE,
                  fmt::format("{}", static_cast<int>(settings.silenceDb)).c_str());
   CheckDlgButton(dialog, IDC_SHOW_NUMBERS,
@@ -193,6 +248,7 @@ void fillControls(HWND dialog) {
                      0);
 
   showStatus(dialog);
+  placePanel(dialog);
   showingSettings = false;
 }
 
@@ -225,49 +281,82 @@ bool onCalibrationButton(int control) {
   return true;
 }
 
-void onCommand(HWND dialog, int control, int notification) {
-  if (showingSettings)
-    return;
-  if (notification == BN_CLICKED && onCalibrationButton(control))
-    return;
+/// Окно попадания настроек `settings` после правки поля `control` — Offset
+/// или Tolerance: вписанное значение прижато к шкале.
+///
+/// @return пусто, если в поле недописанное число.
+std::optional<grid::HitWindow> editedWindow(HWND dialog, int control,
+                                            const Settings &settings) {
+  const auto value = halfEditValue(dialog, control);
+  if (!value)
+    return std::nullopt;
+  return control == IDC_OFFSET
+             ? grid::withOffset(settings.window(), *value, settings.scaleMs)
+             : grid::withTolerance(settings.window(), *value, settings.scaleMs);
+}
 
+/// Настройки после правки контрола `control` с уведомлением `notification`.
+///
+/// @return пусто, если уведомление настроек не меняет: контрол не настройка,
+///   в поле недописанное число или в списке ничего не выбрано.
+std::optional<Settings> editedSettings(HWND dialog, int control, int notification) {
   Settings settings = trainer().settings();
   if (notification == CBN_SELCHANGE && control == IDC_MODE) {
     const auto index = SendDlgItemMessage(dialog, IDC_MODE, CB_GETCURSEL, 0, 0);
     if (index < 0 || index >= static_cast<LRESULT>(kModes.size()))
-      return;
+      return std::nullopt;
     settings.mode = kModes[static_cast<std::size_t>(index)];
   } else if (notification == CBN_SELCHANGE && control == IDC_CHANNEL) {
     const auto index = SendDlgItemMessage(dialog, IDC_CHANNEL, CB_GETCURSEL, 0, 0);
     if (index < 0)
-      return;
+      return std::nullopt;
     settings.channel = static_cast<int>(index);
-  } else if (notification == EN_CHANGE && control == IDC_TOLERANCE) {
+  } else if (notification == EN_CHANGE &&
+             (control == IDC_OFFSET || control == IDC_TOLERANCE)) {
     // Недописанное число настройки не трогает; вне границ — прижимается.
-    const auto value = editValue(dialog, IDC_TOLERANCE);
-    if (!value)
-      return;
-    settings.toleranceMs = *value;
+    const auto hit = editedWindow(dialog, control, settings);
+    if (!hit)
+      return std::nullopt;
+    setWindow(settings, *hit);
+  } else if (notification == BN_CLICKED && control == IDC_SETTINGS_TOGGLE) {
+    settings.panelCollapsed = !settings.panelCollapsed;
   } else if (notification == EN_CHANGE && control == IDC_SILENCE) {
     const auto value = editValue(dialog, IDC_SILENCE);
     if (!value)
-      return;
+      return std::nullopt;
     settings.silenceDb = *value;
   } else if (notification == BN_CLICKED && control == IDC_SHOW_NUMBERS) {
     settings.showBarNumbers = IsDlgButtonChecked(dialog, IDC_SHOW_NUMBERS) == BST_CHECKED;
   } else if (notification == BN_CLICKED && control == IDC_SHOW_STATS) {
     settings.showBarStats = IsDlgButtonChecked(dialog, IDC_SHOW_STATS) == BST_CHECKED;
   } else {
+    return std::nullopt;
+  }
+  return settings;
+}
+
+void onCommand(HWND dialog, int control, int notification) {
+  if (showingSettings)
+    return;
+  if (notification == BN_CLICKED && onCalibrationButton(control))
+    return;
+  if (notification == EN_KILLFOCUS && (control == IDC_OFFSET || control == IDC_TOLERANCE)) {
+    // Ушли из поля — в нём прижатое значение: видно, что вписанное прижалось.
+    showHitWindow(dialog);
     return;
   }
 
-  trainer().setSettings(settings);
-  journal("settings: mode {}, tolerance {} ms, channel {}, silence {} dBFS, bar numbers {}, "
-          "mean/spread {}",
-          grid::divisions(trainer().settings().mode), trainer().settings().toleranceMs,
-          trainer().settings().channel + 1, trainer().settings().silenceDb,
-          trainer().settings().showBarNumbers, trainer().settings().showBarStats);
+  const std::optional<Settings> settings = editedSettings(dialog, control, notification);
+  if (!settings)
+    return;
+  trainer().setSettings(*settings);
+  journalSettings("settings");
+  if (control == IDC_OFFSET || control == IDC_TOLERANCE)
+    showHitWindow(dialog, control);
   refreshWindow();
+  if (control == IDC_SETTINGS_TOGGLE)
+    journal("panel {}: rows from {} px", settings->panelCollapsed ? "collapsed" : "expanded",
+            rowsArea(dialog).top);
 }
 
 /// Цвета окна на тёмном фоне (design.md D8).
@@ -285,9 +374,13 @@ constexpr int kRows = 8;
 /// Наименьший кегль, пикселей: мельче цифры не читаются.
 constexpr double kMinFont = 9.0;
 
+/// Цифры числа на подложке попадания ровно в смещение.
+constexpr int kPlateText = RGB(20, 20, 20);
+
 int colorOf(grid::Tone tone) {
   switch (tone) {
   case grid::Tone::Good:
+  case grid::Tone::Target:
     return RGB(90, 210, 90);
   case grid::Tone::Bad:
     return RGB(235, 80, 70);
@@ -316,6 +409,24 @@ void drawDot(HDC context, double x, double y, double diameter, int color) {
   HGDIOBJ previousPen = SelectObject(context, pen);
   const double radius = diameter / 2.0;
   Ellipse(context, pixel(x - radius), pixel(y - radius), pixel(x + radius), pixel(y + radius));
+  SelectObject(context, previousPen);
+  SelectObject(context, previousBrush);
+  DeleteObject(pen);
+  DeleteObject(brush);
+}
+
+double textWidth(HDC context, const std::string &text);
+
+/// Скруглённый прямоугольник цвета `color` от (`left`, `top`) до (`right`,
+/// `bottom`) с радиусом углов `radius`.
+void fillRounded(HDC context, double left, double top, double right, double bottom,
+                 double radius, int color) {
+  HBRUSH brush = CreateSolidBrush(color);
+  HPEN pen = CreatePen(PS_SOLID, 0, color);
+  HGDIOBJ previousBrush = SelectObject(context, brush);
+  HGDIOBJ previousPen = SelectObject(context, pen);
+  RoundRect(context, pixel(left), pixel(top), pixel(right), pixel(bottom), pixel(radius * 2.0),
+            pixel(radius * 2.0));
   SelectObject(context, previousPen);
   SelectObject(context, previousBrush);
   DeleteObject(pen);
@@ -482,9 +593,20 @@ void paintRow(HDC context, Fonts &fonts, const Layout &layout, const grid::BarVi
   }
 
   for (const grid::ValueView &value : row.values) {
-    fonts.use(value.onBeat ? bigSize : smallSize);
-    drawCentered(context, value.cell.text, colorOf(value.cell.tone), x(value.beat), middle,
-                 step, layout.rowHeight / 2.0);
+    const double size = value.onBeat ? bigSize : smallSize;
+    fonts.use(size);
+    int color = colorOf(value.cell.tone);
+    if (value.cell.tone == grid::Tone::Target) {
+      // Подложка — по mockup.html: поля 0.2 кегля по сторонам и 0.08 сверху и
+      // снизу, скругление 0.18 кегля.
+      const double halfWidth = textWidth(context, value.cell.text) / 2.0 + size * 0.2;
+      const double halfHeight = size * 0.58;
+      fillRounded(context, x(value.beat) - halfWidth, middle - halfHeight,
+                  x(value.beat) + halfWidth, middle + halfHeight, size * 0.18, color);
+      color = kPlateText;
+    }
+    drawCentered(context, value.cell.text, color, x(value.beat), middle, step,
+                 layout.rowHeight / 2.0);
   }
 
   if (layout.statsWidth > 0.0 && row.mean && row.spread) {
@@ -673,6 +795,121 @@ void paintScale(HDC context, Fonts &fonts, double left, double right, double top
   fonts.use(std::max(kMinFont, height * 0.125), false);
   for (int db = -100; db <= 0; db += 10)
     label(dbText(db), kDim, x(db), top + height - std::max(kMinFont, height * 0.125) * 1.2);
+}
+
+/// Цвета шкалы окна попадания (mockup.html этого изменения).
+constexpr int kOutside = RGB(80, 40, 37);
+constexpr int kGaugeFrame = RGB(60, 60, 60);
+constexpr int kHandle = RGB(228, 228, 228);
+constexpr int kHandleFrame = RGB(34, 34, 34);
+constexpr int kHandleGrip = RGB(119, 119, 119);
+
+/// Половина ширины ползунка шкалы и расстояние до него, на котором щелчок
+/// берёт ползунок, пикселей.
+constexpr double kHandleHalf = 4.0;
+constexpr double kHandleReach = 6.0;
+
+/// Раскладка шкалы окна попадания в прямоугольнике: дорожка и перевод
+/// миллисекунд в пиксели и обратно.
+struct GaugeLayout {
+  /// Края дорожки по горизонтали и вертикали, пикселей.
+  double left = 0.0;
+  double right = 0.0;
+  double top = 0.0;
+  double bottom = 0.0;
+
+  /// На сколько ползунки и отметка клика выходят за дорожку сверху и снизу,
+  /// пикселей.
+  double reach = 0.0;
+
+  /// Середина строки подписей делений и их кегль, пикселей.
+  double labelMiddle = 0.0;
+  double labelSize = 0.0;
+
+  /// Граница шкалы, мс: шкала от −`scaleMs` до +`scaleMs`.
+  double scaleMs = grid::kDefaultScaleMs;
+
+  /// Место `ms` на дорожке, пикселей; за шкалой — её край.
+  double x(double ms) const {
+    return left +
+           (std::clamp(ms, -scaleMs, scaleMs) + scaleMs) / (2.0 * scaleMs) * (right - left);
+  }
+
+  /// Миллисекунды места `at` на дорожке; за дорожкой — дальше края шкалы.
+  double ms(double at) const { return (at - left) / (right - left) * 2.0 * scaleMs - scaleMs; }
+};
+
+/// Раскладка шкалы с границей `scaleMs` в прямоугольнике `box`: дорожка — в
+/// верхней половине, подписи — под ней, по краям — место под половину
+/// подписи.
+GaugeLayout gaugeLayout(const RECT &box, double scaleMs) {
+  const double height = box.bottom - box.top;
+  GaugeLayout layout{.top = box.top + height * 0.16,
+                     .bottom = box.top + height * 0.56,
+                     .reach = height * 0.1,
+                     .labelSize = std::max(kMinFont, height * 0.28),
+                     .scaleMs = std::max(scaleMs, 1.0)};
+  const double margin = layout.labelSize * 1.4;
+  layout.left = box.left + margin;
+  layout.right = std::max(layout.left + 1.0, box.right - margin);
+  layout.labelMiddle = (layout.bottom + layout.reach + box.bottom) / 2.0;
+  return layout;
+}
+
+/// Шаг подписей делений шкалы, мс: самый частый, при котором подписи не
+/// налезают друг на друга.
+double tickStep(const GaugeLayout &layout) {
+  const double perMs = (layout.right - layout.left) / (2.0 * layout.scaleMs);
+  for (const double step : {5.0, 10.0, 20.0, 25.0, 50.0, 100.0})
+    if (step * perMs >= layout.labelSize * 3.0)
+      return step;
+  return 200.0;
+}
+
+/// Рисует шкалу окна попадания `hit` с границей `scaleMs` в прямоугольнике
+/// `box` (mockup.html): дорожку вне окна, полосу окна, пунктир смещения,
+/// отметку клика, ползунки краёв и подписи делений. Фон — цвет фона диалога.
+void paintGauge(HDC context, const RECT &box, const grid::HitWindow &hit, double scaleMs) {
+  const GaugeLayout layout = gaugeLayout(box, scaleMs);
+  fillBox(context, box.left, box.top, box.right, box.bottom, GetSysColor(COLOR_3DFACE));
+  fillBox(context, layout.left, layout.top, layout.right, layout.bottom, kOutside);
+  fillBox(context, layout.x(hit.early()), layout.top, layout.x(hit.late()), layout.bottom,
+          kBand);
+  drawFrame(context, layout.left, layout.top, layout.right, layout.bottom, kGaugeFrame);
+
+  // Пунктир смещения: штрих в 2 пикселя через каждые 4.
+  const double center = layout.x(hit.offsetMs);
+  for (int dash = 0; layout.top + 4.0 * dash + 4.0 <= layout.bottom - 2.0; ++dash) {
+    const double y = layout.top + 2.0 + 4.0 * dash;
+    fillBox(context, center - 1.0, y, center + 1.0, y + 2.0, kGood);
+  }
+
+  const double zero = layout.x(0.0);
+  fillBox(context, zero - 1.0, layout.top - layout.reach, zero + 1.0,
+          layout.bottom + layout.reach, kBright);
+
+  const double middle = (layout.top + layout.bottom) / 2.0;
+  for (const double edge : {hit.early(), hit.late()}) {
+    const double at = layout.x(edge);
+    const double top = layout.top - layout.reach;
+    const double bottom = layout.bottom + layout.reach;
+    fillBox(context, at - kHandleHalf, top, at + kHandleHalf, bottom, kHandle);
+    drawFrame(context, at - kHandleHalf, top, at + kHandleHalf, bottom, kHandleFrame);
+    fillBox(context, at - 2.0, middle - 2.0, at + 2.0, middle - 1.0, kHandleGrip);
+    fillBox(context, at - 2.0, middle + 1.0, at + 2.0, middle + 2.0, kHandleGrip);
+  }
+
+  Fonts fonts(context);
+  SetBkMode(context, TRANSPARENT);
+  const double step = tickStep(layout);
+  const int text = GetSysColor(COLOR_BTNTEXT);
+  const auto ticks = static_cast<int>(std::floor(layout.scaleMs / step));
+  for (int tick = -ticks; tick <= ticks; ++tick) {
+    const double ms = tick * step;
+    fonts.use(layout.labelSize, tick == 0);
+    drawCentered(context, grid::halfMsText(ms, grid::MsStyle::Shown), text, layout.x(ms),
+                 layout.labelMiddle, layout.labelSize * 2.0, layout.labelSize * 0.7);
+  }
 }
 
 /// Раскладка панели калибровки в области `area` (mockup.html): края, кегли и
@@ -1032,13 +1269,16 @@ void paintArea(HDC context, const RECT &area) {
             scaleLeft + layout.scaleWidth + 1.0, area.bottom, kLine);
 }
 
-/// Область строк тактов и панели калибровки: всё под контролами окна.
+/// Область строк тактов и панели калибровки: всё под контролами окна, у
+/// свёрнутой панели настроек — под кнопкой сворачивания.
 RECT rowsArea(HWND dialog) {
   RECT client{};
   GetClientRect(dialog, &client);
 
   RECT controls{};
-  GetWindowRect(GetDlgItem(dialog, IDC_SILENCE), &controls);
+  GetWindowRect(GetDlgItem(dialog, trainer().settings().panelCollapsed ? IDC_SETTINGS_TOGGLE
+                                                                       : IDC_SILENCE),
+                &controls);
   POINT bottom{.x = controls.left, .y = controls.bottom};
   ScreenToClient(dialog, &bottom);
 
@@ -1052,6 +1292,152 @@ void paintRows(HWND dialog, HDC context) {
   const RECT area = rowsArea(dialog);
   if (area.bottom > area.top)
     paintArea(context, area);
+}
+
+/// Прямоугольник шкалы окна попадания в окне — место невидимого контрола
+/// `IDC_GAUGE`.
+RECT gaugeRect(HWND dialog) {
+  RECT box{};
+  GetWindowRect(GetDlgItem(dialog, IDC_GAUGE), &box);
+  POINT corner{.x = box.left, .y = box.top};
+  POINT opposite{.x = box.right, .y = box.bottom};
+  ScreenToClient(dialog, &corner);
+  ScreenToClient(dialog, &opposite);
+  // SWELL на macOS переворачивает ось y: углы берутся по возрастанию.
+  return RECT{.left = std::min(corner.x, opposite.x),
+              .top = std::min(corner.y, opposite.y),
+              .right = std::max(corner.x, opposite.x),
+              .bottom = std::max(corner.y, opposite.y)};
+}
+
+/// Рисует шкалу окна попадания, если панель настроек развёрнута.
+void paintGaugeIn(HWND dialog, HDC context) {
+  const Settings &settings = trainer().settings();
+  if (!settings.panelCollapsed)
+    paintGauge(context, gaugeRect(dialog), settings.window(), settings.scaleMs);
+}
+
+/// Что тянут мышью на шкале окна попадания.
+enum class Grip {
+  /// Ползунок раннего края.
+  Early,
+  /// Ползунок позднего края.
+  Late,
+  /// Полоса между ползунками: окно целиком.
+  Band,
+};
+
+/// Перетаскивание на шкале: что тянут, откуда и окно попадания до него.
+struct Drag {
+  Grip grip = Grip::Band;
+  double fromMs = 0.0;
+  grid::HitWindow start;
+};
+
+/// Идущее перетаскивание; пусто — мышь на шкале не нажата.
+std::optional<Drag> drag;
+
+/// Ползунок под точкой `x` окна, если он ближе `kHandleReach` пикселей;
+/// пусто — ни одного.
+std::optional<Grip> handleAt(const GaugeLayout &layout, const grid::HitWindow &hit, double x) {
+  const double early = std::abs(x - layout.x(hit.early()));
+  const double late = std::abs(x - layout.x(hit.late()));
+  if (early <= kHandleReach && early <= late)
+    return Grip::Early;
+  if (late <= kHandleReach)
+    return Grip::Late;
+  return std::nullopt;
+}
+
+/// Ставит окно попадания `hit` в настройки без сохранения и показывает его
+/// в полях, на шкале и в строке состояния.
+void previewWindow(HWND dialog, const grid::HitWindow &hit) {
+  Settings settings = trainer().settings();
+  if (settings.window() == hit)
+    return;
+  setWindow(settings, hit);
+  trainer().previewSettings(settings);
+  showHitWindow(dialog);
+  refreshWindow();
+}
+
+/// Двигает то, что тянут, к точке `x` окна.
+void dragTo(HWND dialog, double x) {
+  if (!drag)
+    return;
+  const Settings &settings = trainer().settings();
+  const GaugeLayout layout = gaugeLayout(gaugeRect(dialog), settings.scaleMs);
+  const double ms = layout.ms(x);
+  switch (drag->grip) {
+  case Grip::Early:
+    previewWindow(dialog, grid::withEarly(settings.window(), ms, settings.scaleMs));
+    return;
+  case Grip::Late:
+    previewWindow(dialog, grid::withLate(settings.window(), ms, settings.scaleMs));
+    return;
+  case Grip::Band:
+    break;
+  }
+  previewWindow(dialog, grid::shifted(drag->start, ms - drag->fromMs, settings.scaleMs));
+}
+
+/// Начинает перетаскивание, если точка (`x`, `y`) окна на шкале: ползунок
+/// рядом — его край, щелчок в окне попадания — полосу, иначе ближайший
+/// ползунок переносится к щелчку. Берёт мышь окну.
+///
+/// @return ложь, если точка не на шкале или панель свёрнута.
+bool startDrag(HWND dialog, int x, int y) {
+  const Settings &settings = trainer().settings();
+  const RECT box = gaugeRect(dialog);
+  if (settings.panelCollapsed || x < box.left || x >= box.right || y < box.top ||
+      y >= box.bottom)
+    return false;
+
+  const grid::HitWindow hit = settings.window();
+  const GaugeLayout layout = gaugeLayout(box, settings.scaleMs);
+  const double ms = layout.ms(x);
+  Grip grip = Grip::Band;
+  if (const auto handle = handleAt(layout, hit, x))
+    grip = *handle;
+  else if (ms < hit.early())
+    grip = Grip::Early;
+  else if (ms > hit.late())
+    grip = Grip::Late;
+
+  drag = Drag{.grip = grip, .fromMs = ms, .start = hit};
+  SetCapture(dialog);
+  if (grip != Grip::Band)
+    dragTo(dialog, x);
+  return true;
+}
+
+/// Кончает перетаскивание: отпускает мышь и сохраняет окно попадания.
+void endDrag(HWND dialog) {
+  if (!drag)
+    return;
+  drag.reset();
+  if (GetCapture() == dialog)
+    ReleaseCapture();
+  trainer().setSettings(trainer().settings());
+  journalSettings("settings");
+}
+
+/// Ставит курсор «влево-вправо», если точка (`x`, `y`) окна над ползунком
+/// шкалы.
+///
+/// @return правда, если курсор поставлен.
+bool gaugeCursor(HWND dialog, int x, int y) {
+  const Settings &settings = trainer().settings();
+  const RECT box = gaugeRect(dialog);
+  if (settings.panelCollapsed || x < box.left || x >= box.right || y < box.top ||
+      y >= box.bottom)
+    return false;
+  if (!drag && !handleAt(gaugeLayout(box, settings.scaleMs), settings.window(), x))
+    return false;
+  if (drag && drag->grip == Grip::Band)
+    return false;
+  SetCursor(LoadCursor(nullptr, IDC_SIZEWE));
+  return true;
 }
 
 /// Показывает кнопку `control` в прямоугольнике `box` или прячет её; кнопку,
@@ -1085,16 +1471,114 @@ void setButtonText(HWND dialog, int control, const std::string &text) {
     SetDlgItemText(dialog, control, text.c_str());
 }
 
+/// Показывает или прячет контрол `control`; контрол, который уже такой, не
+/// трогает.
+void showControl(HWND dialog, int control, bool shown) {
+  HWND item = GetDlgItem(dialog, control);
+  // Свой флаг контрола, а не IsWindowVisible: та смотрит и на окно, которое
+  // при WM_INITDIALOG ещё не показано.
+  if (item && ((GetWindowLong(item, GWL_STYLE) & WS_VISIBLE) != 0) != shown)
+    ShowWindow(item, shown ? SW_SHOW : SW_HIDE);
+}
+
+/// Контролы панели настроек под верхней строкой. Calibrate… сюда не входит:
+/// её прячет и показывает `placeCalibrationButtons`.
+constexpr std::array<int, 13> kPanelControls{
+    IDC_MODE_LABEL,      IDC_MODE,       IDC_CHANNEL_LABEL, IDC_CHANNEL,
+    IDC_SHOW_NUMBERS,    IDC_SHOW_STATS, IDC_OFFSET_LABEL,  IDC_OFFSET,
+    IDC_TOLERANCE_LABEL, IDC_TOLERANCE,  IDC_RANGE,         IDC_SILENCE_LABEL,
+    IDC_SILENCE};
+
+/// Свёрнутость панели, с которой нарисована кнопка сворачивания; пусто —
+/// кнопку ещё не рисовали.
+std::optional<bool> drawnCollapsed;
+
+/// Сворачивает или разворачивает панель настроек по настройкам и
+/// перерисовывает кнопку сворачивания, если стрелка на ней устарела.
+void placePanel(HWND dialog) {
+  const bool collapsed = trainer().settings().panelCollapsed;
+  for (const int control : kPanelControls)
+    showControl(dialog, control, !collapsed);
+  if (drawnCollapsed != collapsed)
+    InvalidateRect(GetDlgItem(dialog, IDC_SETTINGS_TOGGLE), nullptr, FALSE);
+}
+
+/// Рисует кнопку сворачивания `item`: рамку, стрелку — вниз у развёрнутой
+/// панели, вправо у свёрнутой — и подпись шрифтом кнопки. Нажатая кнопка
+/// утоплена: рамка наоборот, стрелка и подпись сдвинуты на пиксель.
+void paintToggle(const DRAWITEMSTRUCT &item) {
+  HDC context = item.hDC;
+  const RECT &box = item.rcItem;
+  const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+  const bool collapsed = trainer().settings().panelCollapsed;
+  drawnCollapsed = collapsed;
+
+  const double left = box.left;
+  const double top = box.top;
+  const double right = box.right;
+  const double bottom = box.bottom;
+  const int light = GetSysColor(pressed ? COLOR_3DSHADOW : COLOR_3DHILIGHT);
+  const int dark = GetSysColor(pressed ? COLOR_3DHILIGHT : COLOR_3DSHADOW);
+  fillBox(context, left, top, right, bottom, GetSysColor(COLOR_3DFACE));
+  fillBox(context, left, top, right, top + 1.0, light);
+  fillBox(context, left, top, left + 1.0, bottom, light);
+  fillBox(context, left, bottom - 1.0, right, bottom, dark);
+  fillBox(context, right - 1.0, top, right, bottom, dark);
+
+  const double shift = pressed ? 1.0 : 0.0;
+  const double height = bottom - top;
+  const double size = std::max(5.0, height * 0.36);
+  const double x = left + height * 0.35 + shift;
+  const double y = (top + bottom) / 2.0 + shift;
+  std::array<POINT, 3> arrow{};
+  if (collapsed)
+    arrow = {POINT{.x = pixel(x + size * 0.2), .y = pixel(y - size / 2.0)},
+             POINT{.x = pixel(x + size * 0.2), .y = pixel(y + size / 2.0)},
+             POINT{.x = pixel(x + size * 0.8), .y = pixel(y)}};
+  else
+    arrow = {POINT{.x = pixel(x), .y = pixel(y - size * 0.3)},
+             POINT{.x = pixel(x + size), .y = pixel(y - size * 0.3)},
+             POINT{.x = pixel(x + size / 2.0), .y = pixel(y + size * 0.3)}};
+  const int text = GetSysColor(COLOR_BTNTEXT);
+  HBRUSH brush = CreateSolidBrush(text);
+  HPEN pen = CreatePen(PS_SOLID, 0, text);
+  HGDIOBJ previousBrush = SelectObject(context, brush);
+  HGDIOBJ previousPen = SelectObject(context, pen);
+  Polygon(context, arrow.data(), static_cast<int>(arrow.size()));
+  SelectObject(context, previousPen);
+  SelectObject(context, previousBrush);
+  DeleteObject(pen);
+  DeleteObject(brush);
+
+  HGDIOBJ previousFont = nullptr;
+  // Win32 отдаёт шрифт контрола целым LRESULT: приведения к указателю не
+  // избежать.
+  // NOLINTNEXTLINE(performance-no-int-to-ptr)
+  if (auto *font = reinterpret_cast<HFONT>(SendMessage(item.hwndItem, WM_GETFONT, 0, 0)))
+    previousFont = SelectObject(context, font);
+  SetBkMode(context, TRANSPARENT);
+  SetTextColor(context, text);
+  RECT label{.left = pixel(x + size + height * 0.25),
+             .top = pixel(top + shift),
+             .right = box.right,
+             .bottom = pixel(bottom + shift)};
+  DrawTextUTF8(context, "Settings", -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+  if (previousFont)
+    SelectObject(context, previousFont);
+}
+
 /// Ставит кнопки калибровки по состоянию тренажёра: Calibrate… доступна без
-/// сессии при остановленном транспорте и с каналом, а на итоге называется
-/// Finish; Cancel — справа вверху панели на шагах; Close, Calibrate again и
-/// Apply anyway — справа внизу на итоге (design D7).
+/// сессии при остановленном транспорте и с каналом, на итоге называется
+/// Finish, а в свёрнутой панели настроек скрыта; Cancel — справа вверху
+/// панели калибровки на шагах; Close, Calibrate again и Apply anyway — справа
+/// внизу на итоге (design D7).
 void placeCalibrationButtons(HWND dialog) {
   const auto &session = trainer().calibration();
   const bool finished = trainer().calibrationFinished();
   setButtonText(dialog, IDC_CALIBRATE, finished ? "Finish" : "Calibrate...");
   EnableWindow(GetDlgItem(dialog, IDC_CALIBRATE),
                finished || (!session && trainer().status().measuring == Measuring::Waiting));
+  showControl(dialog, IDC_CALIBRATE, !trainer().settings().panelCollapsed);
 
   const RECT area = rowsArea(dialog);
   const PanelLayout layout = panelLayout(area);
@@ -1129,7 +1613,13 @@ void placeCalibrationButtons(HWND dialog) {
   placeButton(dialog, IDC_CAL_APPLY, apply.has_value(), box(right, 160, layout.buttonsTop));
 }
 
-INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM /*lParam*/) {
+/// Координата x точки мыши из `lParam` сообщения мыши.
+int mouseX(LPARAM lParam) { return static_cast<short>(LOWORD(lParam)); }
+
+/// Координата y точки мыши из `lParam` сообщения мыши.
+int mouseY(LPARAM lParam) { return static_cast<short>(HIWORD(lParam)); }
+
+INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam) {
   switch (message) {
   case WM_INITDIALOG:
     // Имена каналов REAPER отдаёт в UTF-8.
@@ -1152,9 +1642,55 @@ INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM /*lParam*
   case WM_PAINT: {
     PAINTSTRUCT paint{};
     if (HDC context = BeginPaint(dialog, &paint)) {
+      paintGaugeIn(dialog, context);
       paintRows(dialog, context);
       EndPaint(dialog, &paint);
     }
+    return 1;
+  }
+
+  case WM_DRAWITEM: {
+    // WM_DRAWITEM передаёт описание контрола указателем в целом LPARAM.
+    // NOLINTNEXTLINE(performance-no-int-to-ptr)
+    const auto *item = reinterpret_cast<const DRAWITEMSTRUCT *>(lParam);
+    if (!item || item->CtlID != IDC_SETTINGS_TOGGLE)
+      return 0;
+    paintToggle(*item);
+    return 1;
+  }
+
+  case WM_LBUTTONDOWN:
+    return startDrag(dialog, mouseX(lParam), mouseY(lParam)) ? 1 : 0;
+
+  case WM_MOUSEMOVE:
+    if (!drag)
+      return 0;
+    if (GetCapture() != dialog) {
+      // Мышь отобрали, кнопку отпустили не над окном.
+      endDrag(dialog);
+      return 0;
+    }
+    gaugeCursor(dialog, mouseX(lParam), mouseY(lParam));
+    dragTo(dialog, mouseX(lParam));
+    return 1;
+
+  case WM_LBUTTONUP:
+    if (!drag)
+      return 0;
+    dragTo(dialog, mouseX(lParam));
+    endDrag(dialog);
+    return 1;
+
+  case WM_SETCURSOR: {
+    POINT at{};
+    GetCursorPos(&at);
+    ScreenToClient(dialog, &at);
+    if (!gaugeCursor(dialog, at.x, at.y))
+      return 0;
+#ifdef _WIN32
+    // Иначе Windows вернёт курсор окна сразу после диалоговой процедуры.
+    SetWindowLongPtr(dialog, DWLP_MSGRESULT, TRUE);
+#endif
     return 1;
   }
 
@@ -1163,6 +1699,8 @@ INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM /*lParam*
     return 1;
 
   case WM_DESTROY:
+    drag.reset();
+    drawnCollapsed.reset();
     if (window == dialog)
       window = nullptr;
     return 0;
@@ -1201,6 +1739,7 @@ void refreshWindow() {
     return;
 
   showStatus(window);
+  placePanel(window);
   placeCalibrationButtons(window);
   InvalidateRect(window, nullptr, FALSE);
 }
@@ -1234,15 +1773,54 @@ bool clickButton(int control) {
 }
 #endif
 
+#ifdef TRAINING_DEBUG_BUILD
+bool dragGauge(double fromMs, double toMs) {
+  if (!window || trainer().settings().panelCollapsed)
+    return false;
+
+  const GaugeLayout layout = gaugeLayout(gaugeRect(window), trainer().settings().scaleMs);
+  const int y = pixel((layout.top + layout.bottom) / 2.0);
+  const auto point = [&](double ms) {
+    return static_cast<LPARAM>(MAKELONG(pixel(layout.x(ms)), y));
+  };
+  SendMessage(window, WM_LBUTTONDOWN, MK_LBUTTON, point(fromMs));
+  SendMessage(window, WM_MOUSEMOVE, MK_LBUTTON, point(toMs));
+  SendMessage(window, WM_LBUTTONUP, 0, point(toMs));
+  return true;
+}
+
+std::optional<std::string> typeText(int control, const char *text) {
+  HWND field = window ? GetDlgItem(window, control) : nullptr;
+  if (!field || !IsWindowVisible(field) || !text || !*text)
+    return std::nullopt;
+
+  SetDlgItemText(window, control, text);
+  SendMessage(window, WM_COMMAND, MAKEWPARAM(control, EN_CHANGE),
+              reinterpret_cast<LPARAM>(field));
+  SendMessage(window, WM_COMMAND, MAKEWPARAM(control, EN_KILLFOCUS),
+              reinterpret_cast<LPARAM>(field));
+  std::array<char, 64> left{};
+  GetDlgItemText(window, control, left.data(), static_cast<int>(left.size()));
+  return std::string(left.data());
+}
+#endif
+
 #if defined(TRAINING_DEBUG_BUILD) && !defined(_WIN32)
-bool snapshotRows(const char *path, int width, int height) {
+namespace {
+
+/// Рисует `paint` в память размером `width`×`height` точек и пишет картинку в
+/// файл PPM `path`.
+///
+/// @return правда, если файл записан.
+template <typename Paint>
+bool snapshot(const char *path, int width, int height, const Paint &paint) {
   if (!path || width <= 0 || height <= 0)
     return false;
 
   HDC context = SWELL_CreateMemContext(nullptr, width, height);
   if (!context)
     return false;
-  paintArea(context, RECT{.left = 0, .top = 0, .right = width, .bottom = height});
+  paint(context, RECT{.left = 0, .top = 0, .right = width, .bottom = height});
 
   // Кадр контекста — точки по строкам, 0xAARRGGBB; в PPM — R, G, B.
   const auto *pixels = static_cast<const unsigned int *>(SWELL_GetCtxFrameBuffer(context));
@@ -1266,6 +1844,19 @@ bool snapshotRows(const char *path, int width, int height) {
   }
   SWELL_DeleteGfxContext(context);
   return file != nullptr;
+}
+
+} // namespace
+
+bool snapshotGauge(const char *path, int width, int height) {
+  return snapshot(path, width, height, [](HDC context, const RECT &area) {
+    const Settings &settings = trainer().settings();
+    paintGauge(context, area, settings.window(), settings.scaleMs);
+  });
+}
+
+bool snapshotRows(const char *path, int width, int height) {
+  return snapshot(path, width, height, paintArea);
 }
 #endif
 

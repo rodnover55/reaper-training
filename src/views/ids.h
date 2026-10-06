@@ -29,5 +29,10 @@
 #define IDC_CAL_APPLY 1013
 #define IDC_CAL_AGAIN 1014
 #define IDC_CAL_CLOSE 1015
+#define IDC_SETTINGS_TOGGLE 1016
+#define IDC_OFFSET_LABEL 1017
+#define IDC_OFFSET 1018
+#define IDC_GAUGE 1019
+#define IDC_RANGE 1020
 
 // NOLINTEND(modernize-macro-to-enum,cppcoreguidelines-macro-usage)
