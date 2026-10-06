@@ -331,11 +331,15 @@ begin
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
+var
+  Plugins: String;
 begin
+  { Строка, которая начинается с «[», в [Code] читается как заголовок
+    раздела, поэтому массив аргументов не переносится на новую строку. }
   if CurPageID = wpFinished then
   begin
-    WizardForm.FinishedLabel.Caption := FmtMessage(CustomMessage('Finished'),
-      [AddBackslash(WizardDirValue) + 'UserPlugins']);
+    Plugins := AddBackslash(WizardDirValue) + 'UserPlugins';
+    WizardForm.FinishedLabel.Caption := FmtMessage(CustomMessage('Finished'), [Plugins]);
     WizardForm.AdjustLabelHeight(WizardForm.FinishedLabel);
   end;
 end;
