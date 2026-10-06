@@ -10,6 +10,15 @@
 
 #include <reaper_plugin_functions.h>
 
+// Строки в коде — UTF-8, а модуль на Windows собран без UNICODE: функции Win32
+// с текстом там — ANSI-версии и читают его в кодовой странице системы.
+// Заголовок подменяет SetDlgItemText и GetDlgItemText обёртками для UTF-8;
+// DrawText и выпадающие списки требуют DrawTextUTF8 и WDL_UTF8_HookComboBox.
+// На других ОС SWELL понимает UTF-8 сам, и обёртки — те же функции; там
+// заголовку нужен wdltypes.h, который он не подключает сам.
+#include <WDL/wdltypes.h>
+#include <WDL/win32_utf8.h>
+
 #include "journal.hpp"
 #include "trainer.hpp"
 #include "views/ids.h"
@@ -322,8 +331,8 @@ void drawCentered(HDC context, const std::string &text, int color, double x, dou
            .right = pixel(x + halfWidth),
            .bottom = pixel(y + halfHeight)};
   SetTextColor(context, color);
-  DrawText(context, text.c_str(), -1, &box,
-           DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
+  DrawTextUTF8(context, text.c_str(), -1, &box,
+               DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
 }
 
 /// Шрифты Arial одного рисования по кеглю и жирности: создаются при первом
@@ -456,8 +465,8 @@ void paintRow(HDC context, Fonts &fonts, const Layout &layout, const grid::BarVi
              .top = pixel(top + 2.0),
              .right = pixel(at + 4.0 + layout.scaleWidth),
              .bottom = pixel(top + 4.0 + layout.markSize * 1.2)};
-    DrawText(context, mark.text.c_str(), -1, &box,
-             DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOCLIP);
+    DrawTextUTF8(context, mark.text.c_str(), -1, &box,
+                 DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOCLIP);
   }
 
   if (layout.labelWidth > 0.0) {
@@ -523,7 +532,8 @@ std::string dbText(double value, int decimals = 0) {
 /// Ширина строки шрифтом, выбранным в контекст, пикселей.
 double textWidth(HDC context, const std::string &text) {
   RECT box{.left = 0, .top = 0, .right = 0, .bottom = 0};
-  DrawText(context, text.c_str(), -1, &box, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_CALCRECT);
+  DrawTextUTF8(context, text.c_str(), -1, &box,
+               DT_LEFT | DT_TOP | DT_SINGLELINE | DT_CALCRECT);
   return static_cast<double>(box.right - box.left);
 }
 
@@ -531,7 +541,7 @@ double textWidth(HDC context, const std::string &text) {
 void drawLeft(HDC context, const std::string &text, int color, double x, double y) {
   RECT box{.left = pixel(x), .top = pixel(y), .right = pixel(x) + 1, .bottom = pixel(y) + 1};
   SetTextColor(context, color);
-  DrawText(context, text.c_str(), -1, &box, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOCLIP);
+  DrawTextUTF8(context, text.c_str(), -1, &box, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOCLIP);
 }
 
 /// Пишет текст шрифтом, выбранным в контекст, с переносом по пробелам в
@@ -1122,6 +1132,8 @@ void placeCalibrationButtons(HWND dialog) {
 INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM /*lParam*/) {
   switch (message) {
   case WM_INITDIALOG:
+    // Имена каналов REAPER отдаёт в UTF-8.
+    WDL_UTF8_HookComboBox(GetDlgItem(dialog, IDC_CHANNEL));
     for (const char *name : kModeNames)
       SendDlgItemMessage(dialog, IDC_MODE, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name));
     fillControls(dialog);

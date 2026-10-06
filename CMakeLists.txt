@@ -290,6 +290,13 @@ if(NOT WIN32)
   # предупреждений достаётся и ей. Снимаем: исправить её мы всё равно не можем.
   set_source_files_properties("${swell_stub}" PROPERTIES
     COMPILE_OPTIONS "${training_no_warnings}")
+else()
+  # Обёртки WDL, через которые окно передаёт Win32 текст в UTF-8
+  # (src/window.cpp). Отдельной библиотекой: так до чужого кода не доходит
+  # набор предупреждений модуля, а снять /W4 у одного файла MSVC молча не даёт.
+  add_library(training_win32_utf8 STATIC "${wdl_SOURCE_DIR}/WDL/win32_utf8.c")
+  target_compile_options(training_win32_utf8 PRIVATE ${training_no_warnings})
+  target_link_libraries(reaper_training PRIVATE training_win32_utf8)
 endif()
 
 # --- Установка ----------------------------------------------------------------
