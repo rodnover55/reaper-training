@@ -11,6 +11,7 @@
 
 using training::grid::BarRow;
 using training::grid::Bars;
+using training::grid::HitWindow;
 using training::grid::Mode;
 using training::test::SteadyTimeline;
 
@@ -25,14 +26,17 @@ const SteadyTimeline &timeline() {
 /// Первый удар такта с номером `number` (с 1).
 double barStart(int number) { return (number - 1) * 4.0; }
 
-/// Позиция воспроизведения `beats` без петли, допуск `toleranceMs`.
-void play(Bars &bars, double beats, double toleranceMs = 10.0) {
-  bars.play(beats, 0.0, toleranceMs, timeline());
+/// Окно попадания тестов, если не сказано другое: 0 ± 10 мс.
+constexpr HitWindow kWindow{.offsetMs = 0.0, .toleranceMs = 10.0};
+
+/// Позиция воспроизведения `beats` без петли, окно попадания `window`.
+void play(Bars &bars, double beats, const HitWindow &window = kWindow) {
+  bars.play(beats, 0.0, window, timeline());
 }
 
-/// Нота через `ms` мс после узла `beats`, при допуске `toleranceMs`.
-void note(Bars &bars, double beats, double ms, double toleranceMs = 10.0) {
-  bars.addNote(timeline().timeAt(beats) + ms / 1000.0, 1.0, toleranceMs, timeline());
+/// Нота через `ms` мс после узла `beats`, при окне попадания `window`.
+void note(Bars &bars, double beats, double ms, const HitWindow &window = kWindow) {
+  bars.addNote(timeline().timeAt(beats) + ms / 1000.0, 1.0, window, timeline());
 }
 
 /// Номера тактов видимых строк сверху вниз.
@@ -86,11 +90,11 @@ TEST_CASE("такты: позиция на начале такта с погре
 TEST_CASE("такты: второй вход в такт петли 5–6 — новая строка сверху") {
   Bars bars;
   constexpr double kLoop = 8.0;
-  bars.play(barStart(5) + 0.1, kLoop, 10.0, timeline());
+  bars.play(barStart(5) + 0.1, kLoop, kWindow, timeline());
   note(bars, barStart(5), 3.0);
-  bars.play(barStart(6) + 0.1, kLoop, 10.0, timeline());
+  bars.play(barStart(6) + 0.1, kLoop, kWindow, timeline());
   note(bars, barStart(6), 2.0);
-  bars.play(barStart(5) + 0.1, kLoop, 10.0, timeline());
+  bars.play(barStart(5) + 0.1, kLoop, kWindow, timeline());
 
   CHECK(shown(bars) == std::vector<std::int64_t>{5, 6, 5});
 }
@@ -138,9 +142,9 @@ TEST_CASE("такты: в петле в один такт позднее зна�
   Bars bars;
   bars.setMode(Mode::Sixteenths);
   constexpr double kLoop = 4.0;
-  bars.play(barStart(5) + 0.05, kLoop, 10.0, timeline());
-  bars.play(barStart(5) + 3.9, kLoop, 10.0, timeline());
-  bars.play(barStart(5) + 0.02, kLoop, 10.0, timeline());
+  bars.play(barStart(5) + 0.05, kLoop, kWindow, timeline());
+  bars.play(barStart(5) + 3.9, kLoop, kWindow, timeline());
+  bars.play(barStart(5) + 0.02, kLoop, kWindow, timeline());
   REQUIRE(shown(bars) == std::vector<std::int64_t>{5, 5});
 
   note(bars, barStart(5) + 3.75, 6.0);
@@ -153,15 +157,15 @@ TEST_CASE("такты: в петле в один такт ранняя нота 
   Bars bars;
   bars.setMode(Mode::Sixteenths);
   constexpr double kLoop = 4.0;
-  bars.play(barStart(5) + 0.05, kLoop, 10.0, timeline());
-  bars.play(barStart(5) + 3.95, kLoop, 10.0, timeline());
+  bars.play(barStart(5) + 0.05, kLoop, kWindow, timeline());
+  bars.play(barStart(5) + 3.95, kLoop, kWindow, timeline());
 
   // Время ноты уже завёрнуто в петлю: за 20 мс до её начала.
   note(bars, barStart(5), -20.0);
   CHECK(shown(bars) == std::vector<std::int64_t>{5});
   CHECK_FALSE(visibleRow(bars, 0).hasValues());
 
-  bars.play(barStart(5) + 0.01, kLoop, 10.0, timeline());
+  bars.play(barStart(5) + 0.01, kLoop, kWindow, timeline());
   CHECK(shown(bars) == std::vector<std::int64_t>{5, 5});
   CHECK(valueMs(visibleRow(bars, 0), 0, 0) == doctest::Approx(-20.0));
 }
@@ -246,16 +250,18 @@ TEST_CASE("такты: позднее значение пересчитывае�
   CHECK(*row.mean * 1000.0 == doctest::Approx(2.0));
 }
 
-TEST_CASE("такты: допуск значения и допуск, когда воспроизведение ушло из такта") {
+TEST_CASE("такты: окно попадания значения и окно, когда воспроизведение ушло из такта") {
+  const HitWindow first{.offsetMs = 0.0, .toleranceMs = 10.0};
+  const HitWindow second{.offsetMs = 12.0, .toleranceMs = 8.0};
   Bars bars;
-  play(bars, 0.1, 10.0);
-  note(bars, 0.0, 13.0, 10.0);
-  play(bars, 4.1, 20.0);
+  play(bars, 0.1, first);
+  note(bars, 0.0, 13.0, first);
+  play(bars, 4.1, second);
 
   const BarRow &row = visibleRow(bars, 1);
-  CHECK(row.beats[0].slots[0].toleranceMs == 10.0);
-  CHECK(row.leftToleranceMs == 20.0);
-  CHECK_FALSE(visibleRow(bars, 0).leftToleranceMs);
+  CHECK(row.beats[0].slots[0].window == first);
+  CHECK(row.leftWindow == second);
+  CHECK_FALSE(visibleRow(bars, 0).leftWindow);
 }
 
 TEST_CASE("такты: пауза — строка первого пустого такта, верхняя меняет номер") {
