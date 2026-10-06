@@ -26,6 +26,7 @@
 
 #include "journal.hpp"
 #include "project_timeline.hpp"
+#include "settings.hpp"
 #include "trainer.hpp"
 #include "window.hpp"
 
@@ -54,10 +55,12 @@ namespace {
 
 int (*hostRegister)(const char *name, void *infostruct) = nullptr;
 
-/// Пишет строку в консоль REAPER и в журнал.
+/// Пишет строку в журнал, а со скрытой настройкой `console_log` — ещё и в
+/// консоль REAPER.
 void say(const std::string &line) {
   journal("console: {}", line);
-  ShowConsoleMsg((line + "\n").c_str());
+  if (consoleLogEnabled())
+    ShowConsoleMsg((line + "\n").c_str());
 }
 
 /// Адрес и размер переменной настроек REAPER по имени: сначала среди настроек

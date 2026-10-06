@@ -71,7 +71,7 @@ en.NotResourceDir=%1 is not a REAPER folder: there is no reaper.ini in it.
 en.CloseReaper=REAPER is running. Close REAPER and click Retry.
 en.ReaperStillRunning=REAPER is running. Close it and run the installer again.
 en.SelectPortableDir=Choose the folder of your portable REAPER, the one with reaper.exe and reaper.ini. The extension goes to its UserPlugins folder.
-en.Finished=reaper-training is installed in %1.%n%nStart REAPER: its console shows the line "reaper-training ... loaded".
+en.Finished=reaper-training is installed in %1.%n%nStart REAPER: the action list (Actions → Show action list) has the action "reaper-training: Show/hide timing trainer".
 ru.ReaperNotFound=REAPER 7 (64-битный) на этом компьютере не найден. Поставьте REAPER и запустите его хотя бы раз, затем запустите установщик снова.
 ru.AskPortable=Если REAPER портативный, нажмите «Да» и укажите его папку — ту, где лежит reaper.ini.
 ru.ReaperNot64Bit=REAPER в %1 — 32-битный, а reaper-training нужен 64-битный REAPER.
@@ -80,7 +80,7 @@ ru.NotResourceDir=%1 — не папка REAPER: в ней нет reaper.ini.
 ru.CloseReaper=REAPER запущен. Закройте REAPER и нажмите «Повтор».
 ru.ReaperStillRunning=REAPER запущен. Закройте его и запустите установщик снова.
 ru.SelectPortableDir=Укажите папку портативного REAPER — ту, где лежат reaper.exe и reaper.ini. Расширение ляжет в её папку UserPlugins.
-ru.Finished=reaper-training установлен в %1.%n%nЗапустите REAPER: в его консоли появится строка «reaper-training … loaded».
+ru.Finished=reaper-training установлен в %1.%n%nЗапустите REAPER: в списке действий (Actions → Show action list) появится действие «reaper-training: Show/hide timing trainer».
 
 [Code]
 const

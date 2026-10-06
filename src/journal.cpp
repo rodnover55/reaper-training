@@ -3,7 +3,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <mutex>
+#include <string>
+#include <system_error>
 
 namespace training::reaper {
 namespace {
@@ -25,6 +28,20 @@ std::string threadTag() {
   return number == 0 ? std::string("main") : fmt::format("T{}", number);
 }
 
+/// Путь из строки UTF-8: на Windows `std::filesystem::path` из `char`
+/// читает строку в кодировке системы, а не в UTF-8.
+std::filesystem::path pathOf(const std::string &utf8) {
+  return {std::u8string(utf8.begin(), utf8.end())};
+}
+
+std::FILE *openAppending(const std::filesystem::path &file) {
+#ifdef _WIN32
+  return _wfopen(file.c_str(), L"a");
+#else
+  return std::fopen(file.c_str(), "a");
+#endif
+}
+
 } // namespace
 
 void openJournal(const std::string &path) {
@@ -33,7 +50,18 @@ void openJournal(const std::string &path) {
   if (journalFile)
     return;
 
-  journalFile = std::fopen(path.c_str(), "a");
+  // Журнал не растёт без конца: большой уходит в `.1`, и запись идёт заново.
+  const std::filesystem::path file = pathOf(path);
+  std::error_code error;
+  if (const std::uintmax_t size = std::filesystem::file_size(file, error);
+      !error && size > kJournalLimit) {
+    std::filesystem::path previous = file;
+    previous += ".1";
+    std::filesystem::remove(previous, error);
+    std::filesystem::rename(file, previous, error);
+  }
+
+  journalFile = openAppending(file);
   journalStart = Clock::now();
 
   // Главный поток получает номер первым — до того, как REAPER позовёт

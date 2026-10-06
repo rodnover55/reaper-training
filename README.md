@@ -19,12 +19,34 @@
 | `cmake --build build --target format` | Привести форматирование в порядок, когда упал `clang_format`. |
 | `cmake --workflow --preset sanitize` | Прогнать тесты под ASan и UBSan, если есть подозрение на порчу памяти. |
 | `cmake --install build` | Поставить плагин в REAPER и попробовать вживую. |
-| `cmake --preset debug && cmake --build --preset debug && cmake --install build/debug` | Поставить отладочную сборку: журнал `reaper-training.log` в папке ресурсов REAPER и отладочные действия `reaper-training (debug): …`. |
+| `cmake --preset debug && cmake --build --preset debug && cmake --install build/debug` | Поставить отладочную сборку: отладочные действия `reaper-training (debug): …` и функции `TrainingDebug_*` для скриптов проверок. |
 | `cmake --workflow --preset release` | Собрать модуль так, как его собирает CI для Releases, и прогнать тесты. Файл — в `build/release`. |
 | `cmake --build --preset installer` | После `release` — собрать установщик для своей системы. Файл — в `build/release/installer`. Нужен инструмент установщика: Inno Setup на Windows, Xcode Command Line Tools на macOS, makeself на Linux; без него сборка цели падает с подсказкой, что поставить. |
 
 Полный список — `cmake --list-presets=<configure|build|test|workflow>`. Личные
 пресеты кладутся в `CMakeUserPresets.json`, он в репозиторий не попадает.
+
+## Журнал и консоль
+
+Любая сборка пишет журнал `reaper-training.log` в папке ресурсов REAPER:
+загрузку с версией и временем сборки, найденные ноты, смены настроек, ход
+калибровки. Если при запуске журнал больше 5 МБ, он становится
+`reaper-training.log.1`, а прежний `.1` пропадает.
+
+В консоль REAPER расширение не пишет ничего. Для тестовых сборок это
+включает скрытая настройка — в окне её нет:
+
+```ini
+; reaper-extstate.ini в папке ресурсов REAPER, правится при закрытом REAPER
+[reaper_training]
+console_log=1
+```
+
+Тогда при запуске в консоли появляется строка `reaper-training <версия>
+loaded (сборка <время>)`, а отладочные действия пишут туда свои результаты.
+Из скрипта то же — `reaper.SetExtState("reaper_training", "console_log", "1",
+true)`, выключить — `reaper.DeleteExtState("reaper_training", "console_log",
+true)`; действует со следующего запуска.
 
 ## Сборки и релизы
 
