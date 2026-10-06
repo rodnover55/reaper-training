@@ -95,6 +95,32 @@ macOS 12 не выйдет: самый новый Xcode для неё не тя�
 собранный GitHub. Если тег не совпадает с версией в `CMakeLists.txt`, релиз не
 создаётся. Тег с суффиксом (`v0.2.0-rc1`) даёт предварительный релиз.
 
+## Windows на Linux
+
+`bash tools/setup-windows-env.sh` ставит на Ubuntu окружение, в котором модуль
+для Windows собирается настоящим MSVC и проверяется в REAPER для Windows под
+Wine: Wine, MSVC через [msvc-wine](https://github.com/mstorsjo/msvc-wine),
+шрифты Microsoft и REAPER той же версии, что в CI, со звуковой системой Dummy
+Audio. Системные пакеты скрипт ставит через sudo, скачивание MSVC просит
+принять лицензию Microsoft, остальное ложится в
+`~/.local/share/reaper-training-windows`. Сборка:
+
+```sh
+. ~/.local/share/reaper-training-windows/env.sh
+CC=cl CXX=cl cmake -S . -B build/wine-debug -G Ninja -DCMAKE_SYSTEM_NAME=Windows \
+  -DCMAKE_BUILD_TYPE=Debug -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
+  -DREAPER_TRAINING_STATIC_RUNTIME=ON -DREAPER_TRAINING_BUILD_TESTS=OFF \
+  -DREAPER_TRAINING_WERROR=ON
+cmake --build build/wine-debug --target reaper_training
+```
+
+Модуль кладётся в `UserPlugins` папки ресурсов REAPER —
+`prefix/drive_c/users/<пользователь>/AppData/Roaming/REAPER` в той же папке, —
+а REAPER запускает `reaper.sh`. Он задаёт русскую локаль: функции Win32 без
+UNICODE читают текст в кодировке cp1251, как на русской Windows, и ошибки
+кодировки видны так же. При каждом запуске REAPER показывает напоминание об
+ознакомительной лицензии — его закрывает кнопка Still Evaluating.
+
 ## Инструменты
 
 Для сборки нужны компилятор с C++23, CMake 3.29 и новее и Ninja. REAPER SDK,
