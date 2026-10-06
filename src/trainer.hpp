@@ -83,10 +83,15 @@ public:
   const Settings &settings() const { return settings_; }
 
   /// Меняет и сохраняет настройки (`saveSettings`), прижав их к границам.
-  /// Режим действует на удары, которые ещё не начались, допуск — на
+  /// Режим действует на удары, которые ещё не начались, окно попадания — на
   /// значения, которые появятся после смены, канал и порог — со следующего
-  /// блока.
+  /// блока. Смена канала кончает калибровку.
   void setSettings(const Settings &settings);
+
+  /// Меняет настройки, как `setSettings`, но не сохраняет их. Для частых
+  /// правок, например пока тянут ползунок шкалы; сохранить — `setSettings`
+  /// по окончании.
+  void previewSettings(const Settings &settings);
 
   /// Строки тактов последнего запуска транспорта.
   const grid::Bars &bars() const { return bars_; }
@@ -152,6 +157,7 @@ public:
   bool poll();
 
 private:
+  void apply(const Settings &settings);
   void start();
   void takeCompensation();
   double loopBeats(double heard) const;

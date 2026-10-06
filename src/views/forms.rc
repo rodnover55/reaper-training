@@ -9,24 +9,34 @@
 #include "ids.h"
 
 // Окно тренажёра встаёт в док REAPER, поэтому это дочерняя форма без рамки.
-// Сверху — настройки и строка состояния, ниже окно рисует строки тактов само.
+// Верхняя строка — кнопка сворачивания панели настроек и строка состояния,
+// под ней — три строки настроек; ниже окно рисует строки тактов само.
+// Кнопку сворачивания рисует окно (BS_OWNERDRAW): стрелку вниз или вправо —
+// треугольником, а не знаком, которого нет в растровом шрифте диалога Windows.
+// IDC_GAUGE невидим: это место шкалы окна попадания, которую рисует окно, —
+// видимый контрол не дал бы рисовать под собой.
 // Кнопки IDC_CAL_* — кнопки панели калибровки: место и видимость им задаёт
 // окно, они стоят поверх области строк, пока идёт калибровка.
 IDD_TRAINER DIALOG DISCARDABLE 0, 0, 444, 200
 STYLE DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
 BEGIN
-    LTEXT           "Mode:", IDC_MODE_LABEL, 4, 4, 26, 10
-    COMBOBOX        IDC_MODE, 32, 2, 90, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Tolerance, ms:", IDC_TOLERANCE_LABEL, 128, 4, 52, 10
-    EDITTEXT        IDC_TOLERANCE, 182, 2, 24, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "Input:", IDC_CHANNEL_LABEL, 212, 4, 22, 10
-    COMBOBOX        IDC_CHANNEL, 236, 2, 80, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    CHECKBOX        "Bar numbers", IDC_SHOW_NUMBERS, 324, 3, 56, 10, BS_AUTOCHECKBOX | WS_TABSTOP
-    CHECKBOX        "Mean/spread", IDC_SHOW_STATS, 384, 3, 58, 10, BS_AUTOCHECKBOX | WS_TABSTOP
-    LTEXT           "Silence, dBFS:", IDC_SILENCE_LABEL, 4, 20, 52, 10
-    EDITTEXT        IDC_SILENCE, 58, 18, 24, 12, ES_AUTOHSCROLL | WS_TABSTOP
-    PUSHBUTTON      "Calibrate...", IDC_CALIBRATE, 88, 18, 50, 12, WS_TABSTOP
-    LTEXT           "", IDC_STATUS, 144, 20, 296, 10
+    PUSHBUTTON      "Settings", IDC_SETTINGS_TOGGLE, 4, 2, 50, 12, BS_OWNERDRAW | WS_TABSTOP
+    LTEXT           "", IDC_STATUS, 60, 4, 380, 10
+    LTEXT           "Mode:", IDC_MODE_LABEL, 4, 20, 26, 10
+    COMBOBOX        IDC_MODE, 32, 18, 90, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Input:", IDC_CHANNEL_LABEL, 130, 20, 22, 10
+    COMBOBOX        IDC_CHANNEL, 154, 18, 80, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CHECKBOX        "Bar numbers", IDC_SHOW_NUMBERS, 244, 19, 56, 10, BS_AUTOCHECKBOX | WS_TABSTOP
+    CHECKBOX        "Mean/spread", IDC_SHOW_STATS, 304, 19, 58, 10, BS_AUTOCHECKBOX | WS_TABSTOP
+    LTEXT           "Offset, ms:", IDC_OFFSET_LABEL, 4, 40, 38, 10
+    EDITTEXT        IDC_OFFSET, 44, 38, 26, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "Tolerance, ms:", IDC_TOLERANCE_LABEL, 78, 40, 52, 10
+    EDITTEXT        IDC_TOLERANCE, 132, 38, 26, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "", IDC_GAUGE, 166, 33, 210, 22, NOT WS_VISIBLE
+    LTEXT           "", IDC_RANGE, 380, 40, 62, 10
+    LTEXT           "Silence, dBFS:", IDC_SILENCE_LABEL, 4, 62, 52, 10
+    EDITTEXT        IDC_SILENCE, 58, 60, 24, 12, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Calibrate...", IDC_CALIBRATE, 88, 60, 50, 12, WS_TABSTOP
     PUSHBUTTON      "Cancel", IDC_CAL_CANCEL, 0, 0, 40, 14, WS_TABSTOP
     PUSHBUTTON      "Apply anyway", IDC_CAL_APPLY, 0, 0, 80, 14, WS_TABSTOP
     PUSHBUTTON      "Calibrate again", IDC_CAL_AGAIN, 0, 0, 64, 14, WS_TABSTOP

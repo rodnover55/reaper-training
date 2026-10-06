@@ -89,12 +89,18 @@ Trainer::Trainer() : settings_(loadSettings()) {
 }
 
 void Trainer::setSettings(const Settings &settings) {
+  apply(settings);
+  saveSettings(settings_);
+}
+
+void Trainer::previewSettings(const Settings &settings) { apply(settings); }
+
+void Trainer::apply(const Settings &settings) {
   // Смена входа прерывает калибровку: она меряла другой канал.
   if (session_ && clamped(settings).channel != settings_.channel)
     endCalibration();
 
   settings_ = clamped(settings);
-  saveSettings(settings_);
   input_.setChannel(settings_.channel);
   input_.setSilenceDb(settings_.silenceDb);
   bars_.setMode(settings_.mode);
@@ -165,8 +171,7 @@ double Trainer::loopBeats(double heard) const {
 void Trainer::followPlayback() {
   // Верхняя строка и текущий удар — по слышимой позиции (design.md D2).
   const double heard = GetPlayPositionEx(nullptr);
-  if (!bars_.play(timeline_.beatsAt(heard), loopBeats(heard), settings_.toleranceMs,
-                  timeline_))
+  if (!bars_.play(timeline_.beatsAt(heard), loopBeats(heard), settings_.window(), timeline_))
     return;
 
   for (const grid::BarRow &row : bars_.rows()) {
@@ -180,7 +185,7 @@ void Trainer::followPlayback() {
 void Trainer::addTestNote(double time) {
   if (!wasPlaying_)
     return;
-  bars_.addNote(time, rate_, settings_.toleranceMs, timeline_);
+  bars_.addNote(time, rate_, settings_.window(), timeline_);
   journal("test note t={:.6f}", time);
   refreshWindow();
 }
@@ -242,7 +247,7 @@ bool Trainer::poll() {
     const double time = loopWrapped(
         grid::noteTime(hit->blockPosition, hit->offset, hit->sampleRate, compensation_, rate_),
         hit->blockPosition);
-    bars_.addNote(time, rate_, settings_.toleranceMs, timeline_);
+    bars_.addNote(time, rate_, settings_.window(), timeline_);
     lastRun_.push_back(*hit);
     changed = true;
 
