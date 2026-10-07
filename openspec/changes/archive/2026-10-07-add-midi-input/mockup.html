@@ -1,0 +1,1566 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Вход MIDI — макет</title>
+<style>
+  :root {
+    --bg: rgb(24, 24, 24);
+    --row: rgb(36, 36, 36);
+    --beat-back: rgb(69, 59, 40);
+    --line: rgb(56, 56, 56);
+    --neutral: rgb(170, 170, 170);
+    --dim: rgb(125, 125, 125);
+    --good: rgb(90, 210, 90);
+    --bad: rgb(235, 80, 70);
+    --beat: rgb(255, 190, 60);
+    --band: rgb(45, 95, 45);
+    --out: rgb(80, 40, 37);
+    --new: rgb(230, 130, 20);
+    --chord: rgba(255, 190, 60, .17);
+  }
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 16px 20px; background: #ececec; color: #222; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 18px 0 4px; }
+  p { margin: 4px 0 10px; max-width: 1100px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 6px; }
+  .tabs button {
+    font: inherit; padding: 4px 12px; border: 1px solid #999; background: #fff;
+    border-radius: 4px; cursor: pointer;
+  }
+  .tabs button.active { background: #333; color: #fff; border-color: #333; }
+  #desc { min-height: 42px; }
+
+  .window {
+    width: 1100px; height: 470px; min-width: 780px; min-height: 300px;
+    resize: both; overflow: hidden; border: 1px solid #444;
+    display: flex; flex-direction: column; box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+  }
+  .controls { flex: none; position: relative; background: rgb(180, 180, 180); font: 13px Arial, sans-serif; padding: 3px 8px 5px; color: #111; }
+  .controls .line { display: flex; align-items: center; gap: 8px; height: 26px; white-space: nowrap; }
+  .controls .line.tall { height: 36px; }
+  .controls .gap { width: 14px; }
+  .toggle { width: 92px; text-align: left; }
+  .edit { font: 13px Arial, sans-serif; background: #fff; border: 1px solid #777; padding: 1px 4px; width: 34px; }
+  .static { display: inline-block; }
+  .check { display: flex; align-items: center; gap: 3px; }
+  .check input { margin: 0; }
+  .combo {
+    background: linear-gradient(#fafafa, #ddd); border: 1px solid #777; padding: 1px 6px;
+    width: 110px; display: flex; justify-content: space-between; gap: 6px;
+  }
+  .combo span:first-child { overflow: hidden; text-overflow: ellipsis; }
+  #input { width: 200px; cursor: pointer; }
+  .dropdown {
+    position: absolute; z-index: 5; background: #fff; border: 1px solid #555; min-width: 214px;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, .35); font: 13px Arial, sans-serif; padding: 1px 0;
+  }
+  .dropdown div { padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+  .dropdown div:hover { background: #dde6f5; }
+  .dropdown div.sel { background: rgb(50, 100, 200); color: #fff; }
+  .dropdown div.off { color: #777; }
+  .dropdown div.sel.off { color: #e4e4e4; }
+  .btn {
+    font: 13px Arial, sans-serif; color: #111; background: linear-gradient(#fafafa, #ddd);
+    border: 1px solid #777; border-radius: 2px; padding: 2px 10px; white-space: nowrap;
+  }
+  .new { outline: 2px dashed var(--new); outline-offset: 3px; border-radius: 2px; }
+  body.plain .new { outline: none; }
+
+  /* Шкала окна попадания — как в окне, без перетаскивания. */
+  .gauge { position: relative; flex: none; width: 400px; height: 32px; }
+  .gauge .track { position: absolute; left: 14px; right: 14px; top: 4px; height: 16px; background: var(--out); box-shadow: inset 0 0 0 1px rgb(60, 60, 60); }
+  .gauge .band { position: absolute; top: 0; bottom: 0; background: var(--band); }
+  .gauge .zero { position: absolute; top: -4px; bottom: -4px; width: 0; margin-left: -1px; border-left: 2px solid #fff; }
+  .gauge .handle { position: absolute; top: -4px; bottom: -4px; width: 8px; margin-left: -4px; background: linear-gradient(90deg, #f4f4f4, #cfcfcf); border: 1px solid #222; border-radius: 2px; }
+  .gauge .ticks { position: absolute; left: 14px; right: 14px; top: 22px; height: 10px; font: 10px Arial, sans-serif; color: #333; }
+  .gauge .ticks span { position: absolute; transform: translateX(-50%); line-height: 10px; }
+  #range { min-width: 92px; font-weight: bold; }
+
+  .rows {
+    flex: 1; position: relative; background: var(--bg); overflow: hidden;
+    font-family: Arial, Helvetica, sans-serif; font-weight: bold; cursor: pointer;
+  }
+  .rows > div { position: absolute; }
+  .rows .picked { border: 2px dashed rgba(120, 170, 255, .9); box-sizing: border-box; pointer-events: none; }
+  .tx { transform: translate(-50%, -50%); white-space: nowrap; line-height: 1; }
+  .dot { transform: translate(-50%, -50%); border-radius: 50%; }
+
+  .mockctl { display: flex; align-items: center; gap: 14px; margin: 10px 0 6px; flex-wrap: wrap; max-width: 1100px; }
+  .mockctl label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  #caption {
+    margin-top: 8px; padding: 8px 12px; background: #fff; max-width: 1076px; min-height: 42px;
+    border-left: 4px solid rgb(230, 170, 40);
+  }
+
+  /* Лупа под окном: только в макете. */
+  #lensBox { max-width: 1100px; }
+  #lensBox.hidden .lens, #lensBox.hidden .legend { display: none; }
+  #lensNote { display: none; color: #555; }
+  #lensBox.hidden #lensNote { display: block; }
+  .lens {
+    position: relative; width: 1100px; height: 160px; background: var(--bg); border: 1px solid #444;
+    font-family: Arial, Helvetica, sans-serif; overflow: hidden;
+  }
+  .lens > div { position: absolute; }
+  .lens .ltx { transform: translateX(-50%); white-space: nowrap; line-height: 1; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0 6px; align-items: center; max-width: 1100px; }
+  .sw { display: inline-block; width: 14px; height: 12px; vertical-align: -1px; margin-right: 5px; }
+  details { max-width: 1100px; margin-top: 12px; }
+  details li { margin: 4px 0; }
+mark.cm-hl{background:#fde68a;color:inherit;border-radius:3px;padding:0 1px;box-shadow:inset 0 -2px 0 #f59e0b;cursor:pointer}
+mark.cm-hl mark.cm-hl{background:#fcd34d}
+mark.cm-hl.cm-flash{animation:cm-flash 1.6s ease-out}
+@keyframes cm-flash{0%{background:#fb923c}100%{background:#fde68a}}
+figure.cm-fig-hl{outline:3px solid #f59e0b;outline-offset:3px}
+@media (prefers-color-scheme: dark){
+  mark.cm-hl{background:rgba(250,204,21,.3);box-shadow:inset 0 -2px 0 rgba(250,204,21,.85)}
+  mark.cm-hl mark.cm-hl{background:rgba(250,204,21,.5)}
+  @keyframes cm-flash{0%{background:rgba(251,146,60,.85)}100%{background:rgba(250,204,21,.3)}}
+}
+.cm-ui[hidden]{display:none!important}
+.cm-btn{font:inherit;font-size:13px;line-height:1.3;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:8px;padding:6px 10px;cursor:pointer}
+.cm-btn:hover{border-color:var(--accent)}
+.cm-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.cm-btn:disabled{opacity:.45;cursor:default}
+.cm-btn.cm-danger{color:var(--bad)}
+.cm-sel-btn{position:absolute;z-index:1002;box-shadow:0 6px 18px rgba(0,0,0,.2);font-weight:600}
+.cm-pop{position:absolute;z-index:1003;width:400px;max-width:calc(100vw - 16px);background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 14px 34px rgba(0,0,0,.22);padding:12px 14px}
+.cm-pop-label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+.cm-pop-quote{font-size:13.5px;line-height:1.45;color:var(--muted);border-left:3px solid #f59e0b;padding:2px 0 2px 10px;margin:6px 0 10px;max-height:6.6em;overflow:auto}
+.cm-textarea{display:block;width:100%;font:inherit;font-size:14px;line-height:1.45;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;resize:vertical}
+.cm-textarea:focus{outline:2px solid var(--accent);outline-offset:0}
+.cm-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+.cm-kbd{font-size:12px;color:var(--muted);margin-left:auto}
+.cm-fab{position:fixed;right:18px;bottom:18px;z-index:1000;box-shadow:0 6px 18px rgba(0,0,0,.18);padding:9px 14px;font-weight:600}
+.cm-count{display:inline-block;min-width:20px;margin-left:8px;padding:0 6px;border-radius:999px;background:var(--accent);color:#fff;font-size:12px;line-height:20px;text-align:center}
+.cm-drawer{position:fixed;top:0;right:0;bottom:0;width:min(440px,94vw);z-index:1001;background:var(--card);border-left:1px solid var(--line);box-shadow:-10px 0 30px rgba(0,0,0,.16);display:flex;flex-direction:column}
+.cm-head{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line)}
+.cm-title{font-size:16px;margin-right:auto}
+.cm-x{font-size:18px;line-height:1;padding:4px 10px}
+.cm-hint{font-size:13px;line-height:1.45;color:var(--muted);margin:10px 14px 0}
+.cm-warn{font-size:12.5px;color:var(--bad);margin:6px 0}
+.cm-drawer>.cm-warn{margin:8px 14px 0}
+.cm-list{list-style:none;margin:0;padding:6px 14px 80px;overflow:auto;flex:1}
+.cm-item{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0;background:var(--bg)}
+.cm-item.cm-item-flash{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.cm-path{font-size:12px;line-height:1.4;color:var(--muted);font-weight:600}
+.cm-quote{margin:6px 0;padding:2px 0 2px 10px;border-left:3px solid #f59e0b;font-size:13px;line-height:1.45;color:var(--muted)}
+.cm-item.cm-missing .cm-quote{border-left-color:var(--bad)}
+.cm-text{font-size:14px;line-height:1.5;white-space:pre-wrap}
+.cm-text.cm-empty{color:var(--muted);font-style:italic}
+.cm-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:1004;background:#1f2328;color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.cm-manual{position:fixed;inset:0;z-index:1005;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center}
+.cm-manual-box{background:var(--card);border-radius:12px;padding:16px;width:min(720px,94vw)}
+.cm-manual-box .cm-textarea{margin-top:10px}
+@media print{.cm-ui{display:none!important}mark.cm-hl{background:none;box-shadow:none}figure.cm-fig-hl{outline:none}}
+
+</style>
+</head>
+<body data-report-id="add-midi-input-mockup" data-report-title="Вход MIDI — макет" data-report-version="2">
+<main>
+
+<h1>Вход MIDI — макет</h1>
+<p>Сейчас тренажёр слушает только канал звуковой карты, выбранный в <b>Input</b>, и нота для
+него — фронт атаки звука. В макете в том же списке Input после каналов звуковой карты идут
+<b>входы MIDI</b> — устройства, с которых REAPER записывает MIDI на дорожку. С входа MIDI нота —
+это начало ноты (сообщение Note On), а <b>аккорд — одна нота</b>: его время — время первой
+ноты аккорда. Время ноты на шкале проекта — то, куда REAPER поставил бы её при записи MIDI с
+этого входа. Аккорд — ноты, начатые не позже 40 мс после первой: столько же длится мёртвое
+время поиска атак у звука, поэтому и аккорд на гитаре со звуком даёт одно значение. Строки
+тактов, режимы и окно попадания — те же, что для звука. Для MIDI нет четвёртой строки настроек —
+порога тишины (Silence) и калибровки (Calibrate…), — и строки тактов занимают её место.
+Сценарии переключаются вкладками; список Input раскрывается щелчком.</p>
+
+<div class="tabs" id="tabs"></div>
+<p id="desc"></p>
+
+<div class="window">
+  <div class="controls" id="controls">
+    <div class="line">
+      <span class="btn toggle">▾ Settings</span>
+      <span class="gap"></span>
+      <span id="status"></span>
+    </div>
+    <div class="line">
+      <span>Mode:</span><span class="combo"><span id="modeName">Eighths</span><span>▾</span></span>
+      <span class="gap"></span>
+      <span>Input:</span><span class="combo new" id="input"><span id="inputName"></span><span>▾</span></span>
+      <span class="btn new" id="refresh" title="Перечитать входы">Refresh</span>
+      <span class="gap"></span>
+      <label class="check"><input type="checkbox" checked disabled>Bar numbers</label>
+      <label class="check"><input type="checkbox" checked disabled>Mean/spread</label>
+    </div>
+    <div class="line tall">
+      <span>Offset, ms: <span class="edit static" id="offset"></span></span>
+      <span class="gap"></span>
+      <span>Tolerance, ms: <span class="edit static" id="tol"></span></span>
+      <span class="gap"></span>
+      <div class="gauge">
+        <div class="track">
+          <div class="band" id="band"></div>
+          <div class="zero" style="left: 50%"></div>
+          <div class="handle" id="lo"></div>
+          <div class="handle" id="hi"></div>
+        </div>
+        <div class="ticks" id="ticks"></div>
+      </div>
+      <span id="range"></span>
+    </div>
+    <div class="line" id="audioLine">
+      <span>Silence, dBFS:</span><span class="edit static">-50</span>
+      <span class="btn">Calibrate...</span>
+    </div>
+    <div class="dropdown" id="dropdown" hidden></div>
+  </div>
+  <div class="rows" id="rows"></div>
+</div>
+
+<div class="mockctl">
+  <label><input type="checkbox" id="hl" checked> Подсветить новое в окне</label>
+</div>
+<div id="caption"></div>
+
+<div id="lensBox">
+  <h2 id="lensTitle"></h2>
+  <p id="lensNote">Для звукового входа лупы нет: нота — фронт атаки, аккордов нет.</p>
+  <div class="lens" id="lens"></div>
+  <div class="legend">
+    <span><span class="sw" style="background: var(--beat)"></span>первая нота аккорда: её время — время ноты</span>
+    <span><span class="sw" style="background: var(--neutral)"></span>остальные ноты аккорда</span>
+    <span><span class="sw" style="background: rgba(255, 190, 60, .35)"></span>окно аккорда: 40 мс от первой ноты</span>
+    <span><span class="sw" style="border-left: 2px solid #fff; background: #333; width: 10px"></span>клик</span>
+    <span><span class="sw" style="background: var(--band)"></span>окно попадания</span>
+  </div>
+</div>
+
+<details open>
+  <summary>Допущения макета — уточнить</summary>
+  <ul>
+    <li><b>Один список Input</b>: сначала каналы звуковой карты, как сейчас, потом входы MIDI —
+      «MIDI: имя устройства», как его называет REAPER, с псевдонимом из настроек REAPER. Виртуальная
+      MIDI-клавиатура REAPER (Virtual MIDI keyboard) — тоже в списке, как у входа дорожки.</li>
+    <li><b>Все 16 каналов MIDI вместе</b>, как «All channels» у входа дорожки; выбрать один
+      канал MIDI нельзя.</li>
+    <li><b>Нота — Note On с ненулевой громкостью (velocity)</b>. Note Off, контроллеры, педаль
+      и pitch bend нот не дают. Тихая нота меряется так же, как громкая: порога громкости — аналога
+      Silence — для MIDI нет.</li>
+    <li><b>Аккорд</b> — ноты, начатые не позже 40 мс после первой ноты аккорда, как мёртвое
+      время поиска атак у звука (решено). Настройки окна аккорда нет. Окно отсчитывается от первой
+      ноты, а не от предыдущей: раскат дольше 40 мс даёт вторую ноту, и у узла появляется лишняя
+      нота «*». Время аккорда — время его первой ноты, а не самой громкой.</li>
+    <li><b>Время ноты — как у записи REAPER</b>: куда REAPER поставил бы начало ноты при записи
+      MIDI с этого входа, с теми поправками на задержку, какие REAPER применяет к записи MIDI.
+      Задержка MIDI-кабеля и USB не учитывается. Сверка — с записанным MIDI-айтемом, точность
+      1 мс. Квантование записи дорожки (Input quantize) не учитывается: меряется сыгранное.</li>
+    <li><b>Значение появляется в окне не позже 250 мс</b> после ноты — то же требование, что
+      у звука.</li>
+    <li><b>Вход MIDI должен быть включён в настройках REAPER</b> для записи на дорожки, как для
+      обычной записи с него. Выключенный вход в списке помечен «(not enabled)», а строка состояния
+      говорит, что его нужно включить в настройках REAPER. Вход, включённый только для управления
+      (control messages), ноты не даёт.</li>
+    <li><b>Вход MIDI запоминается по имени устройства</b>: если устройство подключили в другой
+      порт и REAPER дал ему другой номер, тренажёр найдёт его по имени. Отключённое устройство —
+      «selected input is not available», как пропавший канал звуковой карты.</li>
+    <li><b>Кнопка Refresh</b> справа от списка Input перечитывает входы: устройство, подключённое
+      при открытом окне, появляется в списке после её нажатия.</li>
+    <li><b>Для MIDI четвёртая строка настроек скрыта</b> вместе с Silence и Calibrate…, строки
+      тактов занимают её место. Порог тишины звукового входа при этом не меняется и вернётся
+      вместе с ним.</li>
+    <li><b>Лупа под окном — только в макете</b>: в окне тренажёра её нет.</li>
+    <li><b>Тексты в окне — по-английски</b>, как остальные контролы.</li>
+  </ul>
+</details>
+
+</main>
+<script>
+'use strict';
+
+/** Строк тактов в окне. */
+const KEEP = 8;
+
+/** Такт 4/4. */
+const BEATS = 4;
+
+/** Шкала окна попадания: от −SCALE до +SCALE мс. */
+const SCALE = 50;
+
+/** Узлов в лупе. */
+const LENS_NODES = 8;
+
+/** Лупа у узла: от LENS_FROM до LENS_TO мс от клика. */
+const LENS_FROM = -30;
+const LENS_TO = 60;
+
+/** Окно аккорда, мс: мёртвое время поиска атак у звука. */
+const CHORD_MS = 40;
+
+const MODE_NAMES = { 1: 'Quarters', 2: 'Eighths', 4: 'Sixteenths' };
+
+const INPUTS = [
+  { id: 'in1', label: '1: Input 1', kind: 'audio' },
+  { id: 'in2', label: '2: Input 2', kind: 'audio' },
+  { id: 'keys', label: 'MIDI: KeyStep 37', kind: 'midi' },
+  { id: 'gtr', label: 'MIDI: TriplePlay Express', kind: 'midi' },
+  { id: 'drums', label: 'MIDI: TD-17', kind: 'midi', off: true },
+  { id: 'vkb', label: 'MIDI: Virtual MIDI keyboard', kind: 'midi' },
+];
+
+// Сценарий: вход, режим (`div` узлов на удар), темп, окно попадания, игра —
+// отклонение первой ноты аккорда от клика со сдвигом `bias` и разбросом `sd`,
+// мс, число нот в аккорде `notes` и его раскат `spread` от первой ноты до
+// последней, мс; `set` задаёт аккорд точно: [строка сверху, узел, {dev, notes,
+// spread}].
+const SCENARIOS = [
+  {
+    id: 'list', title: 'Выбор входа', input: 'gtr', open: true, div: 2, bpm: 92, offset: 0, tol: 10,
+    bias: 4, sd: 6, notes: [4, 6], spread: [8, 24], strum: true, seed: 3, first: 17,
+    desc: 'Список Input раскрыт: после каналов звуковой карты — входы MIDI. TD-17 выключен в ' +
+      'настройках REAPER — он помечен «(not enabled)».',
+    caption: 'Выберите «1: Input 1» — вернётся четвёртая строка с Silence и Calibrate…, а лупа ' +
+      'скроется. Выберите «MIDI: TD-17» — строка состояния скажет, что вход надо включить в REAPER.',
+  },
+  {
+    id: 'keys', title: 'Клавиши: аккорды', input: 'keys', div: 2, bpm: 100, offset: 0, tol: 10,
+    bias: -3, sd: 5, notes: [3, 4], spread: [1, 12], seed: 7, first: 33,
+    desc: 'Клавишник играет восьмыми аккорды по три-четыре ноты. Пальцы нажимают клавиши не ' +
+      'одновременно: ноты аккорда расходятся на 1–12 мс.',
+    caption: 'Каждый аккорд — одно значение: время его первой ноты. В лупе оранжевая метка — ' +
+      'первая нота, серые — остальные, все внутри окна аккорда.',
+  },
+  {
+    id: 'gtr', title: 'MIDI-гитара: бой', input: 'gtr', div: 2, bpm: 92, offset: 0, tol: 10,
+    bias: 4, sd: 6, notes: [4, 6], spread: [8, 24], strum: true, seed: 3, first: 17,
+    desc: 'Гитарист с MIDI-звукоснимателем играет восьмыми боем вниз-вверх. Медиатор проходит ' +
+      'струны за 8–24 мс, каждая струна — своя нота MIDI.',
+    caption: 'Удар вниз начинается с басовой струны, вверх — с первой; значение — время первой ' +
+      'задетой струны. Весь удар — внутри 40 мс, поэтому лишних нот нет.',
+  },
+  {
+    id: 'rolled', title: 'Раскатанный аккорд', input: 'keys', div: 2, bpm: 72, offset: 0, tol: 10,
+    bias: -2, sd: 5, notes: [3, 4], spread: [2, 12], seed: 11, first: 9,
+    set: [[1, 0, { dev: -4, notes: 5, spread: 55 }], [1, 4, { dev: 2, notes: 4, spread: 48 }],
+      [3, 2, { dev: -6, notes: 5, spread: 52 }]],
+    desc: 'Некоторые аккорды взяты арпеджированно: ноты раскатаны на 48–55 мс — дольше окна ' +
+      'аккорда в 40 мс.',
+    caption: 'Ноты раската позже 40 мс от первой — вторая нота у того же узла: значение со «*». ' +
+      'Так же и со звуком: после мёртвого времени поиск атак снова находит удары.',
+  },
+  {
+    id: 'fast', title: 'Быстрые шестнадцатые', input: 'gtr', div: 4, bpm: 150, offset: 0, tol: 8,
+    bias: 2, sd: 4, notes: [1, 1], spread: [0, 0], seed: 19, first: 51,
+    set: [[1, 0, { dev: -1, notes: 2, spread: 3 }], [1, 4, { dev: 3, notes: 2, spread: 2 }]],
+    desc: 'Соло шестнадцатыми при 150 BPM: между узлами 100 мс. Почти все ноты одиночные, на ' +
+      'долях — двойные ноты.',
+    caption: 'Окно аккорда — 40 мс, а соседние шестнадцатые здесь в 100 мс друг от ' +
+      'друга: склеиваются только ноты двойной ноты. Лупа показывает первые две доли такта.',
+  },
+  {
+    id: 'off', title: 'Вход выключен в REAPER', input: 'drums', div: 1, bpm: 120, offset: 0, tol: 10,
+    empty: true, seed: 1, first: 4,
+    desc: 'Выбран TD-17, но в настройках REAPER он не включён для записи. REAPER не принимает с ' +
+      'него ноты — и тренажёр тоже.',
+    caption: 'Воспроизведение идёт, строки тактов заводятся, но значений нет, а строка состояния ' +
+      'говорит, что вход MIDI нужно включить в настройках REAPER.',
+  },
+];
+
+const state = { sc: null, input: 'gtr', picked: 1, rows: [], groups: [], notes: [] };
+
+const $ = (id) => document.getElementById(id);
+const rowsEl = $('rows');
+const lensEl = $('lens');
+const dropdown = $('dropdown');
+
+/** Повторяемый генератор случайных чисел в [0, 1). */
+function random(seed) {
+  let a = seed;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Нормальная случайная величина: среднее 0, разброс 1. */
+function gauss(next) {
+  const u = Math.max(next(), 1e-9);
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * next());
+}
+
+const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+const inputOf = (id) => INPUTS.find((i) => i.id === id);
+const nodeMs = (sc) => 60000 / sc.bpm / sc.div;
+
+/** Номер такта строки `r` сверху. */
+const barOf = (sc, r) => sc.first + KEEP - 1 - r;
+
+/** Сколько узлов сыграно в строке: в верхней — до третьего удара включительно. */
+const playedNodes = (sc, r) => (r === 0 ? 2 * sc.div + 1 : BEATS * sc.div);
+
+/**
+ * Ноты MIDI сценария: время от начала проекта, мс, и строка клавиш в лупе.
+ * Аккорд — ноты от `dev` до `dev + spread` от клика своего узла.
+ */
+function makeNotes(sc) {
+  if (sc.empty) return [];
+  const next = random(sc.seed);
+  const step = nodeMs(sc);
+  const set = new Map((sc.set || []).map(([r, i, c]) => [r + ':' + i, c]));
+  const notes = [];
+  for (let r = KEEP - 1; r >= 0; r--) {
+    for (let i = 0; i < playedNodes(sc, r); i++) {
+      const g = barOf(sc, r) * BEATS * sc.div + i;
+      const exact = set.get(r + ':' + i);
+      const dev = exact ? exact.dev : sc.bias + sc.sd * gauss(next);
+      const count = exact ? exact.notes
+        : sc.notes[0] + Math.floor(next() * (sc.notes[1] - sc.notes[0] + 1));
+      const spread = exact ? exact.spread : sc.spread[0] + next() * (sc.spread[1] - sc.spread[0]);
+      const offsets = [0];
+      for (let k = 1; k < count - 1; k++) offsets.push(next() * spread);
+      if (count > 1) offsets.push(spread);
+      offsets.sort((a, b) => a - b);
+      // Бой: вниз — с басовой струны, вверх — с первой.
+      const down = !sc.strum || i % 2 === 0;
+      const keys = [];
+      for (let k = 0; k < count; k++) {
+        if (sc.strum) keys.push(down ? 5 - k : k);
+        else keys.push(Math.floor(next() * 6));
+      }
+      offsets.forEach((o, k) => notes.push({ t: g * step + dev + o, key: keys[k] }));
+    }
+  }
+  return notes.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * Аккорды: нота открывает новый аккорд, если она позже первой ноты текущего
+ * больше чем на `chord` мс. Время аккорда — время его первой ноты.
+ */
+function makeGroups(notes, chord) {
+  const groups = [];
+  for (const n of notes) {
+    const last = groups[groups.length - 1];
+    if (last && n.t <= last.t + chord) {
+      last.notes.push(n);
+    } else {
+      groups.push({ t: n.t, notes: [n] });
+    }
+    n.group = groups[groups.length - 1];
+  }
+  return groups;
+}
+
+/**
+ * Строки тактов: аккорд — к ближайшему узлу; у узла с несколькими аккордами
+ * — ближайший и отметка лишней ноты.
+ */
+function makeRows(sc, groups) {
+  const step = nodeMs(sc);
+  const perNode = new Map();
+  for (const gr of groups) {
+    gr.node = Math.round(gr.t / step);
+    gr.dev = gr.t - gr.node * step;
+    if (!perNode.has(gr.node)) perNode.set(gr.node, []);
+    perNode.get(gr.node).push(gr);
+  }
+  for (const list of perNode.values()) {
+    list.sort((a, b) => Math.abs(a.dev) - Math.abs(b.dev));
+    list.forEach((gr, k) => { gr.kept = k === 0; gr.extra = list.length > 1; });
+  }
+
+  const rows = [];
+  for (let r = 0; r < KEEP; r++) {
+    const values = [];
+    for (let i = 0; i < BEATS * sc.div; i++) {
+      const list = perNode.get(barOf(sc, r) * BEATS * sc.div + i);
+      values.push(list ? { v: list[0].dev, extra: list.length > 1 } : null);
+    }
+    rows.push({ bar: barOf(sc, r), values, current: r === 0 ? 2 : null });
+  }
+  // Ни одной ноты: строка, которую покинуло воспроизведение, и текущая.
+  return sc.empty ? rows.slice(0, 2) : rows;
+}
+
+/** Число без минуса нуля. */
+const tidy = (v) => (Object.is(v, -0) ? 0 : v);
+
+function devText(n) {
+  if (n === 0) return '0';
+  return (n < 0 ? '−' : '+') + Math.abs(n);
+}
+
+function meanText(v) {
+  const s = Math.abs(v).toFixed(1);
+  if (Number(s) === 0) return '0.0';
+  return (v < 0 ? '−' : '+') + s;
+}
+
+function msText(v, signed) {
+  if (!signed || v === 0) return String(Math.abs(v));
+  return (v < 0 ? '−' : '+') + Math.abs(v);
+}
+
+const inWindow = (n) => n >= state.sc.offset - state.sc.tol && n <= state.sc.offset + state.sc.tol;
+const colorOf = (n) => (inWindow(n) ? 'var(--good)' : 'var(--bad)');
+
+function box(left, top, width, height, color, extra = '') {
+  return `<div style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;background:${color};${extra}"></div>`;
+}
+
+function text(x, y, size, color, content) {
+  return `<div class="tx" style="left:${x}px;top:${y}px;font-size:${size}px;color:${color}">${content}</div>`;
+}
+
+/** Строки тактов — та же раскладка, что у окна (window.cpp, paintRow). */
+function renderRows() {
+  const sc = state.sc;
+  const DIV = sc.div;
+  const W = rowsEl.clientWidth;
+  const H = rowsEl.clientHeight;
+  const rowH = H / KEEP;
+  const side = Math.max(9, rowH * 0.34);
+  const labelW = side * 0.6 * 5 + 10;
+  const statsW = W * 0.09;
+  const statsSize = Math.max(9, Math.min(side, statsW / 6));
+  const scaleW = W - labelW - statsW;
+  const bigFor = (step) => Math.max(9, Math.min(rowH * 0.62, step / 2.3, step / DIV / 1.55));
+  const pad = bigFor(scaleW / BEATS) * 0.95 + 6;
+  const step = (scaleW - pad) / BEATS;
+  const big = bigFor(step);
+  const small = Math.max(8, Math.min(big * 0.6, step / DIV / 2));
+  const x = (beat) => labelW + pad + step * beat;
+
+  let html = '';
+  state.rows.forEach((row, r) => {
+    const top = r * rowH;
+    const mid = top + rowH / 2;
+    if (row.current !== null) {
+      html += box(0, top, W, rowH, 'var(--row)');
+      const left = Math.max(labelW + 1, x(row.current) - step * 0.125);
+      html += box(left, top, x(row.current) + step * 0.875 - left, rowH, 'var(--beat-back)');
+    }
+    html += text(labelW / 2, mid, side, 'var(--neutral)', row.bar);
+
+    for (let b = 0; b < BEATS; b++) {
+      if (row.values[b * DIV] !== null) continue;
+      const now = row.current === b;
+      const d = Math.max(4, big * (now ? 0.3 : 0.2));
+      html += `<div class="dot" style="left:${x(b)}px;top:${mid}px;width:${d}px;height:${d}px;` +
+        `background:${now ? 'var(--beat)' : 'var(--neutral)'}"></div>`;
+    }
+    row.values.forEach((cell, i) => {
+      if (cell === null) return;
+      const n = tidy(Math.round(cell.v));
+      html += text(x(i / DIV), mid, i % DIV === 0 ? big : small, colorOf(n),
+        devText(n) + (cell.extra ? '*' : ''));
+    });
+
+    const vals = row.values.filter((c) => c !== null).map((c) => c.v);
+    if (row.current === null && vals.length > 1) {
+      const mean = vals.reduce((a, v) => a + v, 0) / vals.length;
+      const spread = Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / vals.length);
+      const m = Math.round(mean * 10) / 10;
+      html += text(W - statsW * 0.72, mid, statsSize, colorOf(m), meanText(m));
+      html += text(W - statsW * 0.25, mid, statsSize, 'var(--neutral)', spread.toFixed(1));
+    }
+    if (r === state.picked && isMidi()) {
+      html += `<div class="picked" style="left:1px;top:${top + 1}px;width:${W - 2}px;height:${rowH - 2}px"></div>`;
+    }
+  });
+  html += box(labelW, 0, 1, H, 'var(--line)');
+  html += box(labelW + scaleW, 0, 1, H, 'var(--line)');
+  rowsEl.innerHTML = html;
+  rowsEl.onclick = (e) => {
+    const r = Math.floor((e.clientY - rowsEl.getBoundingClientRect().top) / rowH);
+    if (r >= 0 && r < state.rows.length) { state.picked = r; renderRows(); renderLens(); }
+  };
+}
+
+/** Подпись узла: «1», «1.2» — удар и доля в нём. */
+function nodeName(sc, i) {
+  const beat = Math.floor(i / sc.div) + 1;
+  const sub = i % sc.div;
+  return sub === 0 ? String(beat) : `${beat}.${sub + 1}`;
+}
+
+function nounNotes(n) {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return n + ' нота';
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return n + ' ноты';
+  return n + ' нот';
+}
+
+/** Лупа: окрестность каждого узла выбранной строки, ноты MIDI и аккорды. */
+function renderLens() {
+  const sc = state.sc;
+  const midi = isMidi();
+  $('lensBox').classList.toggle('hidden', !midi);
+  const row = state.rows[state.picked];
+  $('lensTitle').textContent = row && midi
+    ? `Лупа: ноты MIDI у узлов такта ${row.bar}` +
+      (BEATS * sc.div > LENS_NODES ? ', первые две доли' : '') + ' — щёлкните строку в окне, чтобы выбрать такт'
+    : 'Лупа';
+  if (!midi) return;
+
+  const W = lensEl.clientWidth;
+  const count = Math.min(LENS_NODES, BEATS * sc.div);
+  const pw = W / count;
+  const span = LENS_TO - LENS_FROM;
+  const top = 22;
+  const keyH = 10;
+  const step = nodeMs(sc);
+  let html = '';
+  for (let i = 0; i < count && row; i++) {
+    const left = i * pw;
+    const g = row.bar * BEATS * sc.div + i;
+    const t0 = g * step;
+    const x = (ms) => left + ((ms - LENS_FROM) / span) * pw;
+    const inside = (ms) => ms >= LENS_FROM && ms <= LENS_TO;
+
+    html += `<div class="ltx" style="left:${left + pw / 2}px;top:5px;font-size:11px;color:var(--dim)">${nodeName(sc, i)}</div>`;
+    // Окно попадания — полоса под нотами.
+    const lo = clamp(sc.offset - sc.tol, LENS_FROM, LENS_TO);
+    const hi = clamp(sc.offset + sc.tol, LENS_FROM, LENS_TO);
+    html += box(x(LENS_FROM), top + 6 * keyH + 6, pw, 5, 'var(--out)');
+    html += box(x(lo), top + 6 * keyH + 6, x(hi) - x(lo), 5, 'var(--band)');
+
+    const groups = state.groups.filter((gr) => inside(gr.t - t0));
+    for (const gr of groups) {
+      const a = x(gr.t - t0);
+      const b = x(Math.min(gr.t - t0 + CHORD_MS, LENS_TO));
+      const n = tidy(Math.round(gr.dev));
+      const edge = gr.node === g && gr.kept ? colorOf(n) : 'var(--dim)';
+      html += box(a, top - 2, Math.max(2, b - a), 6 * keyH + 4, 'var(--chord)',
+        `border-left:2px solid ${edge};box-sizing:border-box`);
+      if (gr.node === g && !gr.kept)
+        html += `<div class="ltx" style="left:${a + 4}px;top:${top - 14}px;font-size:12px;font-weight:bold;color:var(--beat)">*</div>`;
+    }
+    html += box(x(0) - 1, top - 6, 2, 6 * keyH + 18, '#fff');
+    for (const nt of state.notes) {
+      const ms = nt.t - t0;
+      if (!inside(ms)) continue;
+      const first = nt.group.notes[0] === nt;
+      html += box(x(ms), top + nt.key * keyH + 2, 5, keyH - 4, first ? 'var(--beat)' : 'var(--neutral)');
+    }
+
+    // Подпись: значение узла и аккорды, которые ему достались.
+    const mine = state.groups.filter((gr) => gr.node === g)
+      .sort((a, b) => Math.abs(a.dev) - Math.abs(b.dev));
+    if (mine.length) {
+      const kept = mine[0];
+      const n = tidy(Math.round(kept.dev));
+      const notes = kept.notes.length;
+      const spread = Math.round(kept.notes[notes - 1].t - kept.t);
+      html += `<div class="ltx" style="left:${left + pw / 2}px;top:${top + 6 * keyH + 18}px;font-size:18px;font-weight:bold;color:${colorOf(n)}">` +
+        devText(n) + (mine.length > 1 ? '*' : '') + '</div>';
+      const about = notes > 1 ? `${nounNotes(notes)} за ${spread} мс` : nounNotes(1);
+      html += `<div class="ltx" style="left:${left + pw / 2}px;top:${top + 6 * keyH + 40}px;font-size:11px;color:var(--neutral)">${about}</div>`;
+      if (mine.length > 1) {
+        const later = mine.slice(1).reduce((sum, gr) => sum + gr.notes.length, 0);
+        html += `<div class="ltx" style="left:${left + pw / 2}px;top:${top + 6 * keyH + 54}px;font-size:11px;color:var(--beat)">* ещё ${nounNotes(later)} позже окна</div>`;
+      }
+    } else {
+      html += `<div class="ltx" style="left:${left + pw / 2}px;top:${top + 6 * keyH + 22}px;font-size:12px;color:var(--dim)">нет ноты</div>`;
+    }
+    if (i > 0) html += box(left, 0, 1, 160, 'var(--line)');
+  }
+  lensEl.innerHTML = html;
+}
+
+const isMidi = () => inputOf(state.input).kind === 'midi';
+
+function renderControls() {
+  const sc = state.sc;
+  const input = inputOf(state.input);
+  const midi = input.kind === 'midi';
+  $('inputName').textContent = input.label + (input.off ? ' (not enabled)' : '');
+  $('audioLine').style.display = midi ? 'none' : '';
+  $('modeName').textContent = MODE_NAMES[sc.div];
+
+  const lo = sc.offset - sc.tol;
+  const hi = sc.offset + sc.tol;
+  const at = (ms) => ((ms + SCALE) / (2 * SCALE)) * 100 + '%';
+  $('band').style.left = at(lo);
+  $('band').style.width = `calc(${at(hi)} - ${at(lo)})`;
+  $('lo').style.left = at(lo);
+  $('hi').style.left = at(hi);
+  $('offset').textContent = msText(sc.offset, true).replace('−', '-');
+  $('tol').textContent = msText(sc.tol, false);
+  $('range').textContent = `${msText(lo, true)}…${msText(hi, true)} ms`;
+
+  let status = `${MODE_NAMES[sc.div]}, window ${msText(lo, true)}…${msText(hi, true)} ms, latency 12.3 ms`;
+  if (input.off) status += ' — MIDI input is not enabled in REAPER preferences';
+  else status += ' — measuring';
+  $('status').textContent = status;
+  $('status').classList.toggle('new', !!input.off);
+}
+
+function renderDropdown() {
+  dropdown.innerHTML = '';
+  for (const input of INPUTS) {
+    const item = document.createElement('div');
+    item.textContent = input.label + (input.off ? ' (not enabled)' : '');
+    if (input.off) item.classList.add('off');
+    if (input.id === state.input) item.classList.add('sel');
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      state.input = input.id;
+      dropdown.hidden = true;
+      update();
+    });
+    dropdown.appendChild(item);
+  }
+  const combo = $('input');
+  dropdown.style.left = combo.offsetLeft + 'px';
+  dropdown.style.top = combo.offsetTop + combo.offsetHeight + 'px';
+}
+
+/** Пересчитывает аккорды и строки и перерисовывает всё. */
+function update() {
+  const sc = state.sc;
+  // Ноты сценария — с его входа; другой вход MIDI в макете играет те же ноты, у
+  // выключенного нот нет.
+  const notes = inputOf(state.input).off ? [] : makeNotes(sc);
+  state.notes = notes;
+  state.groups = makeGroups(notes, CHORD_MS);
+  state.rows = makeRows(inputOf(state.input).off ? { ...sc, empty: true } : sc, state.groups);
+  state.picked = Math.min(state.picked, state.rows.length - 1);
+  renderControls();
+  renderRows();
+  renderLens();
+  if (!dropdown.hidden) renderDropdown();
+}
+
+$('input').addEventListener('click', (e) => {
+  e.stopPropagation();
+  dropdown.hidden = !dropdown.hidden;
+  if (!dropdown.hidden) renderDropdown();
+});
+document.addEventListener('click', (e) => {
+  if (!dropdown.contains(e.target)) dropdown.hidden = true;
+});
+
+
+for (let ms = -SCALE; ms <= SCALE; ms += 10) {
+  const span = document.createElement('span');
+  span.style.left = ((ms + SCALE) / (2 * SCALE)) * 100 + '%';
+  span.textContent = msText(ms, true);
+  $('ticks').appendChild(span);
+}
+
+$('hl').addEventListener('change', () => document.body.classList.toggle('plain', !$('hl').checked));
+
+function choose(sc, input) {
+  state.sc = sc;
+  state.input = input && inputOf(input) ? input : sc.input;
+  state.picked = 1;
+  $('desc').textContent = sc.desc;
+  $('caption').textContent = sc.caption;
+  for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('active', b.dataset.id === sc.id);
+  dropdown.hidden = !sc.open;
+  update();
+}
+
+for (const sc of SCENARIOS) {
+  const b = document.createElement('button');
+  b.textContent = sc.title;
+  b.dataset.id = sc.id;
+  b.addEventListener('click', (e) => { e.stopPropagation(); choose(sc); });
+  $('tabs').appendChild(b);
+}
+
+new ResizeObserver(() => { if (state.sc) renderRows(); }).observe(rowsEl);
+// Адрес «#сценарий/вход» открывает сценарий сразу: «#list/in1».
+const [hashId, hashInput] = location.hash.slice(1).split('/');
+choose(SCENARIOS.find((sc) => sc.id === hashId) || SCENARIOS[0], hashInput);
+</script>
+<script>
+(function () {
+  "use strict";
+
+  var body = document.body;
+  var REPORT_ID = body.getAttribute("data-report-id") || location.pathname;
+  var REPORT_TITLE = body.getAttribute("data-report-title") || document.title;
+  var REPORT_VERSION = body.getAttribute("data-report-version") || "";
+  var KEY = "report-comments:" + REPORT_ID;
+  var root = document.querySelector("main") || body;
+  var BLOCK = /^(P|LI|TD|TH|H1|H2|H3|H4|H5|H6|DIV|DD|DT|DL|FIGCAPTION|FIGURE|BLOCKQUOTE|SECTION|HEADER|FOOTER|SUMMARY|DETAILS|UL|OL|TABLE|THEAD|TBODY|TR|MAIN|NAV)$/;
+
+  var storageOk = true;
+  var comments = load();
+  var pending = null;
+  var draft = null;
+  var ui = {};
+  var selTimer = null;
+  var toastTimer = null;
+
+  function load() {
+    try {
+      var raw = window.localStorage.getItem(KEY);
+      if (!raw) return [];
+      var data = JSON.parse(raw);
+      return data && Array.isArray(data.comments) ? data.comments : [];
+    } catch (e) {
+      storageOk = false;
+      return [];
+    }
+  }
+
+  function strip(c) {
+    return {
+      id: c.id, quote: c.quote, prefix: c.prefix, suffix: c.suffix, pos: c.pos,
+      path: c.path, anchor: c.anchor, fig: c.fig || "", text: c.text,
+      created: c.created, updated: c.updated || c.created
+    };
+  }
+
+  function persist() {
+    try {
+      window.localStorage.setItem(KEY, JSON.stringify({ v: 1, comments: comments.map(strip) }));
+      storageOk = true;
+    } catch (e) {
+      storageOk = false;
+    }
+    if (ui.storageNote) ui.storageNote.hidden = storageOk;
+  }
+
+  function elOf(node) {
+    return node && node.nodeType === 1 ? node : node && node.parentNode;
+  }
+
+  function inUi(node) {
+    var e = elOf(node);
+    return !!(e && e.closest && e.closest(".cm-ui"));
+  }
+
+  function skippable(node) {
+    for (var p = node.parentNode; p && p !== root; p = p.parentNode) {
+      if (p.nodeType !== 1) continue;
+      var tag = p.nodeName.toUpperCase();
+      if (tag === "SVG" || tag === "SCRIPT" || tag === "STYLE" || tag === "TEXTAREA") return true;
+      if (p.classList && p.classList.contains("cm-ui")) return true;
+    }
+    return false;
+  }
+
+  function blockOf(node) {
+    for (var p = node.parentNode; p && p !== root; p = p.parentNode) {
+      if (p.nodeType === 1 && BLOCK.test(p.nodeName.toUpperCase())) return p;
+    }
+    return root;
+  }
+
+  function buildIndex() {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var chars = [], nodes = [], offs = [];
+    var lastSpace = true, lastBlock = null, n;
+    while ((n = walker.nextNode())) {
+      if (!n.data || skippable(n)) continue;
+      var blk = blockOf(n);
+      if (blk !== lastBlock) {
+        if (!lastSpace && chars.length) {
+          chars.push(" ");
+          nodes.push(n);
+          offs.push(0);
+          lastSpace = true;
+        }
+        lastBlock = blk;
+      }
+      var d = n.data;
+      for (var i = 0; i < d.length; i++) {
+        var ch = d.charAt(i);
+        if (/\s/.test(ch)) {
+          if (lastSpace) continue;
+          ch = " ";
+          lastSpace = true;
+        } else {
+          lastSpace = false;
+        }
+        chars.push(ch);
+        nodes.push(n);
+        offs.push(i);
+      }
+    }
+    return { text: chars.join(""), nodes: nodes, offs: offs };
+  }
+
+  function boundaryIndex(idx, container, offset) {
+    var probe = document.createRange();
+    try {
+      probe.setStart(container, offset);
+    } catch (e) {
+      return -1;
+    }
+    probe.collapse(true);
+    var lo = 0, hi = idx.nodes.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      var c;
+      try {
+        c = probe.comparePoint(idx.nodes[mid], idx.offs[mid]);
+      } catch (e) {
+        c = 1;
+      }
+      if (c < 0) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
+
+  function textOf(e, max) {
+    var t = (e.textContent || "").replace(/\s+/g, " ").trim();
+    return max && t.length > max ? t.slice(0, max - 1) + "…" : t;
+  }
+
+  function locate(e) {
+    var parts = [];
+    var sec = e.closest("section");
+    if (sec) {
+      var h2 = sec.querySelector("h2");
+      if (h2) parts.push(textOf(h2));
+      var h3s = sec.querySelectorAll("h3"), cur = null;
+      for (var i = 0; i < h3s.length; i++) {
+        if (h3s[i] === e || h3s[i].contains(e) || (h3s[i].compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)) cur = h3s[i];
+      }
+      if (cur) parts.push(textOf(cur, 90));
+    } else if (e.closest("header")) {
+      parts.push("Шапка отчёта");
+    } else if (e.closest("footer")) {
+      parts.push("Подвал отчёта");
+    }
+    var tr = e.closest("tr");
+    if (tr && !e.closest("thead")) {
+      var td = tr.querySelector("td");
+      if (td) parts.push("строка «" + textOf(td, 60) + "»");
+    }
+    var fig = e.closest("figure");
+    if (fig) {
+      var ft = fig.querySelector(".ftitle");
+      if (ft) parts.push("график «" + textOf(ft, 70) + "»");
+    }
+    var tier = e.closest(".tier");
+    if (tier) {
+      var h4 = tier.querySelector("h4");
+      if (h4) parts.push("карточка «" + textOf(h4) + "»");
+    }
+    var kpi = e.closest(".kpi");
+    if (kpi) {
+      var b = kpi.querySelector("b");
+      if (b) parts.push("карточка «" + textOf(b) + "»");
+    }
+    var li = e.closest("ol.key > li");
+    if (li) parts.push("пункт " + (Array.prototype.indexOf.call(li.parentNode.children, li) + 1));
+    var labeled = e.closest("[data-cm-label]");
+    if (labeled) parts.push(labeled.getAttribute("data-cm-label"));
+    return parts.join(" › ");
+  }
+
+  function anchorOf(e) {
+    var a = e.closest("[id]");
+    return a ? a.id : "";
+  }
+
+  function figPos(idx, fig) {
+    for (var i = 0; i < idx.nodes.length; i++) {
+      if (fig.contains(idx.nodes[i])) return i;
+    }
+    return 0;
+  }
+
+  function describe(range) {
+    var startEl = elOf(range.startContainer);
+    var endEl = elOf(range.endContainer);
+    if (!startEl || !endEl) return null;
+    var info = { path: locate(startEl), anchor: anchorOf(startEl), fig: "" };
+    var idx = buildIndex();
+    var s = boundaryIndex(idx, range.startContainer, range.startOffset);
+    var e = boundaryIndex(idx, range.endContainer, range.endOffset);
+    if (s < 0 || e < 0) return null;
+    while (s < e && idx.text.charAt(s) === " ") s++;
+    while (e > s && idx.text.charAt(e - 1) === " ") e--;
+    if (e > s) {
+      info.quote = idx.text.slice(s, e);
+      info.prefix = idx.text.slice(Math.max(0, s - 40), s);
+      info.suffix = idx.text.slice(e, e + 40);
+      info.pos = s;
+      return info;
+    }
+    var fig = startEl.closest("figure") || endEl.closest("figure");
+    var t = range.toString().replace(/\s+/g, " ").trim();
+    if (!t || !fig || !fig.id) return null;
+    info.quote = t;
+    info.prefix = "";
+    info.suffix = "";
+    info.pos = figPos(idx, fig);
+    info.fig = fig.id;
+    return info;
+  }
+
+  function commonTail(a, b) {
+    var n = 0;
+    while (n < a.length && n < b.length && a.charAt(a.length - 1 - n) === b.charAt(b.length - 1 - n)) n++;
+    return n;
+  }
+
+  function commonHead(a, b) {
+    var n = 0;
+    while (n < a.length && n < b.length && a.charAt(n) === b.charAt(n)) n++;
+    return n;
+  }
+
+  function findQuote(idx, c) {
+    var q = c.quote;
+    if (!q) return null;
+    var hits = [], from = 0, i;
+    while ((i = idx.text.indexOf(q, from)) !== -1 && hits.length < 200) {
+      hits.push(i);
+      from = i + 1;
+    }
+    if (!hits.length) return null;
+    var best = hits[0], bestScore = -Infinity;
+    for (var k = 0; k < hits.length; k++) {
+      var h = hits[k];
+      var pre = idx.text.slice(Math.max(0, h - (c.prefix || "").length), h);
+      var suf = idx.text.slice(h + q.length, h + q.length + (c.suffix || "").length);
+      var score = commonTail(pre, c.prefix || "") + commonHead(suf, c.suffix || "") - Math.abs(h - (c.pos || 0)) / 1e6;
+      if (score > bestScore) {
+        bestScore = score;
+        best = h;
+      }
+    }
+    return [best, best + q.length];
+  }
+
+  function wrapRange(range, c) {
+    var container = range.commonAncestorContainer;
+    if (container.nodeType === 3) container = container.parentNode;
+    var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+    var parts = [], n;
+    while ((n = walker.nextNode())) {
+      if (!range.intersectsNode(n) || skippable(n)) continue;
+      var a = n === range.startContainer ? range.startOffset : 0;
+      var b = n === range.endContainer ? range.endOffset : n.data.length;
+      if (b > a && n.data.slice(a, b).trim()) parts.push([n, a, b]);
+    }
+    parts.forEach(function (p) {
+      var node = p[0], a = p[1], b = p[2];
+      if (a > 0) {
+        node = node.splitText(a);
+        b -= a;
+      }
+      if (b < node.data.length) node.splitText(b);
+      var m = document.createElement("mark");
+      m.className = "cm-hl";
+      m.setAttribute("data-cid", c.id);
+      m.title = c.text || "";
+      node.parentNode.insertBefore(m, node);
+      m.appendChild(node);
+    });
+    return parts.length;
+  }
+
+  function markFigure(f, c) {
+    f.classList.add("cm-fig-hl");
+    var ids = (f.getAttribute("data-cids") || "").split(" ").filter(Boolean);
+    if (ids.indexOf(c.id) < 0) ids.push(c.id);
+    f.setAttribute("data-cids", ids.join(" "));
+  }
+
+  function applyHighlight(c) {
+    c.missing = false;
+    if (c.fig) {
+      var f = document.getElementById(c.fig);
+      if (f) {
+        markFigure(f, c);
+        return true;
+      }
+      c.missing = true;
+      return false;
+    }
+    var idx = buildIndex();
+    var hit = findQuote(idx, c);
+    if (!hit) {
+      c.missing = true;
+      return false;
+    }
+    c.pos = hit[0];
+    var r = document.createRange();
+    r.setStart(idx.nodes[hit[0]], idx.offs[hit[0]]);
+    r.setEnd(idx.nodes[hit[1] - 1], idx.offs[hit[1] - 1] + 1);
+    wrapRange(r, c);
+    return true;
+  }
+
+  function unwrap(cid) {
+    var marks = root.querySelectorAll('mark.cm-hl[data-cid="' + cid + '"]');
+    Array.prototype.forEach.call(marks, function (m) {
+      var p = m.parentNode;
+      while (m.firstChild) p.insertBefore(m.firstChild, m);
+      p.removeChild(m);
+      p.normalize();
+    });
+    Array.prototype.forEach.call(root.querySelectorAll("figure.cm-fig-hl"), function (f) {
+      var ids = (f.getAttribute("data-cids") || "").split(" ").filter(function (x) { return x && x !== cid; });
+      if (ids.length) {
+        f.setAttribute("data-cids", ids.join(" "));
+      } else {
+        f.removeAttribute("data-cids");
+        f.classList.remove("cm-fig-hl");
+      }
+    });
+  }
+
+  function byPos(a, b) {
+    return (a.pos || 0) - (b.pos || 0);
+  }
+
+  function find(cid) {
+    for (var i = 0; i < comments.length; i++) if (comments[i].id === cid) return comments[i];
+    return null;
+  }
+
+  function clip(s, n) {
+    return s.length > n ? s.slice(0, n - 1) + "…" : s;
+  }
+
+  function newId() {
+    return "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  function make(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function button(label, act, cls) {
+    var b = make("button", "cm-btn" + (cls ? " " + cls : ""), label);
+    b.type = "button";
+    if (act) b.setAttribute("data-act", act);
+    return b;
+  }
+
+  function buildUi() {
+    ui.selBtn = button("Комментировать", "comment", "cm-ui cm-sel-btn primary");
+    ui.selBtn.hidden = true;
+    ui.selBtn.addEventListener("mousedown", function (e) { e.preventDefault(); });
+
+    ui.pop = make("div", "cm-ui cm-pop");
+    ui.pop.hidden = true;
+    ui.pop.appendChild(make("div", "cm-pop-label", "Комментарий к фрагменту"));
+    ui.popQuote = make("div", "cm-pop-quote");
+    ui.pop.appendChild(ui.popQuote);
+    ui.popText = make("textarea", "cm-textarea");
+    ui.popText.rows = 4;
+    ui.popText.placeholder = "Что поправить, уточнить или проверить";
+    ui.pop.appendChild(ui.popText);
+    var pa = make("div", "cm-row");
+    pa.appendChild(button("Сохранить", "save", "primary"));
+    pa.appendChild(button("Отмена", "cancel"));
+    pa.appendChild(make("span", "cm-kbd", "Ctrl+Enter — сохранить · Esc — отмена"));
+    ui.pop.appendChild(pa);
+
+    ui.fab = button("Комментарии", "toggle", "cm-ui cm-fab");
+    ui.fabCount = make("span", "cm-count", "0");
+    ui.fab.appendChild(ui.fabCount);
+
+    ui.drawer = make("aside", "cm-ui cm-drawer");
+    ui.drawer.hidden = true;
+    ui.drawer.setAttribute("aria-label", "Комментарии к отчёту");
+    var head = make("div", "cm-head");
+    head.appendChild(make("b", "cm-title", "Комментарии"));
+    ui.copyAll = button("Скопировать всё", "copy-all", "primary");
+    head.appendChild(ui.copyAll);
+    ui.clearAll = button("Удалить все", "clear", "cm-danger");
+    head.appendChild(ui.clearAll);
+    var x = button("×", "close", "cm-x");
+    x.setAttribute("aria-label", "Закрыть");
+    head.appendChild(x);
+    ui.drawer.appendChild(head);
+    ui.drawer.appendChild(make("p", "cm-hint", "Выделите фрагмент в отчёте — рядом появится кнопка «Комментировать». «Скопировать всё» кладёт комментарии в буфер обмена текстом, который можно вставить в чат. Комментарии хранятся в этом браузере."));
+    ui.storageNote = make("p", "cm-warn", "Браузер не даёт сохранить комментарии: после закрытия страницы они пропадут. Скопируйте их до закрытия.");
+    ui.storageNote.hidden = storageOk;
+    ui.drawer.appendChild(ui.storageNote);
+    ui.list = make("ol", "cm-list");
+    ui.drawer.appendChild(ui.list);
+
+    ui.toast = make("div", "cm-ui cm-toast");
+    ui.toast.hidden = true;
+    ui.toast.setAttribute("role", "status");
+
+    ui.manual = make("div", "cm-ui cm-manual");
+    ui.manual.hidden = true;
+    var box = make("div", "cm-manual-box");
+    box.appendChild(make("b", null, "Браузер не дал скопировать автоматически. Выделите текст и нажмите Ctrl+C."));
+    ui.manualText = make("textarea", "cm-textarea");
+    ui.manualText.rows = 14;
+    ui.manualText.readOnly = true;
+    box.appendChild(ui.manualText);
+    var mr = make("div", "cm-row");
+    mr.appendChild(button("Закрыть", "manual-close"));
+    box.appendChild(mr);
+    ui.manual.appendChild(box);
+
+    [ui.selBtn, ui.pop, ui.fab, ui.drawer, ui.toast, ui.manual].forEach(function (e) { body.appendChild(e); });
+  }
+
+  function placeNear(e, range, width, small) {
+    var rects = range.getClientRects();
+    var r = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
+    var sx = window.pageXOffset, sy = window.pageYOffset;
+    var vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+    var left = (small ? r.right - width / 2 : r.left) + sx;
+    left = Math.max(sx + 8, Math.min(left, sx + vw - width - 8));
+    var top = r.bottom + sy + 8;
+    var h = e.offsetHeight || (small ? 34 : 230);
+    if (!small && r.bottom + h + 16 > vh && r.top - h - 16 > 0) top = r.top + sy - h - 8;
+    e.style.left = left + "px";
+    e.style.top = top + "px";
+  }
+
+  function hideSelBtn() {
+    ui.selBtn.hidden = true;
+  }
+
+  function checkSelection() {
+    if (!ui.pop.hidden) return;
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+      hideSelBtn();
+      return;
+    }
+    var r = sel.getRangeAt(0);
+    if (!root.contains(r.startContainer) || !root.contains(r.endContainer) || inUi(r.startContainer) || inUi(r.endContainer) || !sel.toString().trim()) {
+      hideSelBtn();
+      return;
+    }
+    pending = r.cloneRange();
+    ui.selBtn.hidden = false;
+    placeNear(ui.selBtn, r, ui.selBtn.offsetWidth || 150, true);
+  }
+
+  function openPopover() {
+    if (!pending) return;
+    var info = describe(pending);
+    hideSelBtn();
+    if (!info) {
+      toast("Этот фрагмент нельзя прокомментировать");
+      return;
+    }
+    draft = info;
+    ui.popQuote.textContent = clip(info.quote, 280);
+    ui.popText.value = "";
+    ui.pop.hidden = false;
+    placeNear(ui.pop, pending, Math.min(400, document.documentElement.clientWidth - 16), false);
+    ui.popText.focus();
+  }
+
+  function closePopover() {
+    ui.pop.hidden = true;
+    draft = null;
+    pending = null;
+  }
+
+  function savePopover() {
+    if (!draft) {
+      closePopover();
+      return;
+    }
+    var now = new Date().toISOString();
+    var c = {
+      id: newId(), quote: draft.quote, prefix: draft.prefix, suffix: draft.suffix, pos: draft.pos,
+      path: draft.path, anchor: draft.anchor, fig: draft.fig, text: ui.popText.value.trim(),
+      created: now, updated: now
+    };
+    comments.push(c);
+    applyHighlight(c);
+    comments.sort(byPos);
+    persist();
+    renderList();
+    closePopover();
+    var sel = window.getSelection();
+    if (sel) sel.removeAllRanges();
+    toast("Комментарий сохранён · всего " + comments.length);
+    return c;
+  }
+
+  function renderList(focusId) {
+    ui.list.textContent = "";
+    ui.fabCount.textContent = String(comments.length);
+    ui.copyAll.disabled = ui.clearAll.disabled = comments.length === 0;
+    comments.forEach(function (c, i) {
+      var li = make("li", "cm-item" + (c.missing ? " cm-missing" : ""));
+      li.setAttribute("data-cid", c.id);
+      li.appendChild(make("div", "cm-path", "№" + (i + 1) + " · " + (c.path || "Без раздела")));
+      li.appendChild(make("blockquote", "cm-quote", clip(c.quote, 420)));
+      if (c.missing) li.appendChild(make("div", "cm-warn", "Фрагмент не найден в текущей версии отчёта"));
+      li.appendChild(make("div", "cm-text" + (c.text ? "" : " cm-empty"), c.text || "без текста"));
+      var row = make("div", "cm-row");
+      row.appendChild(button("Показать", "goto"));
+      row.appendChild(button("Изменить", "edit"));
+      row.appendChild(button("Копировать", "copy"));
+      row.appendChild(button("Удалить", "del", "cm-danger"));
+      li.appendChild(row);
+      ui.list.appendChild(li);
+    });
+    if (focusId) flashItem(focusId);
+  }
+
+  function flashItem(cid) {
+    var li = ui.list.querySelector('.cm-item[data-cid="' + cid + '"]');
+    if (!li) return;
+    li.scrollIntoView({ block: "nearest" });
+    li.classList.add("cm-item-flash");
+    setTimeout(function () { li.classList.remove("cm-item-flash"); }, 1600);
+  }
+
+  function openDrawer(cid) {
+    ui.drawer.hidden = false;
+    hideSelBtn();
+    if (cid) flashItem(cid);
+  }
+
+  function closeDrawer() {
+    ui.drawer.hidden = true;
+  }
+
+  function gotoComment(cid) {
+    var c = find(cid);
+    if (!c) return;
+    var marks = root.querySelectorAll('mark.cm-hl[data-cid="' + cid + '"]');
+    var target = marks[0] || (c.fig && document.getElementById(c.fig)) || (c.anchor && document.getElementById(c.anchor));
+    if (!target) return;
+    if (document.documentElement.clientWidth < 900) closeDrawer();
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    Array.prototype.forEach.call(marks, function (m) {
+      m.classList.remove("cm-flash");
+      void m.offsetWidth;
+      m.classList.add("cm-flash");
+    });
+  }
+
+  function editComment(li, cid) {
+    var c = find(cid);
+    if (!c || li.classList.contains("cm-editing")) return;
+    li.classList.add("cm-editing");
+    var textEl = li.querySelector(".cm-text");
+    var ta = make("textarea", "cm-textarea");
+    ta.rows = 4;
+    ta.value = c.text || "";
+    textEl.replaceWith(ta);
+    var row = li.querySelector(".cm-row");
+    row.textContent = "";
+    row.appendChild(button("Сохранить", "edit-save", "primary"));
+    row.appendChild(button("Отмена", "edit-cancel"));
+    ta.focus();
+  }
+
+  function finishEdit(li, cid, save) {
+    var c = find(cid);
+    if (c && save) {
+      var ta = li.querySelector("textarea");
+      c.text = ta ? ta.value.trim() : c.text;
+      c.updated = new Date().toISOString();
+      Array.prototype.forEach.call(root.querySelectorAll('mark.cm-hl[data-cid="' + cid + '"]'), function (m) { m.title = c.text; });
+      persist();
+    }
+    renderList(cid);
+  }
+
+  function removeComment(cid, quiet) {
+    var c = find(cid);
+    if (!c) return;
+    if (!quiet && !window.confirm("Удалить комментарий?")) return;
+    unwrap(cid);
+    comments = comments.filter(function (x) { return x.id !== cid; });
+    persist();
+    renderList();
+  }
+
+  function clearAll(quiet) {
+    if (!comments.length) return;
+    if (!quiet && !window.confirm("Удалить все комментарии (" + comments.length + ")?")) return;
+    comments.forEach(function (c) { unwrap(c.id); });
+    comments = [];
+    persist();
+    renderList();
+  }
+
+  function toMarkdown(list) {
+    var lines = ["Комментарии к отчёту «" + REPORT_TITLE + "»"];
+    var meta = [];
+    var file = decodeURIComponent(location.pathname || "");
+    if (file) meta.push("файл " + file);
+    if (REPORT_VERSION) meta.push("версия отчёта " + REPORT_VERSION);
+    meta.push("комментариев: " + list.length + (list.length !== comments.length ? " из " + comments.length : ""));
+    lines.push(meta.join(" · "));
+    list.forEach(function (c) {
+      lines.push("");
+      lines.push("## Комментарий " + (comments.indexOf(c) + 1) + " · " + (c.path || "Без раздела"));
+      lines.push("> " + c.quote);
+      if (c.missing) lines.push("(фрагмент не найден в текущей версии отчёта)");
+      lines.push("");
+      lines.push(c.text || "(без текста)");
+    });
+    return lines.join("\n");
+  }
+
+  function toast(msg) {
+    ui.toast.textContent = msg;
+    ui.toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { ui.toast.hidden = true; }, 2600);
+  }
+
+  function showManualCopy(text) {
+    ui.manualText.value = text;
+    ui.manual.hidden = false;
+    ui.manualText.focus();
+    ui.manualText.select();
+  }
+
+  function copyText(text, okMsg) {
+    function fallback() {
+      var ta = make("textarea", "cm-ui");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch (e) {
+        ok = false;
+      }
+      body.removeChild(ta);
+      if (ok) toast(okMsg); else showManualCopy(text);
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function () { toast(okMsg); }, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  function copyAll() {
+    if (!comments.length) return;
+    copyText(toMarkdown(comments), "Скопировано комментариев: " + comments.length + " — вставьте их в чат");
+  }
+
+  function copyOne(cid) {
+    var c = find(cid);
+    if (c) copyText(toMarkdown([c]), "Комментарий скопирован");
+  }
+
+  function handleAct(act, node) {
+    var item = node.closest(".cm-item");
+    var cid = item ? item.getAttribute("data-cid") : null;
+    switch (act) {
+      case "comment": openPopover(); break;
+      case "save": savePopover(); break;
+      case "cancel": closePopover(); break;
+      case "toggle": if (ui.drawer.hidden) openDrawer(); else closeDrawer(); break;
+      case "close": closeDrawer(); break;
+      case "copy-all": copyAll(); break;
+      case "clear": clearAll(false); break;
+      case "goto": gotoComment(cid); break;
+      case "edit": editComment(item, cid); break;
+      case "edit-save": finishEdit(item, cid, true); break;
+      case "edit-cancel": finishEdit(item, cid, false); break;
+      case "copy": copyOne(cid); break;
+      case "del": removeComment(cid, false); break;
+      case "manual-close": ui.manual.hidden = true; break;
+    }
+  }
+
+  function bind() {
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      if (!t.closest) return;
+      var actEl = t.closest(".cm-ui[data-act], .cm-ui [data-act]");
+      if (actEl) {
+        handleAct(actEl.getAttribute("data-act"), actEl);
+        return;
+      }
+      var mark = t.closest("mark.cm-hl");
+      var sel = window.getSelection();
+      if (mark && (!sel || sel.isCollapsed)) openDrawer(mark.getAttribute("data-cid"));
+    });
+    document.addEventListener("mouseup", function (e) {
+      if (!inUi(e.target)) setTimeout(checkSelection, 0);
+    });
+    document.addEventListener("selectionchange", function () {
+      clearTimeout(selTimer);
+      selTimer = setTimeout(checkSelection, 250);
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") {
+        if (!ui.manual.hidden) ui.manual.hidden = true;
+        else if (!ui.pop.hidden) closePopover();
+        else if (!ui.drawer.hidden) closeDrawer();
+        else hideSelBtn();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        var a = document.activeElement;
+        if (!ui.pop.hidden && a === ui.popText) {
+          e.preventDefault();
+          savePopover();
+          return;
+        }
+        var li = a && a.closest && a.closest(".cm-item.cm-editing");
+        if (li) {
+          e.preventDefault();
+          finishEdit(li, li.getAttribute("data-cid"), true);
+        }
+      }
+    });
+  }
+
+  function restoreAll() {
+    comments.forEach(applyHighlight);
+    comments.sort(byPos);
+  }
+
+  function reload() {
+    comments.forEach(function (c) { unwrap(c.id); });
+    comments = load();
+    restoreAll();
+    renderList();
+  }
+
+  buildUi();
+  bind();
+  restoreAll();
+  renderList();
+
+  window.ReportComments = {
+    list: function () { return comments.map(function (c) { var s = strip(c); s.missing = !!c.missing; return s; }); },
+    markdown: function () { return toMarkdown(comments); },
+    addFromRange: function (range, text) {
+      pending = range.cloneRange();
+      draft = describe(pending);
+      if (!draft) return null;
+      ui.popText.value = text || "";
+      return savePopover();
+    },
+    showFor: function (range) {
+      pending = range.cloneRange();
+      openPopover();
+    },
+    open: openDrawer,
+    close: closeDrawer,
+    remove: function (cid) { removeComment(cid, true); },
+    clear: function () { clearAll(true); },
+    reload: reload
+  };
+})();
+
+</script>
+</body>
+</html>
