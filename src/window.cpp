@@ -20,6 +20,7 @@
 #include <WDL/win32_utf8.h>
 
 #include "journal.hpp"
+#include "midi_inputs.hpp"
 #include "trainer.hpp"
 #include "views/ids.h"
 
@@ -108,11 +109,11 @@ std::string rangeText(const grid::HitWindow &hit) {
 /// видят их без снимка экрана.
 void journalSettings(std::string_view what) {
   const Settings &settings = trainer().settings();
-  journal("{}: mode {}, offset {} ms, tolerance {} ms, channel {}, silence {} dBFS, bar "
+  journal("{}: mode {}, offset {} ms, tolerance {} ms, input {}, silence {} dBFS, bar "
           "numbers {}, mean/spread {}, collapsed {}",
           what, grid::divisions(settings.mode),
           grid::halfMsText(settings.offsetMs, grid::MsStyle::Plain),
-          grid::halfMsText(settings.toleranceMs, grid::MsStyle::Plain), settings.channel + 1,
+          grid::halfMsText(settings.toleranceMs, grid::MsStyle::Plain), inputText(settings),
           settings.silenceDb, settings.showBarNumbers, settings.showBarStats,
           settings.panelCollapsed);
 }
@@ -178,8 +179,11 @@ std::string statusText() {
   case Measuring::Running:
     text += " — measuring";
     break;
-  case Measuring::NoChannel:
+  case Measuring::NoInput:
     text += " — selected input is not available";
+    break;
+  case Measuring::NotEnabled:
+    text += " — MIDI input is not enabled in REAPER preferences";
     break;
   }
   if (status.calibrationCancelled)
@@ -221,6 +225,97 @@ void showHitWindow(HWND dialog, int editing = 0) {
 void placePanel(HWND dialog);
 RECT rowsArea(HWND dialog);
 
+/// Пункт списка Input: канал звуковой карты или вход MIDI.
+struct InputChoice {
+  /// Канал звуковой карты, 0 — первый; −1 — пункт входа MIDI `midi`.
+  int channel = -1;
+
+  /// Вход MIDI пункта; у пункта канала пуст.
+  MidiInput midi;
+};
+
+/// Пункты списка Input в его порядке: по номеру пункта — канал или вход MIDI.
+std::vector<InputChoice> inputChoices;
+
+#ifdef _WIN32
+/// Делает раскрытый список `combo` не уже самого длинного пункта `labels`
+/// (UTF-8).
+void fitDroppedWidth(HWND combo, const std::vector<std::string> &labels) {
+  HDC context = GetDC(combo);
+  if (!context)
+    return;
+
+  // Win32 отдаёт шрифт контрола целым LRESULT: приведения к указателю не
+  // избежать.
+  // NOLINTNEXTLINE(performance-no-int-to-ptr)
+  auto *font = reinterpret_cast<HFONT>(SendMessage(combo, WM_GETFONT, 0, 0));
+  HGDIOBJ previous = font ? SelectObject(context, font) : nullptr;
+  int widest = 0;
+  for (const std::string &label : labels) {
+    // Модуль собран без UNICODE: ширину текста в UTF-8 меряет W-версия.
+    std::wstring wide(label.size(), L'\0');
+    const int length =
+        MultiByteToWideChar(CP_UTF8, 0, label.data(), static_cast<int>(label.size()),
+                            wide.data(), static_cast<int>(wide.size()));
+    SIZE size{};
+    if (length > 0 && GetTextExtentPoint32W(context, wide.data(), length, &size))
+      widest = std::max(widest, static_cast<int>(size.cx));
+  }
+  if (previous)
+    SelectObject(context, previous);
+  ReleaseDC(combo, context);
+
+  // Поля пункта и полоса прокрутки списка.
+  SendMessage(combo, CB_SETDROPPEDWIDTH,
+              static_cast<WPARAM>(widest + GetSystemMetrics(SM_CXVSCROLL) + 8), 0);
+}
+#endif
+
+/// Заполняет список Input каналами звуковой карты, затем входами MIDI
+/// (`midiInputs`), выбирает в нём вход настроек и пишет пункты в журнал.
+/// Выбранный вход MIDI, которого сейчас нет, оставляет список без выбора, как
+/// пропавший канал.
+void fillInputs(HWND dialog) {
+  const bool showing = showingSettings;
+  showingSettings = true;
+  const Settings &settings = trainer().settings();
+  const std::optional<MidiInput> &chosen = trainer().midiInput();
+
+  inputChoices.clear();
+  std::vector<std::string> labels;
+  int selected = -1;
+
+  const int channels = GetNumAudioInputs();
+  for (int i = 0; i < channels; ++i) {
+    const char *name = GetInputChannelName(i);
+    if (settings.midiInput.empty() && settings.channel == i)
+      selected = static_cast<int>(labels.size());
+    labels.push_back(fmt::format("{}: {}", i + 1, name ? name : ""));
+    inputChoices.push_back({.channel = i, .midi = {}});
+  }
+  for (MidiInput &input : midiInputs()) {
+    if (!settings.midiInput.empty() && chosen && chosen->device == input.device)
+      selected = static_cast<int>(labels.size());
+    labels.push_back(
+        fmt::format("MIDI: {}{}", input.name, input.enabled ? "" : " (not enabled)"));
+    inputChoices.push_back({.channel = -1, .midi = std::move(input)});
+  }
+
+  HWND combo = GetDlgItem(dialog, IDC_CHANNEL);
+  SendMessage(combo, CB_RESETCONTENT, 0, 0);
+  std::string listed;
+  for (const std::string &label : labels) {
+    SendMessage(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+    listed += fmt::format("{}«{}»", listed.empty() ? "" : ", ", label);
+  }
+  SendMessage(combo, CB_SETCURSEL, static_cast<WPARAM>(selected), 0);
+#ifdef _WIN32
+  fitDroppedWidth(combo, labels);
+#endif
+  journal("input list: {}; selected {}", listed, selected);
+  showingSettings = showing;
+}
+
 void fillControls(HWND dialog) {
   showingSettings = true;
   const Settings &settings = trainer().settings();
@@ -234,18 +329,9 @@ void fillControls(HWND dialog) {
                  settings.showBarNumbers ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(dialog, IDC_SHOW_STATS, settings.showBarStats ? BST_CHECKED : BST_UNCHECKED);
 
-  // Каналы — заново при каждом показе: звуковую карту могли сменить.
-  SendDlgItemMessage(dialog, IDC_CHANNEL, CB_RESETCONTENT, 0, 0);
-  const int channels = GetNumAudioInputs();
-  for (int i = 0; i < channels; ++i) {
-    const char *name = GetInputChannelName(i);
-    const std::string label = fmt::format("{}: {}", i + 1, name ? name : "");
-    SendDlgItemMessage(dialog, IDC_CHANNEL, CB_ADDSTRING, 0,
-                       reinterpret_cast<LPARAM>(label.c_str()));
-  }
-  SendDlgItemMessage(dialog, IDC_CHANNEL, CB_SETCURSEL,
-                     static_cast<WPARAM>(settings.channel < channels ? settings.channel : -1),
-                     0);
+  // Входы — заново при каждом показе: звуковую карту могли сменить, а
+  // устройство MIDI — подключить.
+  fillInputs(dialog);
 
   showStatus(dialog);
   placePanel(dialog);
@@ -281,6 +367,27 @@ bool onCalibrationButton(int control) {
   return true;
 }
 
+/// Ставит в настройки `settings` вход, выбранный в списке Input окна
+/// `dialog`.
+///
+/// @return ложь, если в списке ничего не выбрано: настройки не меняются.
+bool chooseInput(HWND dialog, Settings &settings) {
+  const auto index = SendDlgItemMessage(dialog, IDC_CHANNEL, CB_GETCURSEL, 0, 0);
+  if (index < 0 || index >= static_cast<LRESULT>(inputChoices.size()))
+    return false;
+
+  const InputChoice &choice = inputChoices[static_cast<std::size_t>(index)];
+  if (choice.channel >= 0) {
+    settings.channel = choice.channel;
+    settings.midiInput.clear();
+    settings.midiIndex = -1;
+  } else {
+    settings.midiInput = choice.midi.key;
+    settings.midiIndex = choice.midi.device;
+  }
+  return true;
+}
+
 /// Окно попадания настроек `settings` после правки поля `control` — Offset
 /// или Tolerance: вписанное значение прижато к шкале.
 ///
@@ -307,10 +414,8 @@ std::optional<Settings> editedSettings(HWND dialog, int control, int notificatio
       return std::nullopt;
     settings.mode = kModes[static_cast<std::size_t>(index)];
   } else if (notification == CBN_SELCHANGE && control == IDC_CHANNEL) {
-    const auto index = SendDlgItemMessage(dialog, IDC_CHANNEL, CB_GETCURSEL, 0, 0);
-    if (index < 0)
+    if (!chooseInput(dialog, settings))
       return std::nullopt;
-    settings.channel = static_cast<int>(index);
   } else if (notification == EN_CHANGE &&
              (control == IDC_OFFSET || control == IDC_TOLERANCE)) {
     // Недописанное число настройки не трогает; вне границ — прижимается.
@@ -340,6 +445,12 @@ void onCommand(HWND dialog, int control, int notification) {
     return;
   if (notification == BN_CLICKED && onCalibrationButton(control))
     return;
+  if (notification == BN_CLICKED && control == IDC_INPUT_REFRESH) {
+    // Устройство MIDI могли подключить или включить в настройках REAPER.
+    trainer().lookupMidiInput();
+    fillInputs(dialog);
+    return;
+  }
   if (notification == EN_KILLFOCUS && (control == IDC_OFFSET || control == IDC_TOLERANCE)) {
     // Ушли из поля — в нём прижатое значение: видно, что вписанное прижалось.
     showHitWindow(dialog);
@@ -1269,16 +1380,22 @@ void paintArea(HDC context, const RECT &area) {
             scaleLeft + layout.scaleWidth + 1.0, area.bottom, kLine);
 }
 
-/// Область строк тактов и панели калибровки: всё под контролами окна, у
+/// Область строк тактов и панели калибровки: всё под контролами окна. У
+/// входа MIDI строки Silence нет, и область — под шкалой окна попадания; у
 /// свёрнутой панели настроек — под кнопкой сворачивания.
 RECT rowsArea(HWND dialog) {
   RECT client{};
   GetClientRect(dialog, &client);
 
+  const Settings &settings = trainer().settings();
+  int lowest = IDC_SILENCE;
+  if (settings.panelCollapsed)
+    lowest = IDC_SETTINGS_TOGGLE;
+  else if (!settings.midiInput.empty())
+    lowest = IDC_GAUGE;
+
   RECT controls{};
-  GetWindowRect(GetDlgItem(dialog, trainer().settings().panelCollapsed ? IDC_SETTINGS_TOGGLE
-                                                                       : IDC_SILENCE),
-                &controls);
+  GetWindowRect(GetDlgItem(dialog, lowest), &controls);
   POINT bottom{.x = controls.left, .y = controls.bottom};
   ScreenToClient(dialog, &bottom);
 
@@ -1481,26 +1598,44 @@ void showControl(HWND dialog, int control, bool shown) {
     ShowWindow(item, shown ? SW_SHOW : SW_HIDE);
 }
 
-/// Контролы панели настроек под верхней строкой. Calibrate… сюда не входит:
-/// её прячет и показывает `placeCalibrationButtons`.
-constexpr std::array<int, 13> kPanelControls{
-    IDC_MODE_LABEL,      IDC_MODE,       IDC_CHANNEL_LABEL, IDC_CHANNEL,
-    IDC_SHOW_NUMBERS,    IDC_SHOW_STATS, IDC_OFFSET_LABEL,  IDC_OFFSET,
-    IDC_TOLERANCE_LABEL, IDC_TOLERANCE,  IDC_RANGE,         IDC_SILENCE_LABEL,
-    IDC_SILENCE};
+/// Контролы панели настроек под верхней строкой, которые есть у любого
+/// входа. Calibrate… сюда не входит: её прячет и показывает
+/// `placeCalibrationButtons`.
+constexpr std::array<int, 12> kPanelControls{
+    IDC_MODE_LABEL,   IDC_MODE,       IDC_CHANNEL_LABEL, IDC_CHANNEL, IDC_INPUT_REFRESH,
+    IDC_SHOW_NUMBERS, IDC_SHOW_STATS, IDC_OFFSET_LABEL,  IDC_OFFSET,  IDC_TOLERANCE_LABEL,
+    IDC_TOLERANCE,    IDC_RANGE};
+
+/// Контролы порога тишины: у входа MIDI их нет.
+constexpr std::array<int, 2> kSilenceControls{IDC_SILENCE_LABEL, IDC_SILENCE};
 
 /// Свёрнутость панели, с которой нарисована кнопка сворачивания; пусто —
 /// кнопку ещё не рисовали.
 std::optional<bool> drawnCollapsed;
 
-/// Сворачивает или разворачивает панель настроек по настройкам и
-/// перерисовывает кнопку сворачивания, если стрелка на ней устарела.
+/// Выбран ли вход MIDI, когда панель последний раз ставили; пусто — ещё не
+/// ставили.
+std::optional<bool> placedMidi;
+
+/// Сворачивает или разворачивает панель настроек по настройкам, прячет
+/// порог тишины у входа MIDI и перерисовывает кнопку сворачивания, если
+/// стрелка на ней устарела. Когда меняется вид входа, пишет в журнал, откуда
+/// начинаются строки тактов.
 void placePanel(HWND dialog) {
-  const bool collapsed = trainer().settings().panelCollapsed;
+  const Settings &settings = trainer().settings();
+  const bool collapsed = settings.panelCollapsed;
+  const bool midi = !settings.midiInput.empty();
   for (const int control : kPanelControls)
     showControl(dialog, control, !collapsed);
+  for (const int control : kSilenceControls)
+    showControl(dialog, control, !collapsed && !midi);
   if (drawnCollapsed != collapsed)
     InvalidateRect(GetDlgItem(dialog, IDC_SETTINGS_TOGGLE), nullptr, FALSE);
+  if (placedMidi != midi) {
+    placedMidi = midi;
+    journal("panel for {} input: rows from {} px", midi ? "MIDI" : "audio",
+            rowsArea(dialog).top);
+  }
 }
 
 /// Рисует кнопку сворачивания `item`: рамку, стрелку — вниз у развёрнутой
@@ -1569,7 +1704,7 @@ void paintToggle(const DRAWITEMSTRUCT &item) {
 
 /// Ставит кнопки калибровки по состоянию тренажёра: Calibrate… доступна без
 /// сессии при остановленном транспорте и с каналом, на итоге называется
-/// Finish, а в свёрнутой панели настроек скрыта; Cancel — справа вверху
+/// Finish, а в свёрнутой панели настроек и у входа MIDI скрыта; Cancel — справа вверху
 /// панели калибровки на шагах; Close, Calibrate again и Apply anyway — справа
 /// внизу на итоге (design D7).
 void placeCalibrationButtons(HWND dialog) {
@@ -1578,7 +1713,8 @@ void placeCalibrationButtons(HWND dialog) {
   setButtonText(dialog, IDC_CALIBRATE, finished ? "Finish" : "Calibrate...");
   EnableWindow(GetDlgItem(dialog, IDC_CALIBRATE),
                finished || (!session && trainer().status().measuring == Measuring::Waiting));
-  showControl(dialog, IDC_CALIBRATE, !trainer().settings().panelCollapsed);
+  showControl(dialog, IDC_CALIBRATE,
+              !trainer().settings().panelCollapsed && trainer().settings().midiInput.empty());
 
   const RECT area = rowsArea(dialog);
   const PanelLayout layout = panelLayout(area);
@@ -1707,6 +1843,7 @@ INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam) {
   case WM_DESTROY:
     drag.reset();
     drawnCollapsed.reset();
+    placedMidi.reset();
     if (window == dialog)
       window = nullptr;
     return 0;

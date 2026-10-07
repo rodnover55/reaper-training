@@ -186,6 +186,7 @@ add_library(reaper_training MODULE
   src/audio_input.cpp
   src/debug_actions.cpp
   src/journal.cpp
+  src/midi_inputs.cpp
   src/project_timeline.cpp
   src/settings.cpp
   src/trainer.cpp

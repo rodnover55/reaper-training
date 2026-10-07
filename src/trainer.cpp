@@ -4,6 +4,9 @@
 #define REAPERAPI_WANT_GetInputOutputLatency
 #define REAPERAPI_WANT_GetPlayStateEx
 #define REAPERAPI_WANT_GetPlayPositionEx
+#define REAPERAPI_WANT_GetPlayPosition2Ex
+#define REAPERAPI_WANT_GetAudioDeviceInfo
+#define REAPERAPI_WANT_MIDI_GetRecentInputEvent
 #define REAPERAPI_WANT_Master_GetPlayRate
 #define REAPERAPI_WANT_GetSetRepeat
 #define REAPERAPI_WANT_GetSet_LoopTimeRange2
@@ -21,8 +24,13 @@
 #include "training/grid/note_time.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstring>
+#include <limits>
+#include <ranges>
+#include <span>
+#include <string_view>
 #include <utility>
 
 namespace training::reaper {
@@ -54,6 +62,27 @@ int intConfig(const char *name, int fallback) {
   return value;
 }
 
+/// Целое из сведений об открытой звуковой карте (`GetAudioDeviceInfo`);
+/// дробная часть отбрасывается. 0 — карта не открыта или в сведениях не
+/// число.
+int deviceInfo(const char *attribute) {
+  std::array<char, 64> text{};
+  if (!GetAudioDeviceInfo(attribute, text.data(), static_cast<int>(text.size())))
+    return 0;
+
+  const std::string_view view(text.data());
+  int value = 0;
+  (void)std::from_chars(view.data(), view.data() + view.size(), value);
+  return value;
+}
+
+/// Через сколько тренажёр снова ищет выбранный вход MIDI по имени.
+constexpr auto kMidiLookupInterval = std::chrono::seconds(1);
+
+/// Бит устройства истории MIDI-входа: вход включён только для управления
+/// (`MIDI_GetRecentInputEvent`).
+constexpr int kControlOnly = 0x10000;
+
 /// Сколько секунд без звука от хука обрывают калибровку.
 constexpr double kNoSoundSeconds = 2.0;
 
@@ -83,9 +112,12 @@ void onMainTimer() {
 } // namespace
 
 Trainer::Trainer() : settings_(loadSettings()) {
-  input_.setChannel(settings_.channel);
+  // Пока выбран вход MIDI, хук сэмплов не берёт.
+  input_.setChannel(settings_.midiInput.empty() ? settings_.channel : -1);
   input_.setSilenceDb(settings_.silenceDb);
   bars_.setMode(settings_.mode);
+  lookupMidiInput();
+  skipMidiHistory();
 }
 
 void Trainer::setSettings(const Settings &settings) {
@@ -96,14 +128,62 @@ void Trainer::setSettings(const Settings &settings) {
 void Trainer::previewSettings(const Settings &settings) { apply(settings); }
 
 void Trainer::apply(const Settings &settings) {
+  const Settings next = clamped(settings);
+  const bool inputChanged = next.channel != settings_.channel ||
+                            next.midiInput != settings_.midiInput ||
+                            next.midiIndex != settings_.midiIndex;
   // Смена входа прерывает калибровку: она меряла другой канал.
-  if (session_ && clamped(settings).channel != settings_.channel)
+  if (session_ && inputChanged)
     endCalibration();
 
-  settings_ = clamped(settings);
-  input_.setChannel(settings_.channel);
+  settings_ = next;
+  input_.setChannel(settings_.midiInput.empty() ? settings_.channel : -1);
   input_.setSilenceDb(settings_.silenceDb);
   bars_.setMode(settings_.mode);
+
+  if (inputChanged) {
+    // Ноты, пришедшие до смены, и мёртвое время прежнего входа в новый вход
+    // не попадают.
+    deadTime_.reset();
+    skipMidiHistory();
+    lookupMidiInput();
+    // Состояние — сразу, а не на следующем тике: калибровка, начатая до него,
+    // берёт имя и наличие нового входа.
+    status_ = currentStatus(wasPlaying_, GetNumAudioInputs());
+    journal("input: {}", inputText(settings_));
+  }
+}
+
+void Trainer::lookupMidiInput() {
+  lastMidiLookup_ = std::chrono::steady_clock::now();
+  std::optional<MidiInput> found;
+  if (!settings_.midiInput.empty())
+    found = findMidiInput(midiInputs(), settings_.midiInput, settings_.midiIndex);
+
+  const bool same = found.has_value() == midi_.has_value() &&
+                    (!found || (found->device == midi_->device && found->name == midi_->name));
+  midi_ = std::move(found);
+  if (same || settings_.midiInput.empty())
+    return;
+
+  if (midi_)
+    journal("midi input «{}»: device {} «{}»", settings_.midiInput, midi_->device,
+            midi_->name);
+  else
+    journal("midi input «{}»: not found", settings_.midiInput);
+}
+
+void Trainer::skipMidiHistory() {
+  // idx = 0 защёлкивает свежую историю; её последнее событие считается
+  // прочитанным.
+  std::array<char, 256> bytes{};
+  int size = static_cast<int>(bytes.size());
+  int timestamp = 0;
+  int device = 0;
+  int loop = 0;
+  double position = 0.0;
+  midiSequence_ =
+      MIDI_GetRecentInputEvent(0, bytes.data(), &size, &timestamp, &device, &position, &loop);
 }
 
 void Trainer::takeCompensation() {
@@ -119,6 +199,15 @@ void Trainer::takeCompensation() {
                                intConfig("adjrecmanlat", 0), intConfig("adjreclat", 1) != 0,
                                sampleRate_)
           : 0.0;
+
+  // Для MIDI — по правилу записи MIDI (design.md D2 изменения add-midi-input).
+  midiSampleRate_ = deviceInfo("SRATE");
+  midiCompensation_ =
+      midiSampleRate_ > 0.0
+          ? grid::midiCompensation(deviceInfo("BSIZE"), outputLatency,
+                                   intConfig("adjrecmanlat", 0),
+                                   intConfig("adjreclat", 1) != 0, midiSampleRate_)
+          : 0.0;
 }
 
 void Trainer::start() {
@@ -126,11 +215,21 @@ void Trainer::start() {
   // как постоянный сдвиг у записи.
   bars_.clear();
   lastRun_.clear();
+  lastMidiRun_.clear();
   minRun_ = latestRun_ + 1;
   takeCompensation();
 
-  journal("start: compensation {:.3f} ms, rate {}", compensation_ * 1000.0,
-          Master_GetPlayRate(nullptr));
+  // Ноты MIDI и мёртвое время прошлого запуска в этот не попадают; count-in —
+  // пока позиция стоит (design.md D1, D3, D4 изменения add-midi-input).
+  deadTime_.reset();
+  skipMidiHistory();
+  startPosition_ = GetPlayPosition2Ex(nullptr);
+  positionMoved_ = false;
+
+  journal("start: compensation {:.3f} ms, MIDI compensation {:.3f} ms, rate {}, position "
+          "{:.6f}",
+          compensation_ * 1000.0, midiCompensation_ * 1000.0, Master_GetPlayRate(nullptr),
+          startPosition_);
 }
 
 double Trainer::loopWrapped(double time, double blockPosition) const {
@@ -211,22 +310,12 @@ bool Trainer::poll() {
 
   rate_ = Master_GetPlayRate(nullptr);
 
-  Status status;
-  status.rate = rate_;
-  status.compensationMs = compensation_ * 1000.0;
-  status.calibrationCancelled = calibrationCancelled_;
-  if (settings_.channel < channels)
-    if (const char *name = GetInputChannelName(settings_.channel))
-      status.channelName = name;
-  if (status.channelName.empty())
-    status.measuring = Measuring::NoChannel;
-  else
-    status.measuring = playing ? Measuring::Running : Measuring::Waiting;
-
-  bool changed =
-      status.measuring != status_.measuring || status.channelName != status_.channelName ||
-      status.compensationMs != status_.compensationMs || status.rate != status_.rate ||
-      status.calibrationCancelled != status_.calibrationCancelled;
+  const Status status = currentStatus(playing, channels);
+  bool changed = status.measuring != status_.measuring ||
+                 status.inputName != status_.inputName || status.midi != status_.midi ||
+                 status.compensationMs != status_.compensationMs ||
+                 status.rate != status_.rate ||
+                 status.calibrationCancelled != status_.calibrationCancelled;
   status_ = status;
 
   if (session_ && pollCalibration())
@@ -262,7 +351,137 @@ bool Trainer::poll() {
             age * 1000.0);
   }
 
+  if (pollMidi(playing))
+    changed = true;
+
   return changed;
+}
+
+Status Trainer::currentStatus(bool playing, int channels) {
+  Status status;
+  status.rate = rate_;
+  status.calibrationCancelled = calibrationCancelled_;
+  status.midi = !settings_.midiInput.empty();
+  const Measuring present = playing ? Measuring::Running : Measuring::Waiting;
+
+  if (!status.midi) {
+    status.compensationMs = compensation_ * 1000.0;
+    if (settings_.channel < channels)
+      if (const char *name = GetInputChannelName(settings_.channel))
+        status.inputName = name;
+    status.measuring = status.inputName.empty() ? Measuring::NoInput : present;
+    return status;
+  }
+
+  if (std::chrono::steady_clock::now() - lastMidiLookup_ >= kMidiLookupInterval)
+    lookupMidiInput();
+  status.compensationMs = midiCompensation_ * 1000.0;
+  if (!midi_) {
+    status.measuring = Measuring::NoInput;
+    return status;
+  }
+  status.inputName = midi_->name;
+  status.measuring = midiInputEnabled(midi_->device) ? present : Measuring::NotEnabled;
+  return status;
+}
+
+void Trainer::readMidiHistory() {
+  // idx = 0 защёлкивает свежее состояние, дальше — к старым событиям до
+  // прочитанного на прошлом тике (design.md D1 изменения add-midi-input).
+  midiEvents_.clear();
+  std::array<char, 256> bytes{};
+  int newest = 0;
+  for (int index = 0;; ++index) {
+    MidiEvent event;
+    int size = static_cast<int>(bytes.size());
+    const int sequence = MIDI_GetRecentInputEvent(index, bytes.data(), &size, &event.timestamp,
+                                                  &event.device, &event.position, &event.loop);
+    if (sequence == 0 || sequence <= midiSequence_)
+      break;
+    if (index == 0)
+      newest = sequence;
+
+    event.size = std::clamp(size, 0, static_cast<int>(bytes.size()));
+    for (std::size_t i = 0; i < event.bytes.size() && i < static_cast<std::size_t>(event.size);
+         ++i)
+      event.bytes[i] = static_cast<std::uint8_t>(bytes[i]);
+    midiEvents_.push_back(event);
+  }
+  if (newest != 0)
+    midiSequence_ = newest;
+}
+
+std::optional<double> Trainer::movedAgo() {
+  if (positionMoved_)
+    return std::numeric_limits<double>::infinity();
+
+  const double position = GetPlayPosition2Ex(nullptr);
+  if (position == startPosition_)
+    return std::nullopt;
+
+  positionMoved_ = true;
+  const double ago = (position - startPosition_) / rate_;
+  journal("position moved {:.1f} ms ago", ago * 1000.0);
+  return ago;
+}
+
+bool Trainer::pollMidi(bool playing) {
+  if (settings_.midiInput.empty())
+    return false;
+
+  readMidiHistory();
+  if (!playing || !midi_ || status_.measuring != Measuring::Running)
+    return false;
+  const int device = midi_->device;
+
+  // Count-in: позиция стоит у начала записи, и места нот MIDI на шкале нет
+  // (design.md D3 изменения add-midi-input). Нота, пришедшая раньше, чем
+  // позиция сдвинулась, отбрасывается.
+  const std::optional<double> moved = movedAgo();
+  bool added = false;
+  for (const MidiEvent &event : std::views::reverse(midiEvents_)) {
+    const auto message = std::span<const std::uint8_t>(event.bytes)
+                             .first(static_cast<std::size_t>(std::min(event.size, 3)));
+    if ((event.device & 0xFFFF) != device || (event.device & kControlOnly) != 0 ||
+        event.position < 0.0 || !onset::isNoteStart(message))
+      continue;
+
+    const int channel = (event.bytes[0] & 0x0F) + 1;
+    const int note = event.bytes[1];
+    const int velocity = event.bytes[2];
+    // Сколько прошло от прихода ноты до опроса истории — это и задержка показа:
+    // окно перерисуется на этом же тике.
+    const double age =
+        midiSampleRate_ > 0.0 ? -static_cast<double>(event.timestamp) / midiSampleRate_ : 0.0;
+    if (!moved || age > *moved) {
+      journal("midi note dropped by count-in: pp={:.6f} note={} channel={} velocity={}, "
+              "arrived {:.1f} ms ago",
+              event.position, note, channel, velocity, age * 1000.0);
+      continue;
+    }
+
+    // Мёртвое время — по времени ноты на шкале проекта и кончается с проходом
+    // петли (design.md D4 изменения add-midi-input).
+    if (event.loop != midiLoop_)
+      deadTime_.reset();
+    midiLoop_ = event.loop;
+    const double time = event.position - midiCompensation_ * rate_;
+    if (!deadTime_.add(time)) {
+      journal("midi note skipped in dead time: t={:.6f} pp={:.6f} loop={} note={} channel={} "
+              "velocity={}",
+              time, event.position, event.loop, note, channel, velocity);
+      continue;
+    }
+
+    const double wrapped = loopWrapped(time, event.position);
+    bars_.addNote(wrapped, rate_, settings_.window(), timeline_);
+    lastMidiRun_.push_back(time);
+    added = true;
+    journal("midi note t={:.6f} pp={:.6f} loop={} note={} channel={} velocity={}, shown "
+            "after {:.1f} ms",
+            wrapped, event.position, event.loop, note, channel, velocity, age * 1000.0);
+  }
+  return added;
 }
 
 void Trainer::stopCalibrationOnPlayback(bool playing) {
@@ -282,7 +501,7 @@ void Trainer::stopCalibrationOnPlayback(bool playing) {
 }
 
 bool Trainer::startCalibration() {
-  if (wasPlaying_ || status_.measuring == Measuring::NoChannel)
+  if (wasPlaying_ || !settings_.midiInput.empty() || status_.measuring == Measuring::NoInput)
     return false;
 
   endCalibration();
@@ -292,7 +511,7 @@ bool Trainer::startCalibration() {
 
   CalibrationSession &session = session_.emplace();
   session.previousSilenceDb = settings_.silenceDb;
-  session.channelName = status_.channelName;
+  session.channelName = status_.inputName;
   lastSound_ = std::chrono::steady_clock::now();
   lastOpenAttempt_ = {};
   calibrationFinished_ = false;

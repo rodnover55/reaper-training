@@ -78,6 +78,12 @@ Settings clamped(Settings settings) {
   return settings;
 }
 
+std::string inputText(const Settings &settings) {
+  if (settings.midiInput.empty())
+    return fmt::format("channel {}", settings.channel + 1);
+  return fmt::format("MIDI «{}» #{}", settings.midiInput, settings.midiIndex);
+}
+
 bool consoleLogEnabled() {
   const auto value = numberOf("console_log");
   return value && *value != 0;
@@ -97,6 +103,10 @@ Settings loadSettings() {
       settings.offsetMs = *offset;
   if (const auto channel = numberOf("channel"))
     settings.channel = *channel - 1;
+  if (const auto midi = textOf("midi_input"))
+    settings.midiInput = *midi;
+  if (const auto index = numberOf("midi_input_index"))
+    settings.midiIndex = *index;
   if (const auto silence = numberOf("silence_db"))
     settings.silenceDb = *silence;
   if (const auto numbers = numberOf("show_bar_numbers"))
@@ -114,6 +124,10 @@ void saveSettings(const Settings &settings) {
   store("tolerance_ms", grid::halfMsText(settings.toleranceMs, grid::MsStyle::Plain));
   store("offset_ms", grid::halfMsText(settings.offsetMs, grid::MsStyle::Plain));
   store("channel", fmt::format("{}", settings.channel + 1));
+  // Пустой ключ входа MIDI при загрузке выбирает канал `channel`.
+  store("midi_input", settings.midiInput);
+  store("midi_input_index",
+        settings.midiInput.empty() ? std::string() : fmt::format("{}", settings.midiIndex));
   store("silence_db", fmt::format("{}", static_cast<int>(std::lround(settings.silenceDb))));
   store("show_bar_numbers", settings.showBarNumbers ? "1" : "0");
   store("show_bar_stats", settings.showBarStats ? "1" : "0");

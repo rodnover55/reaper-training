@@ -47,6 +47,16 @@
 #define REAPERAPI_WANT_GetExtState
 #define REAPERAPI_WANT_Audio_IsRunning
 #define REAPERAPI_WANT_Audio_Init
+#define REAPERAPI_WANT_GetAudioDeviceInfo
+#define REAPERAPI_WANT_MIDI_GetRecentInputEvent
+#define REAPERAPI_WANT_GetNumMIDIInputs
+#define REAPERAPI_WANT_GetMIDIInputName
+#define REAPERAPI_WANT_GetMIDIInputNameNoAlias
+#define REAPERAPI_WANT_TakeIsMIDI
+#define REAPERAPI_WANT_MIDI_CountEvts
+#define REAPERAPI_WANT_MIDI_GetNote
+#define REAPERAPI_WANT_MIDI_GetProjTimeFromPPQPos
+#define REAPERAPI_WANT_MIDI_GetPPQPosFromProjTime
 
 // SWELL объявляет max и min макросами, и они ломают стандартную библиотеку.
 #define WDL_NO_DEFINE_MINMAX

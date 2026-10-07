@@ -4,12 +4,15 @@
 // для окна (архив add-timing-trainer, design.md D2, D3; design.md D1–D5).
 
 #include "audio_input.hpp"
+#include "midi_inputs.hpp"
 #include "project_timeline.hpp"
 #include "settings.hpp"
 
 #include "training/grid/bars.hpp"
 #include "training/onset/calibration.hpp"
+#include "training/onset/dead_time.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -27,20 +30,27 @@ enum class Measuring {
   Waiting,
   /// Воспроизведение или запись: ноты меряются.
   Running,
-  /// Выбранного канала нет у звуковой карты.
-  NoChannel,
+  /// Выбранного входа нет: канала у звуковой карты или устройства MIDI.
+  NoInput,
+  /// Выбранный вход MIDI не включён в настройках REAPER для записи на
+  /// дорожки.
+  NotEnabled,
 };
 
 /// Сведения для строки состояния окна.
 struct Status {
   Measuring measuring = Measuring::Waiting;
 
-  /// Имя выбранного входного канала (`GetInputChannelName`); пусто — канала
-  /// нет.
-  std::string channelName;
+  /// Имя выбранного входа: входного канала (`GetInputChannelName`) или
+  /// устройства MIDI с псевдонимом (`MidiInput::name`); пусто — входа нет.
+  std::string inputName;
 
-  /// Компенсация задержки, мс реального времени: при воспроизведении — снятая
-  /// при запуске, на остановке — та, что будет действовать при запуске.
+  /// Правда, если выбран вход MIDI.
+  bool midi = false;
+
+  /// Компенсация задержки выбранного входа, мс реального времени: при
+  /// воспроизведении — снятая при запуске, на остановке — та, что будет
+  /// действовать при запуске.
   double compensationMs = 0.0;
 
   /// Скорость воспроизведения проекта.
@@ -72,7 +82,7 @@ struct CalibrationSession {
   bool applied = false;
 };
 
-/// Тренажёр: вход звуковой карты, настройки и строки тактов.
+/// Тренажёр: вход звуковой карты или вход MIDI, настройки и строки тактов.
 ///
 /// Многопоточность: только главный поток.
 class Trainer {
@@ -85,7 +95,8 @@ public:
   /// Меняет и сохраняет настройки (`saveSettings`), прижав их к границам.
   /// Режим действует на удары, которые ещё не начались, окно попадания — на
   /// значения, которые появятся после смены, канал и порог — со следующего
-  /// блока. Смена канала кончает калибровку.
+  /// блока, вход MIDI — с нот, пришедших после смены. Смена входа кончает
+  /// калибровку и ищет выбранный вход MIDI по имени (`findMidiInput`).
   void setSettings(const Settings &settings);
 
   /// Меняет настройки, как `setSettings`, но не сохраняет их. Для частых
@@ -107,6 +118,20 @@ public:
   /// записанным айтемом.
   const std::vector<HookOnset> &lastRun() const { return lastRun_; }
 
+  /// Времена нот MIDI последнего запуска транспорта на шкале проекта, с, в
+  /// порядке прихода — для сверки с записанным MIDI-айтемом. Время — до
+  /// заворота в петлю; ноты, пропущенные в мёртвом времени, сюда не попадают.
+  const std::vector<double> &lastMidiRun() const { return lastMidiRun_; }
+
+  /// Выбранный вход MIDI, найденный по имени; пусто — выбран канал
+  /// звуковой карты или устройства с таким именем сейчас нет.
+  const std::optional<MidiInput> &midiInput() const { return midi_; }
+
+  /// Ищет выбранный вход MIDI по имени среди входов, которые есть сейчас
+  /// (`findMidiInput`), и пишет в журнал, если найденное поменялось. Без
+  /// вызова найденный вход обновляется раз в секунду, на тике `poll`.
+  void lookupMidiInput();
+
   AudioInput &input() { return input_; }
 
   /// Начинает калибровку выбранного входа; прежняя сессия кончается без
@@ -117,8 +142,9 @@ public:
   /// закрытую звуковую карту она открывает (`Audio_Init`) и после себя не
   /// закрывает.
   ///
-  /// @return ложь, если транспорт воспроизводит или записывает или
-  ///   выбранного канала нет у звуковой карты: калибровка не начата.
+  /// @return ложь, если транспорт воспроизводит или записывает, выбран вход
+  ///   MIDI или выбранного канала нет у звуковой карты: калибровка не
+  ///   начата.
   bool startCalibration();
 
   /// Начинает калибровку, как `startCalibration()`, но звук берёт не со
@@ -149,8 +175,8 @@ public:
   }
 
   /// Сообщает строкам тактов слышимую позицию воспроизведения, забирает новые
-  /// атаки, ставит их в строки и обновляет состояние. Зовётся таймером главного
-  /// потока.
+  /// атаки или ноты MIDI, ставит их в строки и обновляет состояние. Зовётся
+  /// таймером главного потока.
   ///
   /// @return правда, если строки или состояние изменились и окно пора
   ///   перерисовать.
@@ -160,6 +186,11 @@ private:
   void apply(const Settings &settings);
   void start();
   void takeCompensation();
+  Status currentStatus(bool playing, int channels);
+  void skipMidiHistory();
+  void readMidiHistory();
+  std::optional<double> movedAgo();
+  bool pollMidi(bool playing);
   double loopBeats(double heard) const;
   void followPlayback();
   double loopWrapped(double time, double blockPosition) const;
@@ -178,6 +209,23 @@ private:
     std::size_t fed = 0;
   };
 
+  /// Событие истории MIDI-входа REAPER (`MIDI_GetRecentInputEvent`).
+  struct MidiEvent {
+    /// Позиция на шкале проекта, с; −1 — транспорт стоял.
+    double position = -1.0;
+    /// Сэмплов от прихода события до опроса истории, не больше нуля.
+    int timestamp = 0;
+    /// Номер устройства в младших 16 битах, бит 0x10000 — вход только для
+    /// управления.
+    int device = 0;
+    /// Номер прохода петли.
+    int loop = 0;
+    /// Длина сообщения, байт.
+    int size = 0;
+    /// Первые байты сообщения, не больше трёх.
+    std::array<std::uint8_t, 3> bytes{};
+  };
+
   // Поля стоят в порядке, который не оставляет дыр выравнивания.
   AudioInput input_;
   ProjectTimeline timeline_;
@@ -185,11 +233,25 @@ private:
   double compensation_ = 0.0;
   double inputLatency_ = 0.0;
   double rate_ = 1.0;
+  // Компенсация записи MIDI и частота звуковой карты для неё, снятые при
+  // запуске транспорта.
+  double midiCompensation_ = 0.0;
+  double midiSampleRate_ = 0.0;
+  // Позиция обработки при запуске транспорта: пока она не сдвинулась, идёт
+  // count-in, и нот MIDI нет (design.md D3).
+  double startPosition_ = 0.0;
   // Когда от хука или звука без гитары пришёл последний звук калибровки.
   std::chrono::steady_clock::time_point lastSound_;
   // Когда калибровка последний раз пробовала открыть закрытую звуковую карту.
   std::chrono::steady_clock::time_point lastOpenAttempt_;
+  // Когда последний раз искали вход MIDI по имени.
+  std::chrono::steady_clock::time_point lastMidiLookup_;
   std::vector<HookOnset> lastRun_;
+  std::vector<double> lastMidiRun_;
+  // События истории MIDI-входа, прочитанные на тике, от новых к старым.
+  std::vector<MidiEvent> midiEvents_;
+  std::optional<MidiInput> midi_;
+  onset::DeadTime deadTime_;
   // Сэмплы куска калибровки.
   std::vector<float> chunkSamples_;
   Settings settings_;
@@ -199,7 +261,14 @@ private:
   std::optional<CalibrationSession> session_;
   std::uint32_t minRun_ = 0;
   std::uint32_t latestRun_ = 0;
+  // Номер последнего прочитанного события истории MIDI-входа.
+  int midiSequence_ = 0;
+  // Проход петли последней ноты MIDI: с новым проходом мёртвое время
+  // кончается.
+  int midiLoop_ = 0;
   bool wasPlaying_ = false;
+  // Сдвинулась ли позиция с запуска транспорта.
+  bool positionMoved_ = false;
   // Подведён ли итог калибровки; прервал ли её запуск транспорта.
   bool calibrationFinished_ = false;
   bool calibrationCancelled_ = false;

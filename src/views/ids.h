@@ -34,5 +34,6 @@
 #define IDC_OFFSET 1018
 #define IDC_GAUGE 1019
 #define IDC_RANGE 1020
+#define IDC_INPUT_REFRESH 1021
 
 // NOLINTEND(modernize-macro-to-enum,cppcoreguidelines-macro-usage)
