@@ -1,5 +1,13 @@
 schema: spec-driven
 
+rules:
+  tasks:
+    - >-
+      Проверка задачи — только то, что агент выполняет и проверяет сам: тесты,
+      сборка, проверка вживую в REAPER скриптами и отладочными действиями.
+      Проверок, которым нужно участие пользователя (звук в комнате, игра на
+      инструменте, щелчки в окне), в задачах нет.
+
 # Project context (optional)
 # Add only constraints that should guide OpenSpec artifacts and workflows.
 # Include constraints an agent cannot infer by reading the code.
