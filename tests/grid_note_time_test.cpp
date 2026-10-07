@@ -3,6 +3,7 @@
 #include "training/grid/note_time.hpp"
 
 using training::grid::compensation;
+using training::grid::midiCompensation;
 using training::grid::noteTime;
 using training::grid::wrapIntoLoop;
 
@@ -14,6 +15,25 @@ TEST_CASE("время ноты: компенсация по правилу за�
   // Галка выключена: только ручные поправки.
   CHECK(compensation(992, 1024, 480, 0, false, 48000.0) == doctest::Approx(0.010));
   CHECK(compensation(512, 1024, 0, 0, false, 48000.0) == 0.0);
+}
+
+TEST_CASE("время ноты MIDI: компенсация по правилу записи MIDI (findings.md R2)") {
+  // Галка включена: блок и выход из GetInputOutputLatency, поправка выхода уже
+  // в нём.
+  CHECK(midiCompensation(512, 1024, 0, true, 48000.0) * 1000.0 == doctest::Approx(32.0));
+  CHECK(midiCompensation(512, 1504, 480, true, 48000.0) * 1000.0 == doctest::Approx(42.0));
+  CHECK(midiCompensation(128, 256, 0, true, 48000.0) * 1000.0 == doctest::Approx(8.0));
+  CHECK(midiCompensation(1024, 2048, 0, true, 48000.0) * 1000.0 == doctest::Approx(64.0));
+
+  // Галка выключена: блок и ручная поправка выхода.
+  CHECK(midiCompensation(512, 1024, 0, false, 48000.0) * 1000.0 ==
+        doctest::Approx(10.667).epsilon(0.0001));
+  CHECK(midiCompensation(512, 1504, 480, false, 48000.0) * 1000.0 ==
+        doctest::Approx(20.667).epsilon(0.0001));
+  CHECK(midiCompensation(128, 256, 0, false, 48000.0) * 1000.0 ==
+        doctest::Approx(2.667).epsilon(0.0001));
+  CHECK(midiCompensation(1024, 2048, 0, false, 48000.0) * 1000.0 ==
+        doctest::Approx(21.333).epsilon(0.0001));
 }
 
 TEST_CASE("время ноты: при скорости 1.0 — позиция блока плюс смещение минус компенсация") {

@@ -11,6 +11,12 @@ double compensation(int inputLatency, int outputLatency, int manualInput, int ma
   return static_cast<double>(samples) / sampleRate;
 }
 
+double midiCompensation(int blockSize, int outputLatency, int manualOutput, bool driverLatency,
+                        double sampleRate) {
+  const int samples = blockSize + (driverLatency ? outputLatency : manualOutput);
+  return static_cast<double>(samples) / sampleRate;
+}
+
 double noteTime(double blockPosition, double offset, double sampleRate, double compensation,
                 double rate) {
   return blockPosition + (offset / sampleRate - compensation) * rate;
