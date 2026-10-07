@@ -46,6 +46,13 @@ int fakeAudioRegHardwareHook(bool /*isAdd*/, audio_hook_register_t * /*registrat
   return 1;
 }
 
+/// История MIDI-входа пуста.
+int fakeMidiGetRecentInputEvent(int /*idx*/, char * /*buf*/, int * /*bufSize*/, int * /*ts*/,
+                                int * /*devIdx*/, double * /*projPos*/,
+                                int * /*projLoopCnt*/) {
+  return 0;
+}
+
 /// Заглушка для остальных функций API: расширение их только запоминает, а
 /// зовёт из звукового потока, таймера и окна, которых в тесте нет. Вызов
 /// значит, что тесту не хватает заглушки, — он падает.
@@ -64,6 +71,8 @@ void *fakeGetFunc(const char *name) {
     return reinterpret_cast<void *>(fakeGetExtState);
   if (function == "Audio_RegHardwareHook")
     return reinterpret_cast<void *>(fakeAudioRegHardwareHook);
+  if (function == "MIDI_GetRecentInputEvent")
+    return reinterpret_cast<void *>(fakeMidiGetRecentInputEvent);
   return reinterpret_cast<void *>(fakeUncalled);
 }
 

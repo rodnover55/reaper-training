@@ -19,18 +19,25 @@
 #define REAPERAPI_WANT_GetAudioAccessorSamples
 #define REAPERAPI_WANT_Master_GetPlayRate
 #define REAPERAPI_WANT_GetCursorPosition
+#define REAPERAPI_WANT_TakeIsMIDI
+#define REAPERAPI_WANT_MIDI_CountEvts
+#define REAPERAPI_WANT_MIDI_GetNote
+#define REAPERAPI_WANT_MIDI_GetProjTimeFromPPQPos
+#define REAPERAPI_WANT_MIDI_GetPPQPosFromProjTime
 
 #include "debug_actions.hpp"
 
 #include <reaper_plugin_functions.h>
 
 #include "journal.hpp"
+#include "midi_inputs.hpp"
 #include "project_timeline.hpp"
 #include "settings.hpp"
 #include "trainer.hpp"
 #include "window.hpp"
 
 #include "training/grid/hit_window.hpp"
+#include "training/onset/dead_time.hpp"
 #include "training/onset/detector.hpp"
 
 #include <fmt/format.h>
@@ -171,6 +178,51 @@ const char *const kSetSettingsDef =
     "void\0int,double,int,double\0mode,toleranceMs,channel,silenceDb\0"
     "reaper-training (debug): set trainer settings like the window does; channel 1 is the "
     "first";
+
+/// Выбирает вход, как список Input окна, и показывает настройки в окне.
+///
+/// @param name вход MIDI — имя, как в списке, с псевдонимом
+///   (`MidiInput::name`), или имя для сохранения (`MidiInput::key`); пустая
+///   строка выбирает канал звуковой карты из настроек.
+/// @return 1 — вход выбран; 0 — входа MIDI с таким именем сейчас нет, и
+///   настройки не изменились.
+int setInput(const char *name) {
+  Settings settings = trainer().settings();
+  if (!name || !*name) {
+    settings.midiInput.clear();
+    settings.midiIndex = -1;
+  } else {
+    const std::vector<MidiInput> inputs = midiInputs();
+    const auto found = std::ranges::find_if(inputs, [name](const MidiInput &input) {
+      return input.name == name || input.key == name;
+    });
+    if (found == inputs.end()) {
+      say(fmt::format("входа MIDI «{}» нет", name));
+      return 0;
+    }
+    settings.midiInput = found->key;
+    settings.midiIndex = found->device;
+  }
+
+  trainer().setSettings(settings);
+  showSettings();
+  refreshWindow();
+  journal("script input: {}", inputText(trainer().settings()));
+  return 1;
+}
+
+void *setInputVararg(void **args, int count) {
+  if (count < 1)
+    return nullptr;
+  return reinterpret_cast<void *>(
+      static_cast<std::intptr_t>(setInput(static_cast<const char *>(args[0]))));
+}
+
+const char *const kSetInputDef =
+    "int\0const char*\0name\0"
+    "reaper-training (debug): select the input like the Input list does: a MIDI input by its "
+    "name, or the audio channel from the settings by an empty string; returns 1 when "
+    "selected";
 
 /// Меняет порог энергии удара по звучащей струне
 /// (`onset::Settings::energyRatio`) — на лету и для сверки с айтемом. В окне
@@ -526,10 +578,91 @@ const char *const kClickButtonDef =
     "reaper-training (debug): click a visible enabled button of the trainer window by control "
     "id; returns 1 when clicked";
 
+/// Сверка с MIDI-айтемом (design.md D7 изменения add-midi-input): начала нот
+/// тейка `take` без пропущенных в мёртвом времени тем же `onset::DeadTime`
+/// против нот MIDI последнего запуска. Печатает отличие «на лету − айтем» — среднее и
+/// наибольшее по модулю, в мс шкалы и тиках тейка; каждую пару пишет в
+/// журнал.
+void compareWithMidiItem(MediaItem_Take *take) {
+  std::vector<double> live = trainer().lastMidiRun();
+  if (live.empty()) {
+    say("сверка: нот MIDI на лету ещё нет — запишите дубль с входа MIDI");
+    return;
+  }
+  std::ranges::sort(live);
+
+  int notes = 0;
+  int controls = 0;
+  int texts = 0;
+  MIDI_CountEvts(take, &notes, &controls, &texts);
+  std::vector<double> starts;
+  for (int i = 0; i < notes; ++i) {
+    double start = 0.0;
+    if (MIDI_GetNote(take, i, nullptr, nullptr, &start, nullptr, nullptr, nullptr, nullptr))
+      starts.push_back(MIDI_GetProjTimeFromPPQPos(take, start));
+  }
+  std::ranges::sort(starts);
+
+  // Мёртвое время — по времени нот на шкале проекта, как на лету.
+  onset::DeadTime deadTime;
+  std::vector<double> measured;
+  for (const double start : starts)
+    if (deadTime.add(start))
+      measured.push_back(start);
+  if (measured.empty()) {
+    say("  в айтеме нот нет");
+    return;
+  }
+
+  // Пара — ближайшая нота на лету не дальше 50 мс: ошибка в десятки
+  // миллисекунд видна по числу нот без пары.
+  constexpr double kPairWindow = 0.050;
+  std::size_t paired = 0;
+  double sum = 0.0;
+  double sumTicks = 0.0;
+  double largest = 0.0;
+  double largestTicks = 0.0;
+  for (const double note : measured) {
+    const double nearestLive = nearest(live, note);
+    const double difference = nearestLive - note;
+    if (std::abs(difference) > kPairWindow)
+      continue;
+
+    const double ticks =
+        MIDI_GetPPQPosFromProjTime(take, nearestLive) - MIDI_GetPPQPosFromProjTime(take, note);
+    journal("  midi pair: item {:.6f}, live {:.6f}, {:+.3f} ms, {:+.2f} ticks", note,
+            nearestLive, difference * 1000.0, ticks);
+    ++paired;
+    sum += difference;
+    sumTicks += ticks;
+    if (std::abs(difference) > std::abs(largest)) {
+      largest = difference;
+      largestTicks = ticks;
+    }
+  }
+
+  say("сверка с MIDI-айтемом:");
+  say(fmt::format("  нот в айтеме {}, из них вне мёртвого времени {}, на лету {}, в паре "
+                  "{}; без пары: в айтеме {}, на лету {}",
+                  starts.size(), measured.size(), live.size(), paired,
+                  measured.size() - paired, live.size() > paired ? live.size() - paired : 0));
+  const double count = paired > 0 ? static_cast<double>(paired) : 1.0;
+  say(fmt::format("  отличие «на лету − айтем»: среднее {:+.3f} мс ({:+.2f} тика), "
+                  "наибольшее {:+.3f} мс ({:+.2f} тика)",
+                  sum / count * 1000.0, sumTicks / count, largest * 1000.0, largestTicks));
+}
+
 /// Сверка с айтемом (design.md D10): ноты последнего запуска, найденные на
 /// лету, против тех же нот в записанном айтеме. Печатает сдвиг «на лету −
-/// айтем», остаток после него и задержки, о которых знает REAPER.
+/// айтем», остаток после него и задержки, о которых знает REAPER. Для
+/// MIDI-айтема — `compareWithMidiItem`.
 void compareWithItem() {
+  if (MediaItem *item = GetSelectedMediaItem(nullptr, 0))
+    if (MediaItem_Take *take = GetActiveTake(item); take && TakeIsMIDI(take)) {
+      compareWithMidiItem(take);
+      return;
+    }
+
   const std::vector<HookOnset> &run = trainer().lastRun();
   if (run.empty()) {
     say("сверка: на лету ещё ничего не измерено — запишите дубль с плагином");
@@ -692,6 +825,10 @@ void registerDebugActions(reaper_plugin_info_t *rec) {
                reinterpret_cast<void *>(setSettingsVararg));
   hostRegister("APIdef_TrainingDebug_SetSettings", const_cast<char *>(kSetSettingsDef));
 
+  hostRegister("API_TrainingDebug_SetInput", reinterpret_cast<void *>(setInput));
+  hostRegister("APIvararg_TrainingDebug_SetInput", reinterpret_cast<void *>(setInputVararg));
+  hostRegister("APIdef_TrainingDebug_SetInput", const_cast<char *>(kSetInputDef));
+
   hostRegister("API_TrainingDebug_SetEnergyRatio", reinterpret_cast<void *>(setEnergyRatio));
   hostRegister("APIvararg_TrainingDebug_SetEnergyRatio",
                reinterpret_cast<void *>(setEnergyRatioVararg));
@@ -757,6 +894,7 @@ void unregisterDebugActions() {
 
   hostRegister("-API_TrainingDebug_ConfigVar", reinterpret_cast<void *>(configVar));
   hostRegister("-API_TrainingDebug_SetSettings", reinterpret_cast<void *>(setSettings));
+  hostRegister("-API_TrainingDebug_SetInput", reinterpret_cast<void *>(setInput));
   hostRegister("-API_TrainingDebug_SetEnergyRatio", reinterpret_cast<void *>(setEnergyRatio));
   hostRegister("-API_TrainingDebug_Journal", reinterpret_cast<void *>(journalFromScript));
   hostRegister("-API_TrainingDebug_AddNote", reinterpret_cast<void *>(addNote));

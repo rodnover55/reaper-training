@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.29)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Наименьшая версия macOS")
 
 project(reaper-training
-  VERSION 0.6.0
+  VERSION 0.7.0
   DESCRIPTION "REAPER extension: timing trainer"
   LANGUAGES CXX C)
 
@@ -186,6 +186,7 @@ add_library(reaper_training MODULE
   src/audio_input.cpp
   src/debug_actions.cpp
   src/journal.cpp
+  src/midi_inputs.cpp
   src/project_timeline.cpp
   src/settings.cpp
   src/trainer.cpp

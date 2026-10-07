@@ -20,6 +20,24 @@ namespace training::grid {
 double compensation(int inputLatency, int outputLatency, int manualInput, int manualOutput,
                     bool driverLatency, double sampleRate);
 
+/// Компенсация задержки для нот MIDI в реальных секундах — та, на которую
+/// хост сдвигает запись MIDI от позиции ноты в истории MIDI-входа (design.md
+/// D2 изменения add-midi-input). Задержка и ручная поправка входа в неё не
+/// входят.
+///
+/// @param blockSize размер блока звуковой карты, сэмплов.
+/// @param outputLatency задержка выхода из `GetInputOutputLatency`, сэмплов;
+///   ручная поправка выхода уже в ней.
+/// @param manualOutput ручная поправка выхода из настроек (`adjrecmanlat`),
+///   сэмплов.
+/// @param driverLatency включена ли галка «Use audio driver reported
+///   latency» (`adjreclat` ≠ 0).
+/// @param sampleRate частота дискретизации, Гц; больше нуля.
+/// @return (блок + выход) / частота при включённой галке, иначе (блок + ручная
+///   поправка выхода) / частота.
+double midiCompensation(int blockSize, int outputLatency, int manualOutput, bool driverLatency,
+                        double sampleRate);
+
 /// Время ноты на шкале проекта, с: `blockPosition + (offset / sampleRate −
 /// compensation) × rate`.
 ///

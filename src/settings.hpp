@@ -6,6 +6,8 @@
 #include "training/grid/hit_window.hpp"
 #include "training/grid/mode.hpp"
 
+#include <string>
+
 namespace training::reaper {
 
 /// Настройки тренажёра.
@@ -21,11 +23,20 @@ struct Settings {
   /// клика. Окно попадания лежит в шкале от −`scaleMs` до +`scaleMs`.
   double offsetMs = 0.0;
 
-  /// Входной канал звуковой карты, 0 — первый.
+  /// Входной канал звуковой карты, 0 — первый. Пока выбран вход MIDI, не
+  /// меняется: при возврате к звуку выбран тот же канал.
   int channel = 0;
 
   /// Порог тишины, dBFS: целое от −90 до −10.
   double silenceDb = -50.0;
+
+  /// Выбранный вход MIDI — имя устройства для сохранения (`MidiInput::key`);
+  /// пусто — выбран канал звуковой карты `channel`.
+  std::string midiInput{};
+
+  /// Номер устройства MIDI в REAPER, когда вход выбирали: различает два
+  /// устройства с одним именем. Без входа MIDI не используется.
+  int midiIndex = -1;
 
   /// Колонка номеров тактов слева от строк («Bar numbers»).
   bool showBarNumbers = true;
@@ -54,6 +65,10 @@ Settings loadSettings();
 /// Сохраняет настройки между запусками REAPER (`SetExtState` с `persist`),
 /// кроме скрытой границы шкалы `scaleMs`. Зовётся из главного потока.
 void saveSettings(const Settings &settings);
+
+/// Выбранный вход настроек `settings` для журнала: «channel 1» или «MIDI
+/// «KeyStep 37» #3».
+std::string inputText(const Settings &settings);
 
 /// Включена ли скрытая настройка `console_log` — ненулевое целое в разделе
 /// расширения `reaper-extstate.ini`. С ней расширение пишет в консоль REAPER
