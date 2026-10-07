@@ -1681,6 +1681,12 @@ INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam) {
     endDrag(dialog);
     return 1;
 
+  case WM_CAPTURECHANGED:
+    // Мышь отобрало другое окно: окно попадания, до которого дотянули,
+    // сохраняется сразу, а не на следующем движении мыши над окном.
+    endDrag(dialog);
+    return 0;
+
   case WM_SETCURSOR: {
     POINT at{};
     GetCursorPos(&at);
