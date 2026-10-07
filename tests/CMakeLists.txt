@@ -20,6 +20,7 @@ add_executable(training_tests
   grid_note_time_test.cpp
   grid_timeline_test.cpp
   journal_test.cpp
+  midi_device_remap_test.cpp
   # Журнал расширения от REAPER не зависит, и его замена файла проверяется
   # здесь же.
   ${CMAKE_SOURCE_DIR}/src/journal.cpp)

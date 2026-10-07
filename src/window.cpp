@@ -274,10 +274,14 @@ void fitDroppedWidth(HWND combo, const std::vector<std::string> &labels) {
 /// Заполняет список Input каналами звуковой карты, затем входами MIDI
 /// (`midiInputs`), выбирает в нём вход настроек и пишет пункты в журнал.
 /// Выбранный вход MIDI, которого сейчас нет, оставляет список без выбора, как
-/// пропавший канал.
+/// пропавший канал. Перед этим тренажёр перечитывает сведения о выбранном
+/// входе для строки состояния (`Trainer::refreshInputs`).
 void fillInputs(HWND dialog) {
   const bool showing = showingSettings;
   showingSettings = true;
+  // Звуковую карту могли сменить, а устройство MIDI — подключить, отключить
+  // или включить в настройках REAPER.
+  trainer().refreshInputs();
   const Settings &settings = trainer().settings();
   const std::optional<MidiInput> &chosen = trainer().midiInput();
 
@@ -446,8 +450,8 @@ void onCommand(HWND dialog, int control, int notification) {
   if (notification == BN_CLICKED && onCalibrationButton(control))
     return;
   if (notification == BN_CLICKED && control == IDC_INPUT_REFRESH) {
-    // Устройство MIDI могли подключить или включить в настройках REAPER.
-    trainer().lookupMidiInput();
+    // Устройство MIDI могли подключить или включить в настройках REAPER:
+    // fillInputs перечитывает и вход, и сведения строки состояния.
     fillInputs(dialog);
     return;
   }
@@ -464,6 +468,10 @@ void onCommand(HWND dialog, int control, int notification) {
   journalSettings("settings");
   if (control == IDC_OFFSET || control == IDC_TOLERANCE)
     showHitWindow(dialog, control);
+  // Развёрнутые настройки — показ настроек: устройство MIDI могли подключить,
+  // отключить или включить в настройках REAPER, пока они были свёрнуты.
+  if (control == IDC_SETTINGS_TOGGLE && !settings->panelCollapsed)
+    fillInputs(dialog);
   refreshWindow();
   if (control == IDC_SETTINGS_TOGGLE)
     journal("panel {}: rows from {} px", settings->panelCollapsed ? "collapsed" : "expanded",
@@ -1244,8 +1252,10 @@ private:
 
   void noSound() {
     say("No sound from the audio device", kBad);
-    hint("Nothing came from the audio device for 2 s. Check the audio device in Preferences → "
-         "Audio → Device, then calibrate again." +
+    hint("Nothing came from the audio device for 2 s. REAPER closes the audio device when "
+         "playback is stopped and REAPER is not the active window, if \"Close audio device "
+         "when stopped and application is inactive\" is on in Preferences → Audio. Check the "
+         "audio device in Preferences → Audio → Device, then calibrate again." +
              stays(),
          kNeutral);
   }
@@ -1968,10 +1978,11 @@ bool snapshot(const char *path, int width, int height, const Paint &paint) {
   // Кадр контекста — точки по строкам, 0xAARRGGBB; в PPM — R, G, B.
   const auto *pixels = static_cast<const unsigned int *>(SWELL_GetCtxFrameBuffer(context));
   std::FILE *file = pixels ? std::fopen(path, "wb") : nullptr;
+  bool written = file != nullptr;
   if (file) {
-    std::fprintf(file, "P6\n%d %d\n255\n", width, height);
+    written = std::fprintf(file, "P6\n%d %d\n255\n", width, height) > 0;
     std::vector<unsigned char> line(static_cast<std::size_t>(width) * 3);
-    for (int y = 0; y < height; ++y) {
+    for (int y = 0; y < height && written; ++y) {
       for (int x = 0; x < width; ++x) {
         const unsigned int pixel =
             pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
@@ -1981,12 +1992,13 @@ bool snapshot(const char *path, int width, int height, const Paint &paint) {
         line[at + 1] = static_cast<unsigned char>(pixel >> 8U);
         line[at + 2] = static_cast<unsigned char>(pixel);
       }
-      std::fwrite(line.data(), 1, line.size(), file);
+      written = std::fwrite(line.data(), 1, line.size(), file) == line.size();
     }
-    std::fclose(file);
+    // Ошибка записи из буфера всплывает только при закрытии.
+    written = std::fclose(file) == 0 && written;
   }
   SWELL_DeleteGfxContext(context);
-  return file != nullptr;
+  return written;
 }
 
 } // namespace

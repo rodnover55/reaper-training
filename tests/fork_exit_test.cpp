@@ -53,6 +53,12 @@ int fakeMidiGetRecentInputEvent(int /*idx*/, char * /*buf*/, int * /*bufSize*/, 
   return 0;
 }
 
+/// У звуковой карты есть вход с этим номером.
+const char *fakeGetInputChannelName(int /*channel*/) { return "Input 1"; }
+
+/// Скорость проекта — обычная.
+double fakeMasterGetPlayRate(ReaProject * /*project*/) { return 1.0; }
+
 /// Заглушка для остальных функций API: расширение их только запоминает, а
 /// зовёт из звукового потока, таймера и окна, которых в тесте нет. Вызов
 /// значит, что тесту не хватает заглушки, — он падает.
@@ -73,6 +79,10 @@ void *fakeGetFunc(const char *name) {
     return reinterpret_cast<void *>(fakeAudioRegHardwareHook);
   if (function == "MIDI_GetRecentInputEvent")
     return reinterpret_cast<void *>(fakeMidiGetRecentInputEvent);
+  if (function == "Master_GetPlayRate")
+    return reinterpret_cast<void *>(fakeMasterGetPlayRate);
+  if (function == "GetInputChannelName")
+    return reinterpret_cast<void *>(fakeGetInputChannelName);
   return reinterpret_cast<void *>(fakeUncalled);
 }
 

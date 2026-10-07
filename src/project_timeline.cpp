@@ -66,8 +66,19 @@ grid::Bar ProjectTimeline::barOf(std::int64_t beat) const {
       TimeMap2_timeToBeats(nullptr, timeAt(static_cast<double>(beat) + 0.5), &measure,
                            &numerator, nullptr, &denominator);
 
+  // До начала проекта REAPER отдаёт удар в такте отрицательным — от начала
+  // ближайшего следующего такта: время −0.25 с при 120 ударах в минуту — такт
+  // 0, удар −0.5 (findings.md изменения remove-poll-timer, R5). Такт с таким
+  // ударом начинается на целое число тактов раньше.
+  double inBar = inMeasure;
+  if (inBar < 0.0 && numerator > 0) {
+    const double before = std::ceil(-inBar / static_cast<double>(numerator));
+    inBar += before * static_cast<double>(numerator);
+    measure -= static_cast<int>(before);
+  }
+
   grid::Bar bar{.index = measure,
-                .firstBeat = beat - static_cast<std::int64_t>(std::floor(inMeasure)),
+                .firstBeat = beat - static_cast<std::int64_t>(std::floor(inBar)),
                 .meter = {.beats = numerator, .unit = denominator},
                 .changes = {}};
 

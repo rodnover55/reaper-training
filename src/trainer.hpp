@@ -127,10 +127,26 @@ public:
   /// звуковой карты или устройства с таким именем сейчас нет.
   const std::optional<MidiInput> &midiInput() const { return midi_; }
 
-  /// Ищет выбранный вход MIDI по имени среди входов, которые есть сейчас
-  /// (`findMidiInput`), и пишет в журнал, если найденное поменялось. Без
-  /// вызова найденный вход обновляется раз в секунду, на тике `poll`.
-  void lookupMidiInput();
+  /// Перечитывает у REAPER сведения о выбранном входе для строки состояния:
+  /// имя канала звуковой карты, есть ли выбранный вход MIDI — ищет его по имени
+  /// (`findMidiInput`) и пишет в журнал, если найденное поменялось, — и включён
+  /// ли он в настройках REAPER для записи на дорожки. Если вход MIDI найден под
+  /// другим номером устройства, чем в настройках, ставит в настройки найденный
+  /// номер и сохраняет их (`saveSettings`). На кадре эти сведения не
+  /// проверяются: тренажёр перечитывает их сам при создании, смене входа и
+  /// смене номеров устройств, а окно зовёт при показе настроек и по кнопке
+  /// Refresh. Зовётся из главного потока.
+  void refreshInputs();
+
+  /// Следует за сменой номеров устройств MIDI, о которой сообщил REAPER:
+  /// устройство с номером `from` получило номер `to`. Если это выбранный вход
+  /// MIDI, тренажёр берёт его ноты под новым номером и сохраняет номер в
+  /// настройках (`saveSettings`). Затем перечитывает сведения о выбранном входе
+  /// для строки состояния (`refreshInputs`): со сменой номеров устройство могло
+  /// появиться или пропасть. Зовётся из главного потока.
+  ///
+  /// @param output смена касается выходов MIDI: ничего не меняется.
+  void onMidiDeviceRemap(bool output, int from, int to);
 
   AudioInput &input() { return input_; }
 
@@ -138,9 +154,11 @@ public:
   /// изменений. Звук входа при остановленном транспорте идёт в калибровку, а
   /// удачный итог сразу ставит порог тишины (`setSettings`). После итога звук
   /// слушается дальше: удар по струнам через 5 с кончает сессию
-  /// (`onset::Calibration::soundAfterResult`). Пока сессия слушает вход,
-  /// закрытую звуковую карту она открывает (`Audio_Init`) и после себя не
-  /// закрывает.
+  /// (`onset::Calibration::soundAfterResult`). Закрытую звуковую карту
+  /// калибровка открывает (`Audio_Init`) один раз, при запуске, и после себя не
+  /// закрывает. Если карта не открылась или REAPER закрыл её посреди
+  /// калибровки, звука нет, и через 2 с сессия показывает итог «нет звука»
+  /// (`CalibrationSession::noSound`).
   ///
   /// @return ложь, если транспорт воспроизводит или записывает, выбран вход
   ///   MIDI или выбранного канала нет у звуковой карты: калибровка не
@@ -174,6 +192,28 @@ public:
     return session_ && (calibrationFinished_ || session_->noSound);
   }
 
+  /// Отмечает перемену транспорта, о которой сообщил REAPER. Запуск
+  /// воспроизведения или записи и продолжение после паузы начинают новый
+  /// запуск: строки тактов очищаются, компенсация снимается заново, атаки из
+  /// блоков звука до вызова в строки не попадают; запуск прерывает
+  /// калибровку. Остановка и пауза кончают запуск, строки остаются. Вызов с
+  /// тем же состоянием ничего не делает. Остановка и запуск подряд — два
+  /// вызова — начинают новый запуск. Зовётся из главного потока, когда
+  /// транспорт меняется.
+  ///
+  /// @param play идёт воспроизведение.
+  /// @param pause транспорт на паузе: запуска нет, что бы ни говорили `play`
+  ///   и `rec`.
+  /// @param rec идёт запись.
+  void onPlayState(bool play, bool pause, bool rec);
+
+  /// Ставит скорость воспроизведения проекта, о которой сообщил REAPER. Она
+  /// действует на ноты, забранные после вызова, и на строку состояния.
+  /// Зовётся из главного потока.
+  ///
+  /// @param rate скорость, больше нуля; 1 — обычная.
+  void onPlayRate(double rate);
+
   /// Сообщает строкам тактов слышимую позицию воспроизведения, забирает новые
   /// атаки или ноты MIDI, ставит их в строки и обновляет состояние. Зовётся
   /// таймером главного потока.
@@ -184,9 +224,10 @@ public:
 
 private:
   void apply(const Settings &settings);
+  void lookupMidiInput();
   void start();
   void takeCompensation();
-  Status currentStatus(bool playing, int channels);
+  Status currentStatus(bool playing);
   void skipMidiHistory();
   void readMidiHistory();
   std::optional<double> movedAgo();
@@ -196,7 +237,6 @@ private:
   double loopWrapped(double time, double blockPosition) const;
   void stopCalibrationOnPlayback(bool playing);
   bool pollCalibration();
-  void openAudioDevice(std::chrono::steady_clock::time_point now);
   void feedCalibration(std::span<const float> samples, double sampleRate, bool gap);
   void finishCalibration();
 
@@ -240,16 +280,18 @@ private:
   // Позиция обработки при запуске транспорта: пока она не сдвинулась, идёт
   // count-in, и нот MIDI нет (design.md D3).
   double startPosition_ = 0.0;
+  // Момент запуска транспорта, секунды монотонных часов: атаки из блоков,
+  // полученных хуком раньше, — прошлого запуска.
+  double startMonotonic_ = 0.0;
   // Когда от хука или звука без гитары пришёл последний звук калибровки.
   std::chrono::steady_clock::time_point lastSound_;
-  // Когда калибровка последний раз пробовала открыть закрытую звуковую карту.
-  std::chrono::steady_clock::time_point lastOpenAttempt_;
-  // Когда последний раз искали вход MIDI по имени.
-  std::chrono::steady_clock::time_point lastMidiLookup_;
   std::vector<HookOnset> lastRun_;
   std::vector<double> lastMidiRun_;
   // События истории MIDI-входа, прочитанные на тике, от новых к старым.
   std::vector<MidiEvent> midiEvents_;
+  // Имя выбранного канала звуковой карты по refreshInputs; пусто — канала нет
+  // или выбран вход MIDI.
+  std::string channelName_;
   std::optional<MidiInput> midi_;
   onset::DeadTime deadTime_;
   // Сэмплы куска калибровки.
@@ -259,14 +301,14 @@ private:
   Status status_;
   grid::Bars bars_;
   std::optional<CalibrationSession> session_;
-  std::uint32_t minRun_ = 0;
-  std::uint32_t latestRun_ = 0;
   // Номер последнего прочитанного события истории MIDI-входа.
   int midiSequence_ = 0;
   // Проход петли последней ноты MIDI: с новым проходом мёртвое время
   // кончается.
   int midiLoop_ = 0;
   bool wasPlaying_ = false;
+  // Включён ли выбранный вход MIDI в настройках REAPER, по refreshInputs.
+  bool midiEnabled_ = false;
   // Сдвинулась ли позиция с запуска транспорта.
   bool positionMoved_ = false;
   // Подведён ли итог калибровки; прервал ли её запуск транспорта.

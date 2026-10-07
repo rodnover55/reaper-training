@@ -43,6 +43,16 @@ std::vector<MidiInput> midiInputs();
 /// настроек REAPER видна сразу. Зовётся из главного потока.
 bool midiInputEnabled(int device);
 
+/// Номер входа MIDI `device` после того, как REAPER сменил номера устройств
+/// (`CSURF_EXT_MIDI_DEVICE_REMAP`): устройство с номером `from` получило номер
+/// `to`.
+///
+/// @param output смена касается выходов MIDI: номера входов прежние.
+/// @return `to`, если `device` — вход с номером `from`; иначе `device`.
+constexpr int remappedDevice(int device, bool output, int from, int to) {
+  return !output && device == from ? to : device;
+}
+
 /// Находит в `inputs` вход по имени для сохранения `key`
 /// (`MidiInput::key`).
 ///

@@ -88,17 +88,20 @@ void AudioInput::onBlock(int length, double sampleRate, audio_hook_register_t *r
   const bool playing = (state & kPaused) == 0 && (state & (kPlaying | kRecording)) != 0;
   header.calibration = !playing && calibrating_.load(std::memory_order_relaxed);
   const int channel = channel_.load(std::memory_order_relaxed);
-  const int channels = inputChannels_.load(std::memory_order_relaxed);
 
-  if ((playing || header.calibration) && channel >= 0 && channel < channels && length > 0 &&
+  // Числа входов хук не знает: `input_nch` REAPER не заполняет, а для канала,
+  // которого нет у карты, GetBuffer отдаёт пустой указатель (findings.md, R4).
+  const ReaSample *input = channel >= 0 ? registration->GetBuffer(false, channel) : nullptr;
+  if (channel >= 0)
+    checkedChannel_.store(channel * 2 + (input ? 1 : 0), std::memory_order_relaxed);
+
+  if ((playing || header.calibration) && input && length > 0 &&
       static_cast<std::size_t>(length) <= kMaxBlock) {
-    if (const ReaSample *input = registration->GetBuffer(false, channel)) {
-      const auto count = static_cast<std::size_t>(length);
-      for (std::size_t i = 0; i < count; ++i)
-        scratch_[i] = static_cast<float>(input[i]);
+    const auto count = static_cast<std::size_t>(length);
+    for (std::size_t i = 0; i < count; ++i)
+      scratch_[i] = static_cast<float>(input[i]);
 
-      header.hasSamples = samples_->push(std::span<const float>(scratch_.data(), count));
-    }
+    header.hasSamples = samples_->push(std::span<const float>(scratch_.data(), count));
   }
 
   (void)headers_.push(header);

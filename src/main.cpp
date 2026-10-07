@@ -66,6 +66,7 @@
 
 #include "actions.hpp"
 #include "build_stamp.hpp"
+#include "control_surface.hpp"
 #include "debug_actions.hpp"
 #include "journal.hpp"
 #include "settings.hpp"
@@ -114,6 +115,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE instance, reaper_plugin_info_t 
     training::reaper::unregisterDebugActions();
     training::reaper::unregisterActions();
     training::reaper::closeWindow();
+    training::reaper::unregisterSurface();
     training::reaper::shutdownTrainer();
     training::reaper::journal("unload");
     training::reaper::closeJournal();
@@ -137,6 +139,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE instance, reaper_plugin_info_t 
 
   training::reaper::setResourceModule(instance);
   training::reaper::initTrainer(rec);
+  training::reaper::registerSurface(rec);
   training::reaper::registerActions(rec);
   training::reaper::registerDebugActions(rec);
 

@@ -1,8 +1,6 @@
 #define REAPERAPI_MINIMAL
-#define REAPERAPI_WANT_GetNumAudioInputs
 #define REAPERAPI_WANT_GetInputChannelName
 #define REAPERAPI_WANT_GetInputOutputLatency
-#define REAPERAPI_WANT_GetPlayStateEx
 #define REAPERAPI_WANT_GetPlayPositionEx
 #define REAPERAPI_WANT_GetPlayPosition2Ex
 #define REAPERAPI_WANT_GetAudioDeviceInfo
@@ -35,11 +33,6 @@
 
 namespace training::reaper {
 namespace {
-
-// Биты состояния транспорта (`GetPlayStateEx`).
-constexpr int kPlaying = 1;
-constexpr int kPaused = 2;
-constexpr int kRecording = 4;
 
 // Обычный указатель, а не unique_ptr: деструктор статического объекта
 // вызывает любой exit() в процессе, в том числе в копии REAPER, которую тот
@@ -76,19 +69,12 @@ int deviceInfo(const char *attribute) {
   return value;
 }
 
-/// Через сколько тренажёр снова ищет выбранный вход MIDI по имени.
-constexpr auto kMidiLookupInterval = std::chrono::seconds(1);
-
 /// Бит устройства истории MIDI-входа: вход включён только для управления
 /// (`MIDI_GetRecentInputEvent`).
 constexpr int kControlOnly = 0x10000;
 
 /// Сколько секунд без звука от хука обрывают калибровку.
 constexpr double kNoSoundSeconds = 2.0;
-
-/// Не чаще чем через столько калибровка пробует открыть закрытую звуковую
-/// карту.
-constexpr auto kOpenDeviceInterval = std::chrono::seconds(1);
 
 const char *verdictName(onset::Verdict verdict) {
   switch (verdict) {
@@ -109,14 +95,21 @@ void onMainTimer() {
     refreshWindow();
 }
 
+/// Секунды монотонных часов — те же, что ставит атакам аудиохук
+/// (`HookOnset::monotonic`).
+double monotonicNow() {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
 } // namespace
 
-Trainer::Trainer() : settings_(loadSettings()) {
+Trainer::Trainer() : rate_(Master_GetPlayRate(nullptr)), settings_(loadSettings()) {
   // Пока выбран вход MIDI, хук сэмплов не берёт.
   input_.setChannel(settings_.midiInput.empty() ? settings_.channel : -1);
   input_.setSilenceDb(settings_.silenceDb);
   bars_.setMode(settings_.mode);
-  lookupMidiInput();
+  refreshInputs();
   skipMidiHistory();
 }
 
@@ -146,19 +139,33 @@ void Trainer::apply(const Settings &settings) {
     // не попадают.
     deadTime_.reset();
     skipMidiHistory();
-    lookupMidiInput();
+    refreshInputs();
     // Состояние — сразу, а не на следующем тике: калибровка, начатая до него,
     // берёт имя и наличие нового входа.
-    status_ = currentStatus(wasPlaying_, GetNumAudioInputs());
+    status_ = currentStatus(wasPlaying_);
     journal("input: {}", inputText(settings_));
   }
 }
 
+void Trainer::refreshInputs() {
+  lookupMidiInput();
+  const char *name =
+      settings_.midiInput.empty() ? GetInputChannelName(settings_.channel) : nullptr;
+  channelName_ = name ? name : "";
+  midiEnabled_ = midi_ && midiInputEnabled(midi_->device);
+}
+
 void Trainer::lookupMidiInput() {
-  lastMidiLookup_ = std::chrono::steady_clock::now();
   std::optional<MidiInput> found;
   if (!settings_.midiInput.empty())
     found = findMidiInput(midiInputs(), settings_.midiInput, settings_.midiIndex);
+
+  // По номеру в настройках смена номеров устройств узнаёт выбранный вход
+  // (onMidiDeviceRemap, design.md D6).
+  if (found && found->device != settings_.midiIndex) {
+    settings_.midiIndex = found->device;
+    saveSettings(settings_);
+  }
 
   const bool same = found.has_value() == midi_.has_value() &&
                     (!found || (found->device == midi_->device && found->name == midi_->name));
@@ -171,6 +178,23 @@ void Trainer::lookupMidiInput() {
             midi_->name);
   else
     journal("midi input «{}»: not found", settings_.midiInput);
+}
+
+void Trainer::onMidiDeviceRemap(bool output, int from, int to) {
+  if (output)
+    return;
+
+  if (midi_)
+    midi_->device = remappedDevice(midi_->device, output, from, to);
+  const int index = remappedDevice(settings_.midiIndex, output, from, to);
+  if (index != settings_.midiIndex) {
+    journal("midi input «{}»: device {} -> {}", settings_.midiInput, from, to);
+    settings_.midiIndex = index;
+    saveSettings(settings_);
+  }
+
+  // Со сменой номеров устройство могло появиться или пропасть (design.md D7).
+  refreshInputs();
 }
 
 void Trainer::skipMidiHistory() {
@@ -216,20 +240,21 @@ void Trainer::start() {
   bars_.clear();
   lastRun_.clear();
   lastMidiRun_.clear();
-  minRun_ = latestRun_ + 1;
+  startMonotonic_ = monotonicNow();
   takeCompensation();
 
-  // Ноты MIDI и мёртвое время прошлого запуска в этот не попадают; count-in —
-  // пока позиция стоит (design.md D1, D3, D4 изменения add-midi-input).
+  // Мёртвое время прошлого запуска в этот не попадает. История MIDI-входа не
+  // пропускается: ноты до запуска отбрасываются и так — пришедшие при
+  // остановке уже прочитаны или идут с pp = −1. Позиция начала берётся в
+  // момент запуска, до того как её сдвинул звук: count-in — пока позиция стоит
+  // (design.md D5; design.md D3 изменения add-midi-input).
   deadTime_.reset();
-  skipMidiHistory();
   startPosition_ = GetPlayPosition2Ex(nullptr);
   positionMoved_ = false;
 
   journal("start: compensation {:.3f} ms, MIDI compensation {:.3f} ms, rate {}, position "
           "{:.6f}",
-          compensation_ * 1000.0, midiCompensation_ * 1000.0, Master_GetPlayRate(nullptr),
-          startPosition_);
+          compensation_ * 1000.0, midiCompensation_ * 1000.0, rate_, startPosition_);
 }
 
 double Trainer::loopWrapped(double time, double blockPosition) const {
@@ -289,28 +314,30 @@ void Trainer::addTestNote(double time) {
   refreshWindow();
 }
 
-bool Trainer::poll() {
-  const int channels = GetNumAudioInputs();
-  input_.setInputChannels(channels);
+void Trainer::onPlayState(bool play, bool pause, bool rec) {
+  const bool playing = !pause && (play || rec);
+  if (playing == wasPlaying_)
+    return;
 
-  const int state = GetPlayStateEx(nullptr);
-  const bool playing = (state & kPaused) == 0 && (state & (kPlaying | kRecording)) != 0;
-  // Пока транспорт стоит, строка состояния показывает компенсацию, которая
-  // будет действовать при запуске.
-  if (playing && !wasPlaying_) {
+  if (playing)
     start();
-  } else if (!playing) {
-    takeCompensation();
-    if (wasPlaying_)
-      bars_.stop();
-  }
+  else
+    bars_.stop();
   wasPlaying_ = playing;
-
   stopCalibrationOnPlayback(playing);
+}
 
-  rate_ = Master_GetPlayRate(nullptr);
+void Trainer::onPlayRate(double rate) { rate_ = rate; }
 
-  const Status status = currentStatus(playing, channels);
+bool Trainer::poll() {
+  // Транспорт и скорость сообщает REAPER (onPlayState, onPlayRate). Пока
+  // транспорт стоит, строка состояния показывает компенсацию, которая будет
+  // действовать при запуске.
+  const bool playing = wasPlaying_;
+  if (!playing)
+    takeCompensation();
+
+  const Status status = currentStatus(playing);
   bool changed = status.measuring != status_.measuring ||
                  status.inputName != status_.inputName || status.midi != status_.midi ||
                  status.compensationMs != status_.compensationMs ||
@@ -329,8 +356,7 @@ bool Trainer::poll() {
   }
 
   while (const auto hit = input_.popOnset()) {
-    latestRun_ = std::max(latestRun_, hit->run);
-    if (!playing || hit->run < minRun_ || sampleRate_ <= 0.0)
+    if (!playing || hit->monotonic < startMonotonic_ || sampleRate_ <= 0.0)
       continue;
 
     const double time = loopWrapped(
@@ -343,10 +369,7 @@ bool Trainer::poll() {
     // Задержка показа (design.md D10): от блока атаки до этого тика плюс
     // задержка ввода, которую звук прошёл до хука. Окно перерисуется на этом
     // же тике.
-    const double age =
-        std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
-            .count() -
-        hit->monotonic + inputLatency_;
+    const double age = monotonicNow() - hit->monotonic + inputLatency_;
     journal("note t={:.6f} level={:.1f} dB, shown after {:.1f} ms", time, hit->levelDb,
             age * 1000.0);
   }
@@ -357,7 +380,7 @@ bool Trainer::poll() {
   return changed;
 }
 
-Status Trainer::currentStatus(bool playing, int channels) {
+Status Trainer::currentStatus(bool playing) {
   Status status;
   status.rate = rate_;
   status.calibrationCancelled = calibrationCancelled_;
@@ -366,22 +389,22 @@ Status Trainer::currentStatus(bool playing, int channels) {
 
   if (!status.midi) {
     status.compensationMs = compensation_ * 1000.0;
-    if (settings_.channel < channels)
-      if (const char *name = GetInputChannelName(settings_.channel))
-        status.inputName = name;
+    // Канала нет, если хук не получил его буфер или у REAPER не было его имени
+    // (refreshInputs): имени нет у канала, которого нет у карты.
+    const std::optional<bool> heard = input_.channelPresent(settings_.channel);
+    if (!heard || *heard)
+      status.inputName = channelName_;
     status.measuring = status.inputName.empty() ? Measuring::NoInput : present;
     return status;
   }
 
-  if (std::chrono::steady_clock::now() - lastMidiLookup_ >= kMidiLookupInterval)
-    lookupMidiInput();
   status.compensationMs = midiCompensation_ * 1000.0;
   if (!midi_) {
     status.measuring = Measuring::NoInput;
     return status;
   }
   status.inputName = midi_->name;
-  status.measuring = midiInputEnabled(midi_->device) ? present : Measuring::NotEnabled;
+  status.measuring = midiEnabled_ ? present : Measuring::NotEnabled;
   return status;
 }
 
@@ -435,8 +458,10 @@ bool Trainer::pollMidi(bool playing) {
   const int device = midi_->device;
 
   // Count-in: позиция стоит у начала записи, и места нот MIDI на шкале нет
-  // (design.md D3 изменения add-midi-input). Нота, пришедшая раньше, чем
-  // позиция сдвинулась, отбрасывается.
+  // (design.md D3 изменения add-midi-input). Нота, пришедшая не позже, чем
+  // позиция сдвинулась, отбрасывается: и при count-in, и в первом блоке после
+  // запуска, где REAPER ставит ноте позицию остановленного транспорта
+  // (findings.md, R5).
   const std::optional<double> moved = movedAgo();
   bool added = false;
   for (const MidiEvent &event : std::views::reverse(midiEvents_)) {
@@ -453,7 +478,7 @@ bool Trainer::pollMidi(bool playing) {
     // окно перерисуется на этом же тике.
     const double age =
         midiSampleRate_ > 0.0 ? -static_cast<double>(event.timestamp) / midiSampleRate_ : 0.0;
-    if (!moved || age > *moved) {
+    if (!moved || age >= *moved) {
       journal("midi note dropped by count-in: pp={:.6f} note={} channel={} velocity={}, "
               "arrived {:.1f} ms ago",
               event.position, note, channel, velocity, age * 1000.0);
@@ -513,10 +538,18 @@ bool Trainer::startCalibration() {
   session.previousSilenceDb = settings_.silenceDb;
   session.channelName = status_.inputName;
   lastSound_ = std::chrono::steady_clock::now();
-  lastOpenAttempt_ = {};
   calibrationFinished_ = false;
   calibrationCancelled_ = false;
   input_.setCalibrating(!testSound_);
+
+  // REAPER закрывает звуковую карту при остановке, если так настроено; без
+  // неё хук не вызывается. Калибровка открывает её один раз: если REAPER
+  // закроет карту снова, звука не будет, и калибровка оборвётся «нет звука»
+  // (design.md D4).
+  if (!testSound_ && Audio_IsRunning() == 0) {
+    Audio_Init();
+    journal("calibration: audio device was closed, opened: {}", Audio_IsRunning() != 0);
+  }
   journal("calibration: started on input {} ({}), silence {} dBFS", settings_.channel + 1,
           session.channelName, settings_.silenceDb);
   return true;
@@ -570,9 +603,6 @@ bool Trainer::pollCalibration() {
   const auto now = std::chrono::steady_clock::now();
   bool heard = false;
 
-  if (!testSound_ && !session.noSound)
-    openAudioDevice(now);
-
   if (testSound_) {
     TestSound &sound = *testSound_;
     // Звук без гитары идёт вместо входа: куски входа выбрасываются.
@@ -621,17 +651,6 @@ bool Trainer::pollCalibration() {
     return true;
   }
   return heard;
-}
-
-void Trainer::openAudioDevice(std::chrono::steady_clock::time_point now) {
-  // REAPER закрывает звуковую карту при остановке, если так настроено; без
-  // неё хук не вызывается, и калибровке нечего слушать.
-  if (Audio_IsRunning() != 0 || now - lastOpenAttempt_ < kOpenDeviceInterval)
-    return;
-
-  lastOpenAttempt_ = now;
-  Audio_Init();
-  journal("calibration: audio device was closed, opened: {}", Audio_IsRunning() != 0);
 }
 
 void Trainer::feedCalibration(std::span<const float> samples, double sampleRate, bool gap) {

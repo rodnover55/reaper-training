@@ -63,6 +63,13 @@ namespace {
 
 int (*hostRegister)(const char *name, void *infostruct) = nullptr;
 
+/// Целый ответ ReaScript из функции с переменным числом аргументов
+/// (`APIvararg_…`): REAPER ждёт его в самом указателе.
+void *scriptResult(std::intptr_t value) {
+  // NOLINTNEXTLINE(performance-no-int-to-ptr): так REAPER принимает целые ответы
+  return reinterpret_cast<void *>(value);
+}
+
 /// Пишет строку в журнал, а со скрытой настройкой `console_log` — ещё и в
 /// консоль REAPER.
 void say(const std::string &line) {
@@ -80,6 +87,8 @@ void *configVarAddress(const char *name, int &size) {
 
   const int offset = projectconfig_var_getoffs(name, &size);
   if (size > 0)
+    // Через возвращённый адрес переменную меняет вызывающий: указатель не const.
+    // NOLINTNEXTLINE(misc-const-correctness)
     if (void *address = projectconfig_var_addr(EnumProjects(-1, nullptr, 0), offset))
       return address;
 
@@ -214,8 +223,7 @@ int setInput(const char *name) {
 void *setInputVararg(void **args, int count) {
   if (count < 1)
     return nullptr;
-  return reinterpret_cast<void *>(
-      static_cast<std::intptr_t>(setInput(static_cast<const char *>(args[0]))));
+  return scriptResult(setInput(static_cast<const char *>(args[0])));
 }
 
 const char *const kSetInputDef =
@@ -267,15 +275,19 @@ void *addNoteVararg(void **args, int count) {
 ///   нет.
 int clickCheckboxFromScript(int control) {
   const std::optional<bool> checked = clickCheckbox(control);
-  journal("script click {}: {}", control, checked ? (*checked ? "on" : "off") : "no window");
-  return checked ? (*checked ? 1 : 0) : -1;
+  if (!checked) {
+    journal("script click {}: no window", control);
+    return -1;
+  }
+  journal("script click {}: {}", control, *checked ? "on" : "off");
+  return *checked ? 1 : 0;
 }
 
 void *clickCheckboxVararg(void **args, int count) {
   if (count < 1)
     return nullptr;
-  return reinterpret_cast<void *>(static_cast<std::intptr_t>(
-      clickCheckboxFromScript(static_cast<int>(reinterpret_cast<std::intptr_t>(args[0])))));
+  return scriptResult(
+      clickCheckboxFromScript(static_cast<int>(reinterpret_cast<std::intptr_t>(args[0]))));
 }
 
 const char *const kClickCheckboxDef =
@@ -297,7 +309,7 @@ void *snapshotVararg(void **args, int count) {
   const bool written = snapshot(static_cast<const char *>(args[0]),
                                 static_cast<int>(reinterpret_cast<std::intptr_t>(args[1])),
                                 static_cast<int>(reinterpret_cast<std::intptr_t>(args[2])));
-  return reinterpret_cast<void *>(static_cast<std::intptr_t>(written));
+  return scriptResult(written);
 }
 
 const char *const kSnapshotDef =
@@ -348,8 +360,7 @@ void *dragGaugeVararg(void **args, int count) {
   const auto number = [args](int index) {
     return args[index] ? *static_cast<const double *>(args[index]) : 0.0;
   };
-  return reinterpret_cast<void *>(
-      static_cast<std::intptr_t>(dragGaugeFromScript(number(0), number(1))));
+  return scriptResult(dragGaugeFromScript(number(0), number(1)));
 }
 
 const char *const kDragGaugeDef =
@@ -371,9 +382,9 @@ bool typeTextFromScript(int control, const char *text) {
 void *typeTextVararg(void **args, int count) {
   if (count < 2)
     return nullptr;
-  return reinterpret_cast<void *>(static_cast<std::intptr_t>(
+  return scriptResult(
       typeTextFromScript(static_cast<int>(reinterpret_cast<std::intptr_t>(args[0])),
-                         static_cast<const char *>(args[1]))));
+                         static_cast<const char *>(args[1])));
 }
 
 const char *const kTypeTextDef =
@@ -396,7 +407,7 @@ void *gaugeSnapshotVararg(void **args, int count) {
       gaugeSnapshot(static_cast<const char *>(args[0]),
                     static_cast<int>(reinterpret_cast<std::intptr_t>(args[1])),
                     static_cast<int>(reinterpret_cast<std::intptr_t>(args[2])));
-  return reinterpret_cast<void *>(static_cast<std::intptr_t>(written));
+  return scriptResult(written);
 }
 
 const char *const kGaugeSnapshotDef =
@@ -548,7 +559,7 @@ int calibrateFromItem() {
 }
 
 void *calibrateFromItemVararg(void ** /*args*/, int /*count*/) {
-  return reinterpret_cast<void *>(static_cast<std::intptr_t>(calibrateFromItem()));
+  return scriptResult(calibrateFromItem());
 }
 
 const char *const kCalibrateFromItemDef =
@@ -569,8 +580,8 @@ int clickButtonFromScript(int control) {
 void *clickButtonVararg(void **args, int count) {
   if (count < 1)
     return nullptr;
-  return reinterpret_cast<void *>(static_cast<std::intptr_t>(
-      clickButtonFromScript(static_cast<int>(reinterpret_cast<std::intptr_t>(args[0])))));
+  return scriptResult(
+      clickButtonFromScript(static_cast<int>(reinterpret_cast<std::intptr_t>(args[0]))));
 }
 
 const char *const kClickButtonDef =
@@ -776,13 +787,14 @@ struct DebugAction {
 };
 
 std::array<DebugAction, 2> actions{{
-    {{0, "REAPER_TRAINING_DEBUG_COMPARE_ITEM",
-      "reaper-training (debug): compare onsets of the last run with the selected item",
-      nullptr},
-     compareWithItem},
-    {{0, "REAPER_TRAINING_DEBUG_BARS",
-      "reaper-training (debug): print bars around the edit cursor", nullptr},
-     printBars},
+    {.registration = {0, "REAPER_TRAINING_DEBUG_COMPARE_ITEM",
+                      "reaper-training (debug): compare onsets of the last run with the "
+                      "selected item",
+                      nullptr},
+     .run = compareWithItem},
+    {.registration = {0, "REAPER_TRAINING_DEBUG_BARS",
+                      "reaper-training (debug): print bars around the edit cursor", nullptr},
+     .run = printBars},
 }};
 
 bool onAction(KbdSectionInfo * /*section*/, int command, int /*val*/, int /*val2*/,

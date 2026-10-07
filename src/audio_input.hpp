@@ -96,16 +96,18 @@ public:
   /// Выбранный входной канал, 0 — первый.
   int channel() const { return channel_.load(std::memory_order_relaxed); }
 
-  /// Сообщает хуку число входных каналов звуковой карты (`GetNumAudioInputs`):
-  /// сам хук его не узнаёт (findings.md, R1). Каналы с номером не меньше этого
-  /// числа сэмплов не дают. Действует со следующего блока.
-  void setInputChannels(int channels) {
-    inputChannels_.store(channels, std::memory_order_relaxed);
+  /// Есть ли у звуковой карты входной канал `channel` — по последнему блоку,
+  /// в котором хук его проверял. Хук проверяет выбранный канал (`setChannel`)
+  /// на каждом блоке, в том числе при остановленном транспорте.
+  ///
+  /// @return пусто — канал `channel` хук ещё не проверял: после выбора
+  ///   канала блоков не было или выбран другой канал.
+  std::optional<bool> channelPresent(int channel) const {
+    const int checked = checkedChannel_.load(std::memory_order_relaxed);
+    if (checked < 0 || checked / 2 != channel)
+      return std::nullopt;
+    return checked % 2 == 1;
   }
-
-  /// Число входных каналов, сообщённое `setInputChannels`; 0 — ещё не
-  /// сообщалось.
-  int inputChannels() const { return inputChannels_.load(std::memory_order_relaxed); }
 
   /// Меняет порог тишины поиска атак, dBFS (`onset::Settings::silenceDb`).
   /// Действует со следующего блока; поиск атак не начинается заново.
@@ -236,7 +238,11 @@ private:
 
   // Главный поток пишет, звуковой читает.
   std::atomic<int> channel_{0};
-  std::atomic<int> inputChannels_{0};
+
+  // Звуковой поток пишет, читают все: последний проверенный канал, умноженный
+  // на 2, плюс 1, если у карты он есть; −1 — не проверялся. Канал и ответ — в
+  // одном числе, чтобы читатель не взял ответ для другого канала.
+  std::atomic<int> checkedChannel_{-1};
 
   // Только рабочий поток.
   std::uint32_t run_ = 0;
