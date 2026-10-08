@@ -33,6 +33,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -119,13 +120,17 @@ trainer::Loop projectLoop() {
 
 } // namespace
 
-Trainer::Trainer()
+Trainer::Trainer() : Trainer(loadSettings()) {}
+
+Trainer::Trainer(const trainer::SettingsRead &read)
     : transport_(journalSink()), input_(transport_.onsetSearch()),
-      rate_(Master_GetPlayRate(nullptr)), settings_(loadSettings()),
-      calibrator_(journalSink()) {
+      rate_(Master_GetPlayRate(nullptr)), settings_(read.settings),
+      fileNotice_(kSettingsFile, read.rejected), calibrator_(journalSink()) {
+  for (const std::string &line : read.rejected)
+    journal("{}: {}", kSettingsFile, line);
   input_.setChannel(trainer::audioChannel(settings_));
-  input_.setSilenceDb(settings_.silenceDb);
-  transport_.setMode(settings_.mode);
+  input_.setSilenceDb(settings_.silenceDb());
+  transport_.setMode(settings_.mode());
   refreshInputs();
   skipMidiHistory();
 }
@@ -138,18 +143,17 @@ void Trainer::setSettings(const Settings &settings) {
 void Trainer::previewSettings(const Settings &settings) { apply(settings); }
 
 void Trainer::apply(const Settings &settings) {
-  const Settings next = clamped(settings);
-  const bool inputChanged = trainer::inputChanged(settings_, next);
+  const bool inputChanged = trainer::inputChanged(settings_, settings);
   if (inputChanged) {
     calibrator_.onInputChange();
     transport_.midiNotes().onInputChange();
   }
 
-  settings_ = next;
+  settings_ = settings;
   input_.setChannel(trainer::audioChannel(settings_));
-  input_.setSilenceDb(settings_.silenceDb);
+  input_.setSilenceDb(settings_.silenceDb());
   updateAudioMode();
-  transport_.setMode(settings_.mode);
+  transport_.setMode(settings_.mode());
 
   if (inputChanged) {
     // Ноты, пришедшие до смены, в новый вход не попадают.
@@ -164,7 +168,7 @@ void Trainer::apply(const Settings &settings) {
 
 void Trainer::refreshInputs() {
   lookupMidiInput();
-  const char *name = GetInputChannelName(settings_.channel);
+  const char *name = GetInputChannelName(settings_.channel());
   inputs_.channelName = name ? name : "";
   inputs_.midiName = midi_ ? std::optional(midi_->name) : std::nullopt;
   inputs_.midiEnabled = midi_ && midiInputEnabled(midi_->device);
@@ -172,27 +176,27 @@ void Trainer::refreshInputs() {
 
 void Trainer::lookupMidiInput() {
   std::optional<MidiInput> found;
-  if (!settings_.midiInput.empty())
-    found = findMidiInput(midiInputs(), settings_.midiInput, settings_.midiIndex);
+  if (!settings_.midiInput().empty())
+    found = findMidiInput(midiInputs(), settings_.midiInput(), settings_.midiIndex());
 
   // По номеру в настройках смена номеров устройств узнаёт выбранный вход
   // (onMidiDeviceRemap).
-  if (found && found->device != settings_.midiIndex) {
-    settings_.midiIndex = found->device;
+  if (found && found->device != settings_.midiIndex()) {
+    settings_.setMidiIndex(found->device);
     saveSettings(settings_);
   }
 
   const bool same = found.has_value() == midi_.has_value() &&
                     (!found || (found->device == midi_->device && found->name == midi_->name));
   midi_ = std::move(found);
-  if (same || settings_.midiInput.empty())
+  if (same || settings_.midiInput().empty())
     return;
 
   if (midi_)
-    journal("midi input «{}»: device {} «{}»", settings_.midiInput, midi_->device,
+    journal("midi input «{}»: device {} «{}»", settings_.midiInput(), midi_->device,
             midi_->name);
   else
-    journal("midi input «{}»: not found", settings_.midiInput);
+    journal("midi input «{}»: not found", settings_.midiInput());
 }
 
 void Trainer::onMidiDeviceRemap(bool output, int from, int to) {
@@ -201,10 +205,10 @@ void Trainer::onMidiDeviceRemap(bool output, int from, int to) {
 
   if (midi_)
     midi_->device = remappedDevice(midi_->device, output, from, to);
-  const int index = remappedDevice(settings_.midiIndex, output, from, to);
-  if (index != settings_.midiIndex) {
-    journal("midi input «{}»: device {} -> {}", settings_.midiInput, from, to);
-    settings_.midiIndex = index;
+  const int index = remappedDevice(settings_.midiIndex(), output, from, to);
+  if (index != settings_.midiIndex()) {
+    journal("midi input «{}»: device {} -> {}", settings_.midiInput(), from, to);
+    settings_.setMidiIndex(index);
     saveSettings(settings_);
   }
 
@@ -213,7 +217,7 @@ void Trainer::onMidiDeviceRemap(bool output, int from, int to) {
 }
 
 void Trainer::updateMeasurement() {
-  inputs_.channelPresent = input_.channelPresent(settings_.channel);
+  inputs_.channelPresent = input_.channelPresent(settings_.channel());
   measurement_ = trainer::measurementOf(settings_, inputs_, transport_.running(),
                                         transport_.compensation(), current_, rate_,
                                         calibrator_.cancelledByPlayback());
@@ -277,6 +281,7 @@ void Trainer::onPlayState(bool play, bool pause) {
     if (transport_.start(now, position, compensationNow(input_.sampleRate()))) {
       const trainer::Compensation &compensation = transport_.compensation();
       calibrator_.onStart();
+      fileNotice_.onTransportStart();
       journal("start: at {}, compensation {:.3f} ms, MIDI compensation {:.3f} ms, rate {}, "
               "position {:.6f}",
               trainer::momentText(now), compensation.audio * 1000.0,
@@ -341,7 +346,7 @@ bool Trainer::takeOnsets() {
     const double time =
         trainer::loopWrapped(grid::noteTime(hit->blockPosition, hit->offset, hit->sampleRate,
                                             compensation.audio, rate_),
-                             hit->blockPosition, projectLoop(), settings_.mode, timeline_);
+                             hit->blockPosition, projectLoop(), settings_.mode(), timeline_);
     transport_.addNote(time, rate_, settings_.window(), timeline_);
     taken = true;
 
@@ -365,7 +370,7 @@ bool Trainer::takeMidiNotes() {
   const std::vector<trainer::MidiNote> notes = transport_.midiNotes().take(midiEvents_, read);
   for (const trainer::MidiNote &note : notes) {
     const double time = trainer::loopWrapped(note.time, note.event.position, projectLoop(),
-                                             settings_.mode, timeline_);
+                                             settings_.mode(), timeline_);
     transport_.addNote(time, rate_, settings_.window(), timeline_);
     // Возраст ноты в реальном времени — и задержка показа: окно перерисуется
     // на этом же тике.
@@ -388,15 +393,17 @@ bool Trainer::pollCalibration() {
 }
 
 void Trainer::setSilence(double silenceDb) {
+  // Калибровка ставит порог из допустимых значений: сеттер его принимает.
   Settings settings = settings_;
-  settings.silenceDb = silenceDb;
+  settings.setSilenceDb(silenceDb);
   setSettings(settings);
+  fileNotice_.onSettingsEdit();
   showSettings();
 }
 
 bool Trainer::startCalibration() {
-  if (!calibrator_.start(transport_.running(), measurement_, settings_.channel,
-                         settings_.silenceDb, momentNow()))
+  if (!calibrator_.start(transport_.running(), measurement_, settings_.channel(),
+                         settings_.silenceDb(), momentNow()))
     return false;
 
   // Куски прошлой сессии, которые ещё в очереди, — не этой калибровки.

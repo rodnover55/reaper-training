@@ -14,7 +14,6 @@
 
 #include <fmt/format.h>
 
-#include <charconv>
 #include <cmath>
 #include <optional>
 #include <string>
@@ -27,27 +26,11 @@ namespace {
 constexpr const char *kSection = "reaper_training";
 
 /// Сохранённая строка настройки `key`; пусто — строки нет или она пуста.
-std::optional<std::string_view> textOf(const char *key) {
-  const char *text = GetExtState(kSection, key);
+std::optional<std::string> textOf(std::string_view key) {
+  const char *text = GetExtState(kSection, std::string(key).c_str());
   if (!text || !*text)
     return std::nullopt;
-  return std::string_view(text);
-}
-
-/// Целое из сохранённой строки; пусто — строки нет или в ней не целое.
-/// Дробные `from_chars` не берутся: на macOS 12 их нет в системной
-/// библиотеке C++.
-std::optional<int> numberOf(const char *key) {
-  const auto text = textOf(key);
-  if (!text)
-    return std::nullopt;
-
-  const std::string_view view = *text;
-  int value = 0;
-  const auto [end, error] = std::from_chars(view.data(), view.data() + view.size(), value);
-  if (error != std::errc() || end != view.data() + view.size())
-    return std::nullopt;
-  return value;
+  return std::string(text);
 }
 
 void store(const char *key, const std::string &value) {
@@ -57,53 +40,28 @@ void store(const char *key, const std::string &value) {
 } // namespace
 
 bool consoleLogEnabled() {
-  const auto value = numberOf("console_log");
+  const std::optional<std::string> text = textOf("console_log");
+  const std::optional<int> value = text ? trainer::integerOf(*text) : std::nullopt;
   return value && *value != 0;
 }
 
-Settings loadSettings() {
-  Settings settings;
-  if (const auto mode = numberOf("mode"))
-    settings.mode = static_cast<grid::Mode>(*mode);
-  if (const auto scale = numberOf("window_scale_ms"))
-    settings.scaleMs = *scale;
-  if (const auto text = textOf("tolerance_ms"))
-    if (const auto tolerance = grid::halfMsOf(*text))
-      settings.toleranceMs = *tolerance;
-  if (const auto text = textOf("offset_ms"))
-    if (const auto offset = grid::halfMsOf(*text))
-      settings.offsetMs = *offset;
-  if (const auto channel = numberOf("channel"))
-    settings.channel = *channel - 1;
-  if (const auto midi = textOf("midi_input"))
-    settings.midiInput = *midi;
-  if (const auto index = numberOf("midi_input_index"))
-    settings.midiIndex = *index;
-  if (const auto silence = numberOf("silence_db"))
-    settings.silenceDb = *silence;
-  if (const auto numbers = numberOf("show_bar_numbers"))
-    settings.showBarNumbers = *numbers != 0;
-  if (const auto stats = numberOf("show_bar_stats"))
-    settings.showBarStats = *stats != 0;
-  if (const auto collapsed = numberOf("settings_collapsed"))
-    settings.panelCollapsed = *collapsed != 0;
-  return clamped(settings);
-}
+trainer::SettingsRead loadSettings() { return trainer::readSettings(textOf); }
 
 void saveSettings(const Settings &settings) {
-  store("mode", fmt::format("{}", grid::divisions(settings.mode)));
+  store("mode", fmt::format("{}", grid::divisions(settings.mode())));
   // Граница шкалы — скрытая настройка: окно её не меняет и не пишет.
-  store("tolerance_ms", grid::halfMsText(settings.toleranceMs, grid::MsStyle::Plain));
-  store("offset_ms", grid::halfMsText(settings.offsetMs, grid::MsStyle::Plain));
-  store("channel", fmt::format("{}", settings.channel + 1));
+  store("tolerance_ms", grid::halfMsText(settings.toleranceMs(), grid::MsStyle::Plain));
+  store("offset_ms", grid::halfMsText(settings.offsetMs(), grid::MsStyle::Plain));
+  store("channel", fmt::format("{}", settings.channel() + 1));
   // Пустой ключ входа MIDI при загрузке выбирает канал `channel`.
-  store("midi_input", settings.midiInput);
-  store("midi_input_index",
-        settings.midiInput.empty() ? std::string() : fmt::format("{}", settings.midiIndex));
-  store("silence_db", fmt::format("{}", static_cast<int>(std::lround(settings.silenceDb))));
-  store("show_bar_numbers", settings.showBarNumbers ? "1" : "0");
-  store("show_bar_stats", settings.showBarStats ? "1" : "0");
-  store("settings_collapsed", settings.panelCollapsed ? "1" : "0");
+  store("midi_input", settings.midiInput());
+  store("midi_input_index", settings.midiInput().empty()
+                                ? std::string()
+                                : fmt::format("{}", settings.midiIndex()));
+  store("silence_db", fmt::format("{}", static_cast<int>(std::lround(settings.silenceDb()))));
+  store("show_bar_numbers", settings.showBarNumbers() ? "1" : "0");
+  store("show_bar_stats", settings.showBarStats() ? "1" : "0");
+  store("settings_collapsed", settings.panelCollapsed() ? "1" : "0");
 }
 
 } // namespace training::reaper

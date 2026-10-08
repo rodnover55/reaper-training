@@ -44,24 +44,9 @@ bool allDigits(std::string_view part) {
 
 } // namespace
 
-HitWindow fitted(HitWindow window, double scaleMs) {
-  const double tolerance = std::clamp(half(window.toleranceMs), kMinToleranceMs,
-                                      std::max(scaleMs, kMinToleranceMs));
-  const double limit = offsetLimit(tolerance, scaleMs);
-  return {.offsetMs = std::clamp(half(window.offsetMs), -limit, limit),
-          .toleranceMs = tolerance};
-}
-
-HitWindow withOffset(HitWindow window, double offsetMs, double scaleMs) {
-  const double limit = offsetLimit(window.toleranceMs, scaleMs);
-  window.offsetMs = std::clamp(half(offsetMs), -limit, limit);
-  return window;
-}
-
-HitWindow withTolerance(HitWindow window, double toleranceMs, double scaleMs) {
-  const double most = std::max(scaleMs - std::abs(window.offsetMs), kMinToleranceMs);
-  window.toleranceMs = std::clamp(half(toleranceMs), kMinToleranceMs, most);
-  return window;
+bool fits(const HitWindow &window, double scaleMs) {
+  return window.toleranceMs >= kMinToleranceMs && window.early() >= -scaleMs &&
+         window.late() <= scaleMs;
 }
 
 HitWindow withEarly(HitWindow window, double earlyMs, double scaleMs) {

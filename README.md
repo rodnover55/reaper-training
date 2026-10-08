@@ -67,14 +67,24 @@ python3 tools/live/live.py start                            # Xvfb и REAPER с 
 python3 tools/live/live.py run tools/live/window.lua        # открыть окно тренажёра
 python3 tools/live/live.py click IDC_CALIBRATE              # щелчок в контрол из src/views/forms.rc
 python3 tools/live/live.py click IDC_CHANNEL --item 1 --of 20  # второй из 20 пунктов списка Input
+python3 tools/live/live.py type IDC_SILENCE -40             # набрать -40 в поле вместо прежнего
+python3 tools/live/live.py key BackSpace                    # клавиши: BackSpace, Tab, End, ctrl+a
+python3 tools/live/live.py hover IDC_TOLERANCE              # навести мышь на контрол без щелчка
 python3 tools/live/live.py run tools/live/transport.lua play   # play, record, pause, stop или restart
 python3 tools/live/live.py run tools/live/midi.lua 60 100      # нота виртуальной MIDI-клавиатуры
 python3 tools/live/live.py shot window.png                  # снимок окна тренажёра
+python3 tools/live/live.py shot tip.png --untitled          # снимок подсказки у курсора
 python3 tools/live/live.py quit                             # выход без вопросов о сохранении
 ```
 
 `run` печатает, что вернул скрипт; строки после имени скрипта он видит в
-таблице `arg`. Пункты списка Input по порядку — в строке журнала
+таблице `arg`. Скрипт `run` передаёт REAPER командой `reaper -nonewinst`, и
+REAPER поднимает своё главное окно: поле окна тренажёра теряет фокус, и в нём
+встаёт действующее значение. Поэтому отклонённое поле снимают до `run`.
+`type` передаёт фокус ввода окну тренажёра — без оконного менеджера Xvfb
+клавиши ушли бы в главное окно REAPER, — щёлкает в поле, выделяет его текст
+сочетанием Ctrl+A и набирает новый: поле не проходит через значения, которые
+давало бы стирание по знаку. Пункты списка Input по порядку — в строке журнала
 `input list:`. Другой модуль задаёт `start --module`, настройки и журнал
 прошлого запуска сохраняет `start --keep`.
 
@@ -90,10 +100,12 @@ python3 tools/live/live.py quit                             # выход без 
 window_scale_ms=100
 ```
 
-Целое число миллисекунд от 10 до 200; вне этих границ прижимается к ним, без
-настройки — 50. Сохранённое окно попадания, которое в шкалу не помещается,
-при запуске сужается и сдвигается к нулю. Расширение эту настройку только
-читает.
+Целое число миллисекунд от 10 до 200, без настройки — 50. Граница вне 10–200
+не принимается: действует 50. Сохранённое окно попадания, которое не ложится
+в шкалу, тоже не принимается: действует 0 ± 10 мс. Не принятые строки
+тренажёр пишет в журнал и называет в строке состояния при открытии окна.
+Строку `window_scale_ms` расширение только читает и не переписывает: неверную
+границу правят вручную.
 
 ## Сборки и релизы
 

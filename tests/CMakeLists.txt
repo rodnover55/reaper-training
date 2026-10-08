@@ -24,11 +24,13 @@ add_executable(training_tests
   trainer_audio_mode_test.cpp
   trainer_calibration_test.cpp
   trainer_clock_test.cpp
+  trainer_fit_text_test.cpp
   trainer_loop_test.cpp
   trainer_measurement_test.cpp
   trainer_midi_notes_test.cpp
   trainer_onset_search_test.cpp
   trainer_settings_test.cpp
+  trainer_settings_file_test.cpp
   trainer_transport_test.cpp
   # Журнал расширения от REAPER не зависит, и его замена файла проверяется
   # здесь же.

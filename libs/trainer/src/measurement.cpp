@@ -8,7 +8,7 @@ Measurement measurementOf(const Settings &settings, const InputState &input, boo
   const Compensation &compensation = running ? atStart : current;
   Measurement measurement{.measuring = Measuring::Waiting,
                           .inputName = {},
-                          .midi = !settings.midiInput.empty(),
+                          .midi = !settings.midiInput().empty(),
                           .compensationMs = 0.0,
                           .rate = rate,
                           .calibrationCancelled = calibrationCancelled};

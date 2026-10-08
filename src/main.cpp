@@ -35,6 +35,7 @@
 #define REAPERAPI_WANT_GetNumMIDIInputs
 #define REAPERAPI_WANT_GetMIDIInputName
 #define REAPERAPI_WANT_GetMIDIInputNameNoAlias
+#define REAPERAPI_WANT_TrackCtl_SetToolTip
 
 // SWELL объявляет max и min макросами, и они ломают стандартную библиотеку.
 #define WDL_NO_DEFINE_MINMAX

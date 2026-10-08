@@ -7,8 +7,7 @@
 namespace training::grid {
 
 /// Окно попадания: отклонения от клика, мс, при которых значение зелёное
-/// (design.md D1, `timing-display`). Смещение и допуск кратны 0.5 мс, если
-/// окно получено функциями этого заголовка.
+/// (`timing-display`).
 struct HitWindow {
   /// Центр окна от клика, мс: минус — до клика, плюс — после.
   double offsetMs = 0.0;
@@ -31,33 +30,18 @@ constexpr double kDefaultScaleMs = 50.0;
 /// Наименьший допуск, мс: края окна не ближе 2 мс друг к другу.
 constexpr double kMinToleranceMs = 1.0;
 
-/// Окно `window`, уложенное в шкалу от −`scaleMs` до +`scaleMs`: смещение и
-/// допуск округляются до 0.5 мс, допуск прижимается к `kMinToleranceMs` …
-/// `scaleMs`, затем смещение — так, чтобы края легли в шкалу. Для настроек,
-/// прочитанных из файла.
-///
-/// @param scaleMs граница шкалы, мс; не меньше `kMinToleranceMs`.
-HitWindow fitted(HitWindow window, double scaleMs);
-
-/// Окно `window` со смещением `offsetMs`, округлённым до 0.5 мс и прижатым
-/// так, чтобы края легли в шкалу; допуск прежний. Для правки поля Offset.
-///
-/// @param window окно, уже уложенное в шкалу `scaleMs` (`fitted`).
-HitWindow withOffset(HitWindow window, double offsetMs, double scaleMs);
-
-/// Окно `window` с допуском `toleranceMs`, округлённым до 0.5 мс и прижатым к
-/// `kMinToleranceMs` и к тому, что осталось от смещения до края шкалы;
-/// смещение прежнее. Для правки поля Tolerance.
-///
-/// @param window окно, уже уложенное в шкалу `scaleMs` (`fitted`).
-HitWindow withTolerance(HitWindow window, double toleranceMs, double scaleMs);
+/// Правда, если окно `window` допустимо при шкале от −`scaleMs` до
+/// +`scaleMs`: допуск не меньше `kMinToleranceMs`, ранний край не раньше
+/// −`scaleMs`, поздний — не позже +`scaleMs`. Кратность 0.5 мс не
+/// проверяется.
+bool fits(const HitWindow &window, double scaleMs);
 
 /// Окно `window`, ранний край которого перенесён к `earlyMs`, а поздний
 /// остался. Край ставится на ближайшее к `earlyMs` место, отстоящее от
 /// позднего края на целое число миллисекунд, не ближе 2 мс к нему и не за
 /// −`scaleMs`. Для ползунка шкалы.
 ///
-/// @param window окно, уже уложенное в шкалу `scaleMs` (`fitted`).
+/// @param window окно, которое лежит в шкале `scaleMs` (`fits`).
 HitWindow withEarly(HitWindow window, double earlyMs, double scaleMs);
 
 /// Окно `window`, поздний край которого перенесён к `lateMs`, а ранний
@@ -68,7 +52,7 @@ HitWindow withLate(HitWindow window, double lateMs, double scaleMs);
 /// сдвиг прижимается, чтобы края легли в шкалу, допуск прежний. Для полосы
 /// между ползунками.
 ///
-/// @param window окно, уже уложенное в шкалу `scaleMs` (`fitted`).
+/// @param window окно, которое лежит в шкале `scaleMs` (`fits`).
 HitWindow shifted(HitWindow window, double byMs, double scaleMs);
 
 /// Миллисекунды из текста, округлённые до 0.5 мс: «12», «12.5», «-7.5»,

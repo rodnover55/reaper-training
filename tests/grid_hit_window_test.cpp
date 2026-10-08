@@ -4,7 +4,7 @@
 
 #include <optional>
 
-using training::grid::fitted;
+using training::grid::fits;
 using training::grid::halfMsOf;
 using training::grid::halfMsText;
 using training::grid::HitWindow;
@@ -12,8 +12,6 @@ using training::grid::MsStyle;
 using training::grid::shifted;
 using training::grid::withEarly;
 using training::grid::withLate;
-using training::grid::withOffset;
-using training::grid::withTolerance;
 
 namespace {
 
@@ -33,21 +31,20 @@ TEST_CASE("края окна — смещение минус и плюс доп�
   CHECK(hit.late() == 20.0);
 }
 
-TEST_CASE("поля: смещение и допуск прижимаются к шкале и округляются до 0.5") {
-  SUBCASE("допуск за краем шкалы") {
-    CHECK(withTolerance(window(40.0, 10.0), 20.0, kScale) == window(40.0, 10.0));
+TEST_CASE("окно допустимо: допуск не меньше 1 мс, края в шкале") {
+  SUBCASE("края на границах шкалы") {
+    CHECK(fits(window(0.0, 10.0), 10.0));
+    CHECK(fits(window(40.0, 10.0), kScale));
+    CHECK(fits(window(-40.0, 10.0), kScale));
   }
-  SUBCASE("смещение за краем шкалы") {
-    CHECK(withOffset(window(0.0, 10.0), 45.0, kScale) == window(40.0, 10.0));
-    CHECK(withOffset(window(0.0, 10.0), -45.0, kScale) == window(-40.0, 10.0));
+  SUBCASE("допуск 1 мс, но не меньше") {
+    CHECK(fits(window(0.0, 1.0), kScale));
+    CHECK_FALSE(fits(window(0.0, 0.5), kScale));
   }
-  SUBCASE("допуск не меньше 1 мс") {
-    CHECK(withTolerance(window(0.0, 10.0), 0.0, kScale) == window(0.0, 1.0));
-  }
-  SUBCASE("половина миллисекунды") {
-    CHECK(withOffset(window(0.0, 12.5), 7.5, kScale) == window(7.5, 12.5));
-    CHECK(withOffset(window(0.0, 10.0), 7.3, kScale) == window(7.5, 10.0));
-    CHECK(withTolerance(window(0.0, 10.0), 12.6, kScale) == window(0.0, 12.5));
+  SUBCASE("край за шкалой") {
+    CHECK_FALSE(fits(window(40.5, 10.0), kScale));
+    CHECK_FALSE(fits(window(-40.5, 10.0), kScale));
+    CHECK_FALSE(fits(window(0.0, 10.5), 10.0));
   }
 }
 
@@ -82,22 +79,6 @@ TEST_CASE("полоса сдвигает окно целиком") {
   CHECK(shifted(window(0.0, 10.0), 11.6, kScale) == window(12.0, 10.0));
   CHECK(shifted(window(0.0, 10.0), 60.0, kScale) == window(40.0, 10.0));
   CHECK(shifted(window(7.5, 10.0), -3.0, kScale) == window(4.5, 10.0));
-}
-
-TEST_CASE("окно из файла укладывается в шкалу") {
-  SUBCASE("шкала уже сохранённого окна") {
-    CHECK(fitted(window(40.0, 10.0), 30.0) == window(20.0, 10.0));
-  }
-  SUBCASE("допуск больше шкалы") {
-    CHECK(fitted(window(10.0, 60.0), 50.0) == window(0.0, 50.0));
-  }
-  SUBCASE("окно в шкале не меняется") {
-    CHECK(fitted(window(7.5, 12.5), kScale) == window(7.5, 12.5));
-  }
-  SUBCASE("шкала шире") { CHECK(fitted(window(60.0, 30.0), 100.0) == window(60.0, 30.0)); }
-  SUBCASE("не кратное 0.5 округляется") {
-    CHECK(fitted(window(1.2, 9.9), kScale) == window(1.0, 10.0));
-  }
 }
 
 TEST_CASE("число из текста с шагом 0.5 мс") {

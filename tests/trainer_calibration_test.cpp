@@ -263,7 +263,7 @@ TEST_CASE("Калибровка тренажёра: перегруз — пор�
   CHECK(bench.set.empty());
 
   bench.lines.clear();
-  CHECK(bench.calibrator.applyAnyway() == result.thresholdDb);
+  CHECK(bench.calibrator.applyAnyway() == std::clamp(result.thresholdDb, -90.0, -10.0));
   CHECK_FALSE(bench.calibrator.session());
   REQUIRE(bench.lines.size() == 2);
   CHECK(bench.lines[0] == fmt::format("calibration: applied anyway, silence {} dBFS",
@@ -446,4 +446,22 @@ TEST_CASE("Калибровка тренажёра: порог для «Apply an
 
   const Bench none;
   CHECK_FALSE(none.calibrator.anywaySilenceDb());
+}
+
+TEST_CASE("Калибровка тренажёра: середина за краем диапазона порога — на краю") {
+  // Шум −130 dBFS калибровка меряет на своём дне, −120 dBFS; щелчки около
+  // −62 dBFS дают середину ниже −90.
+  Bench bench;
+  REQUIRE(bench.start());
+  const std::size_t first = samplesOf(3.6);
+  std::vector<Pluck> plucks = evenPlucks(first, kSampleRate / 2.0, 8, {110.0, 147.0}, 0.001);
+  plucks.push_back(Pluck{.start = plucks.back().start + samplesOf(0.4), .amplitude = 0.0});
+  bench.play(render(plucks, first + samplesOf(4.0 + 2.0), SynthSettings{.noiseDb = -130.0}));
+
+  REQUIRE(bench.calibrator.finished());
+  const auto result = *bench.calibrator.session()->calibration->result();
+  REQUIRE(result.verdict == Verdict::Good);
+  REQUIRE(result.thresholdDb < -90.0);
+  CHECK(bench.set == std::vector<double>{-90.0});
+  CHECK(bench.logged("calibration: silence -50 -> -90 dBFS"));
 }

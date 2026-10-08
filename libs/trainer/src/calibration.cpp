@@ -2,6 +2,7 @@
 
 #include "training/trainer/settings.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <optional>
@@ -24,9 +25,10 @@ const char *verdictName(onset::Verdict verdict) {
   return "?";
 }
 
-/// Порог тишины `silenceDb`, прижатый к границам настройки.
-double settable(double silenceDb) {
-  return clamped(Settings{.silenceDb = silenceDb}).silenceDb;
+/// Порог тишины итога калибровки `thresholdDb` в допустимом диапазоне
+/// настройки: порог за краем диапазона — на этом краю.
+double silenceOf(double thresholdDb) {
+  return std::clamp(thresholdDb, Settings::kSilenceRange.min, Settings::kSilenceRange.max);
 }
 
 } // namespace
@@ -171,9 +173,9 @@ CalibrationUpdate Calibrator::finish(CalibrationSession &session,
   if (result.verdict != onset::Verdict::Good)
     return {.changed = true, .silenceDb = std::nullopt};
 
-  write(journal_, "calibration: silence {} -> {} dBFS", session.previousSilenceDb,
-        settable(result.thresholdDb));
-  return {.changed = true, .silenceDb = result.thresholdDb};
+  const double silenceDb = silenceOf(result.thresholdDb);
+  write(journal_, "calibration: silence {} -> {} dBFS", session.previousSilenceDb, silenceDb);
+  return {.changed = true, .silenceDb = silenceDb};
 }
 
 std::optional<double> Calibrator::anywaySilenceDb() const {
@@ -183,7 +185,7 @@ std::optional<double> Calibrator::anywaySilenceDb() const {
   if (!result || (result->verdict != onset::Verdict::NoiseTooClose &&
                   result->verdict != onset::Verdict::Clipping))
     return std::nullopt;
-  return settable(result->thresholdDb);
+  return silenceOf(result->thresholdDb);
 }
 
 std::optional<double> Calibrator::applyAnyway() {
@@ -193,10 +195,10 @@ std::optional<double> Calibrator::applyAnyway() {
   if (!result || result->notes == 0)
     return std::nullopt;
 
-  const double threshold = result->thresholdDb;
-  write(journal_, "calibration: applied anyway, silence {} dBFS", settable(threshold));
+  const double silenceDb = silenceOf(result->thresholdDb);
+  write(journal_, "calibration: applied anyway, silence {} dBFS", silenceDb);
   end();
-  return threshold;
+  return silenceDb;
 }
 
 } // namespace training::trainer

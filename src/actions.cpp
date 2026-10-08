@@ -61,8 +61,9 @@ bool onAction(KbdSectionInfo * /*section*/, int command, int /*val*/, int /*val2
     return true;
   }
 
+  // Режим действия — один из пяти: сеттер его принимает.
   Settings settings = trainer().settings();
-  settings.mode = *action->mode;
+  settings.setMode(*action->mode);
   trainer().setSettings(settings);
   showSettings();
   refreshWindow();
@@ -77,7 +78,7 @@ int toggleState(int command) {
     return -1;
   if (!action->mode)
     return windowShown() ? 1 : 0;
-  return trainer().settings().mode == *action->mode ? 1 : 0;
+  return trainer().settings().mode() == *action->mode ? 1 : 0;
 }
 
 } // namespace

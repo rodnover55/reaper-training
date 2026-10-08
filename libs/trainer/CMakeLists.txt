@@ -6,11 +6,13 @@ add_library(training_trainer STATIC
   src/audio_mode.cpp
   src/calibration.cpp
   src/clock.cpp
+  src/fit_text.cpp
   src/loop.cpp
   src/measurement.cpp
   src/midi_notes.cpp
   src/onset_search.cpp
   src/settings.cpp
+  src/settings_file.cpp
   src/transport.cpp)
 
 target_include_directories(training_trainer PUBLIC include)

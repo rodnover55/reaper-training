@@ -4,17 +4,22 @@
 // для всех проектов.
 
 #include "training/trainer/settings.hpp"
+#include "training/trainer/settings_file.hpp"
 
 namespace training::reaper {
 
-using trainer::clamped;
 using trainer::inputText;
 using trainer::Settings;
 
-/// Читает настройки, сохранённые REAPER (`GetExtState`). Чего нет или что
-/// вне границ, берётся по умолчанию или прижимается к границе. Зовётся из
-/// главного потока.
-Settings loadSettings();
+/// Файл, в котором REAPER хранит настройки расширения, — для журнала и
+/// строки состояния.
+inline constexpr const char *kSettingsFile = "reaper-extstate.ini";
+
+/// Читает настройки, сохранённые REAPER (`GetExtState`), по правилам
+/// `trainer::readSettings`: строка, которой нет или которая не принята,
+/// оставляет настройке значение по умолчанию, не принятые строки — в
+/// `SettingsRead::rejected`. Зовётся из главного потока.
+trainer::SettingsRead loadSettings();
 
 /// Сохраняет настройки между запусками REAPER (`SetExtState` с `persist`),
 /// кроме скрытой границы шкалы `scaleMs`. Зовётся из главного потока.

@@ -13,7 +13,14 @@ REAPER работает в отдельной папке ресурсов build/
   run СКРИПТ.lua [АРГУМЕНТ…]      выполнить скрипт Lua в REAPER и напечатать,
                                   что он вернул
   click КОНТРОЛ [--item N --of M] щёлкнуть мышью в контрол окна тренажёра
-  shot ФАЙЛ.png                   снять окно тренажёра
+  type КОНТРОЛ ТЕКСТ              набрать текст в поле окна тренажёра вместо
+                                  прежнего
+  key КЛАВИША…                    нажать клавиши в окне тренажёра: BackSpace,
+                                  Tab, End, ctrl+a
+  hover КОНТРОЛ                   навести мышь на контрол окна тренажёра без
+                                  щелчка
+  shot ФАЙЛ.png [--untitled]      снять окно тренажёра или окно без заголовка —
+                                  подсказку у курсора
   windows                         перечислить окна верхнего уровня
   quit                            выйти из REAPER без вопросов о сохранении
                                   и остановить Xvfb
@@ -62,6 +69,10 @@ SCALE = 1.9
 # Высота строки выпадающего списка в диалоговых единицах: в forms.rc у списка
 # записана высота раскрытого списка.
 COMBO_HEIGHT = 12
+
+# Имена клавиш X для знаков, которые набирает `type`, кроме букв и цифр.
+KEY_NAMES = {"-": "minus", "+": "plus", ".": "period", ",": "comma", " ": "space",
+             "=": "equal", "_": "underscore"}
 
 
 def fail(message):
@@ -132,6 +143,11 @@ class Image(ctypes.Structure):
 
 IS_VIEWABLE = 2
 Z_PIXMAP = 2
+REVERT_TO_PARENT = 2
+CURRENT_TIME = 0
+
+# Клавиши X модификаторов для `Display.key`.
+MODIFIERS = {"ctrl": "Control_L", "shift": "Shift_L", "alt": "Alt_L"}
 
 
 class Display:
@@ -169,6 +185,17 @@ class Display:
                                            ctypes.c_int, ctypes.c_ulong]
         t.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int,
                                            ctypes.c_ulong]
+        t.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int,
+                                        ctypes.c_ulong]
+        x.XStringToKeysym.argtypes = [ctypes.c_char_p]
+        x.XStringToKeysym.restype = ctypes.c_ulong
+        x.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        x.XKeysymToKeycode.restype = ctypes.c_ubyte
+        x.XKeycodeToKeysym.argtypes = [ctypes.c_void_p, ctypes.c_ubyte, ctypes.c_int]
+        x.XKeycodeToKeysym.restype = ctypes.c_ulong
+        x.XSetInputFocus.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                                     ctypes.c_ulong]
+        x.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
         self.display = x.XOpenDisplay(DISPLAY.encode())
         if not self.display:
             fail(f"нет дисплея {DISPLAY}: Xvfb не запущен")
@@ -218,6 +245,56 @@ class Display:
         self.t.XTestFakeButtonEvent(self.display, 1, 0, 0)
         self.x.XFlush(self.display)
         time.sleep(0.2)
+
+    def move(self, window, x, y):
+        """Мышь в точку (x, y) окна, без щелчка."""
+        at_x, at_y, child = ctypes.c_int(), ctypes.c_int(), ctypes.c_ulong()
+        self.x.XTranslateCoordinates(self.display, window, self.root, x, y, ctypes.byref(at_x),
+                                     ctypes.byref(at_y), ctypes.byref(child))
+        self.t.XTestFakeMotionEvent(self.display, -1, at_x.value, at_y.value, 0)
+        self.x.XFlush(self.display)
+        time.sleep(0.3)
+
+    def focus(self, window):
+        """Фокус ввода X — окну: без оконного менеджера он остаётся у главного
+        окна REAPER, и клавиши туда и уходят."""
+        self.x.XSetInputFocus(self.display, window, REVERT_TO_PARENT, CURRENT_TIME)
+        self.x.XFlush(self.display)
+        time.sleep(0.2)
+
+    def raise_(self, window):
+        """Поднимает окно над остальными и ждёт, пока его перерисуют: без
+        оконного менеджера подсказка «поверх всех» остаётся под окном, которое
+        подняли после неё, и снимок вышел бы чёрным."""
+        self.x.XRaiseWindow(self.display, window)
+        self.x.XFlush(self.display)
+        time.sleep(0.5)
+
+    def key(self, name):
+        """Нажимает и отпускает клавишу `name` — имя клавиши X («BackSpace», «a»,
+        «minus») с модификаторами через «+»: «ctrl+a», «shift+Tab». Знак, который
+        стоит на клавише со Shift, нажимается со Shift."""
+        *modifiers, main = name.split("+") if name != "+" else ["plus"]
+        keysym = self.x.XStringToKeysym(main.encode())
+        code = self.x.XKeysymToKeycode(self.display, keysym) if keysym else 0
+        if not code:
+            fail(f"нет клавиши {main}")
+        if self.x.XKeycodeToKeysym(self.display, code, 0) != keysym:
+            modifiers.append("shift")
+        held = []
+        for modifier in modifiers:
+            held.append(self.x.XKeysymToKeycode(
+                self.display, self.x.XStringToKeysym(MODIFIERS[modifier.lower()].encode())))
+        for code_held in held:
+            self.t.XTestFakeKeyEvent(self.display, code_held, 1, 0)
+        self.t.XTestFakeKeyEvent(self.display, code, 1, 0)
+        self.x.XFlush(self.display)
+        time.sleep(0.03)
+        self.t.XTestFakeKeyEvent(self.display, code, 0, 0)
+        for code_held in reversed(held):
+            self.t.XTestFakeKeyEvent(self.display, code_held, 0, 0)
+        self.x.XFlush(self.display)
+        time.sleep(0.12)
 
     def shot(self, window, path):
         """Кадр окна в PNG."""
@@ -372,15 +449,25 @@ def control(name):
     fail(f"в {FORMS.name} нет контрола {name}")
 
 
-def click(arguments):
-    display = Display()
+def trainer_window(display):
     trainer = display.find(TRAINER)
     if not trainer:
         fail("окна тренажёра нет: откройте его действием REAPER_TRAINING_WINDOW")
-    kind, (x, y, width, height) = control(arguments.control)
+    return trainer
+
+
+def centre(name):
+    """Середина контрола `name` в окне тренажёра, пикселей."""
+    kind, (x, y, width, height) = control(name)
     if kind == "COMBOBOX":
         height = COMBO_HEIGHT
-    at = (round((x + width / 2) * SCALE), round((y + height / 2) * SCALE))
+    return round((x + width / 2) * SCALE), round((y + height / 2) * SCALE)
+
+
+def click(arguments):
+    display = Display()
+    trainer = trainer_window(display)
+    at = centre(arguments.control)
     display.click(trainer, *at)
     print(f"{arguments.control}: щелчок в {at[0]}, {at[1]}")
     if arguments.item is None:
@@ -397,12 +484,45 @@ def click(arguments):
     print(f"пункт {arguments.item} из {arguments.of}: щелчок в {item[0]}, {item[1]}")
 
 
+def type_(arguments):
+    display = Display()
+    trainer = trainer_window(display)
+    display.focus(trainer)
+    display.click(trainer, *centre(arguments.control))
+    # Ctrl+A выделяет весь текст поля, и первый знак заменяет его: поле не
+    # проходит через значения, которые давало бы стирание по знаку.
+    display.key("ctrl+a")
+    for char in arguments.text:
+        display.key(KEY_NAMES.get(char, char))
+    print(f"{arguments.control}: набрано «{arguments.text}»")
+
+
+def key(arguments):
+    display = Display()
+    display.focus(trainer_window(display))
+    for name in arguments.keys:
+        display.key(name)
+    print(f"нажато: {' '.join(arguments.keys)}")
+
+
+def hover(arguments):
+    display = Display()
+    at = centre(arguments.control)
+    display.move(trainer_window(display), *at)
+    print(f"{arguments.control}: мышь в {at[0]}, {at[1]}")
+
+
 def shot(arguments):
     display = Display()
-    trainer = display.find(TRAINER)
-    if not trainer:
-        fail("окна тренажёра нет: откройте его действием REAPER_TRAINING_WINDOW")
-    width, height = display.shot(trainer, arguments.file)
+    if arguments.untitled:
+        untitled = [window for window, title, *_ in display.windows() if not title]
+        if not untitled:
+            fail("окна без заголовка нет: подсказка не показана")
+        window = untitled[0]
+        display.raise_(window)
+    else:
+        window = trainer_window(display)
+    width, height = display.shot(window, arguments.file)
     print(f"{arguments.file}: {width}×{height}")
 
 
@@ -453,8 +573,23 @@ def main():
     command.add_argument("--of", type=int, help="сколько пунктов в списке")
     command.set_defaults(handler=click)
 
+    command = commands.add_parser("type", help="набрать текст в поле окна тренажёра")
+    command.add_argument("control", help="поле из forms.rc, например IDC_SILENCE")
+    command.add_argument("text", help="текст: буквы, цифры и знаки - + . , = _ и пробел")
+    command.set_defaults(handler=type_)
+
+    command = commands.add_parser("key", help="нажать клавиши в окне тренажёра")
+    command.add_argument("keys", nargs="+", help="клавиши X: BackSpace, Tab, End, ctrl+a")
+    command.set_defaults(handler=key)
+
+    command = commands.add_parser("hover", help="навести мышь на контрол окна тренажёра")
+    command.add_argument("control", help="имя контрола из forms.rc, например IDC_TOLERANCE")
+    command.set_defaults(handler=hover)
+
     command = commands.add_parser("shot", help="снять окно тренажёра в PNG")
     command.add_argument("file")
+    command.add_argument("--untitled", action="store_true",
+                         help="снять окно верхнего уровня без заголовка — подсказку у курсора")
     command.set_defaults(handler=shot)
 
     command = commands.add_parser("windows", help="перечислить окна верхнего уровня")

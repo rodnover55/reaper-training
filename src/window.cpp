@@ -5,6 +5,7 @@
 #define REAPERAPI_WANT_DockWindowActivate
 #define REAPERAPI_WANT_GetNumAudioInputs
 #define REAPERAPI_WANT_GetInputChannelName
+#define REAPERAPI_WANT_TrackCtl_SetToolTip
 
 #include "window.hpp"
 
@@ -26,12 +27,13 @@
 
 #include "training/grid/display.hpp"
 #include "training/grid/hit_window.hpp"
+#include "training/trainer/fit_text.hpp"
+#include "training/trainer/settings_file.hpp"
 
 #include <fmt/format.h>
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <optional>
@@ -69,35 +71,46 @@ int modeIndex(grid::Mode mode) {
   return 0;
 }
 
-/// Целое из текста; пусто — в тексте не целое.
-std::optional<int> intOf(const char *text) {
-  const std::string_view view(text);
-  int value = 0;
-  const auto [end, error] = std::from_chars(view.data(), view.data() + view.size(), value);
-  if (view.empty() || error != std::errc() || end != view.data() + view.size())
+/// Текст поля `control` без пробелов по краям.
+std::string editText(HWND dialog, int control) {
+  std::array<char, 32> text{};
+  GetDlgItemText(dialog, control, text.data(), static_cast<int>(text.size()));
+  std::string_view view(text.data());
+  while (!view.empty() && view.front() == ' ')
+    view.remove_prefix(1);
+  while (!view.empty() && view.back() == ' ')
+    view.remove_suffix(1);
+  return std::string(view);
+}
+
+/// Поле окна `control` с числом настройки; пусто — `control` не Offset,
+/// Tolerance или Silence.
+std::optional<trainer::Field> fieldOf(int control) {
+  switch (control) {
+  case IDC_OFFSET:
+    return trainer::Field::Offset;
+  case IDC_TOLERANCE:
+    return trainer::Field::Tolerance;
+  case IDC_SILENCE:
+    return trainer::Field::Silence;
+  default:
     return std::nullopt;
-  return value;
+  }
 }
 
-std::optional<int> editValue(HWND dialog, int control) {
-  std::array<char, 32> text{};
-  GetDlgItemText(dialog, control, text.data(), static_cast<int>(text.size()));
-  return intOf(text.data());
-}
+/// Поле с числом, вписанное значение которого настройки не приняли.
+struct Rejection {
+  /// Поле: `IDC_OFFSET`, `IDC_TOLERANCE` или `IDC_SILENCE`.
+  int control = 0;
 
-/// Миллисекунды из поля `control`, округлённые до 0.5; пусто — в поле не
-/// число.
-std::optional<double> halfEditValue(HWND dialog, int control) {
-  std::array<char, 32> text{};
-  GetDlgItemText(dialog, control, text.data(), static_cast<int>(text.size()));
-  return grid::halfMsOf(text.data());
-}
+  /// Вписанный текст без пробелов по краям.
+  std::string text;
 
-/// Ставит в настройки `settings` смещение и допуск окна попадания `hit`.
-void setWindow(Settings &settings, const grid::HitWindow &hit) {
-  settings.offsetMs = hit.offsetMs;
-  settings.toleranceMs = hit.toleranceMs;
-}
+  bool operator==(const Rejection &) const = default;
+};
+
+/// Отклонённое поле; пусто — вписанное в поля принято или не дописано.
+std::optional<Rejection> rejection;
 
 /// Окно попадания диапазоном для контролов окна: «+4…+20 ms», «-5…+20 ms».
 std::string rangeText(const grid::HitWindow &hit) {
@@ -113,19 +126,32 @@ void journalSettings(std::string_view what) {
   const Settings &settings = trainer().settings();
   journal("{}: mode {}, offset {} ms, tolerance {} ms, input {}, silence {} dBFS, bar "
           "numbers {}, mean/spread {}, collapsed {}",
-          what, grid::divisions(settings.mode),
-          grid::halfMsText(settings.offsetMs, grid::MsStyle::Plain),
-          grid::halfMsText(settings.toleranceMs, grid::MsStyle::Plain), inputText(settings),
-          settings.silenceDb, settings.showBarNumbers, settings.showBarStats,
-          settings.panelCollapsed);
+          what, grid::divisions(settings.mode()),
+          grid::halfMsText(settings.offsetMs(), grid::MsStyle::Plain),
+          grid::halfMsText(settings.toleranceMs(), grid::MsStyle::Plain), inputText(settings),
+          settings.silenceDb(), settings.showBarNumbers(), settings.showBarStats(),
+          settings.panelCollapsed());
 }
 
-/// Строка состояния по состоянию измерения (`Trainer::measurement`) и сессии
-/// калибровки.
+/// Правда, если строка состояния вместо обычного текста показывает
+/// сообщение: об отклонённом поле или о не принятых строках
+/// `reaper-extstate.ini`. Сообщение пишется красным.
+bool statusAlert() { return rejection || !trainer().fileNotice().text().empty(); }
+
+/// Строка состояния: сообщение об отклонённом поле (`trainer::rejectionText`),
+/// иначе сообщение о не принятых строках `reaper-extstate.ini`
+/// (`trainer::FileNotice`), иначе обычный текст по состоянию измерения
+/// (`Trainer::measurement`) и сессии калибровки.
 std::string statusText() {
   const Trainer &trainerRef = trainer();
   const Measurement &status = trainerRef.measurement();
   const Settings &settings = trainerRef.settings();
+
+  if (rejection)
+    if (const std::optional<trainer::Field> field = fieldOf(rejection->control))
+      return trainer::rejectionText(*field, rejection->text, settings);
+  if (const std::string_view notice = trainerRef.fileNotice().text(); !notice.empty())
+    return std::string(notice);
 
   if (const auto &session = trainerRef.calibration()) {
     switch (phaseOf(*session)) {
@@ -142,7 +168,7 @@ std::string statusText() {
 
   std::string text =
       fmt::format("{}, window {}, latency {:.1f} ms",
-                  kModeNames[static_cast<std::size_t>(modeIndex(settings.mode))],
+                  kModeNames[static_cast<std::size_t>(modeIndex(settings.mode()))],
                   rangeText(settings.window()), status.compensationMs);
   if (status.rate != 1.0)
     text += fmt::format(", rate {}", status.rate);
@@ -166,18 +192,76 @@ std::string statusText() {
   return text;
 }
 
-/// Строка состояния, которая сейчас в окне.
+/// Строка состояния, которая сейчас в окне, полностью — та, что в журнале.
 std::string shownStatus;
 
+/// Правда, если строка состояния в окне обрезана (`trainer::fitText`):
+/// полный текст `shownStatus` — в подсказке у курсора.
+bool statusCut = false;
+
+/// Текст подписи строки состояния, видимая ширина, по которой его обрезали, и
+/// полный текст: пока они те же, текст не меряется заново.
+std::string fittedStatus;
+int fittedWidth = -1;
+std::string fittedFrom;
+
+RECT controlRect(HWND dialog, int control);
+
+/// Видимая часть строки состояния в окне `dialog`: подпись `IDC_STATUS`,
+/// обрезанная правым краем окна, если окно в доке уже формы.
+RECT statusRect(HWND dialog) {
+  RECT box = controlRect(dialog, IDC_STATUS);
+  RECT client{};
+  GetClientRect(dialog, &client);
+  box.right = std::max(box.left, std::min(box.right, client.right));
+  return box;
+}
+
+/// Ширина строки `text` шрифтом подписи `label`, пикселей; 0 — контекст для
+/// замера не получен.
+double labelTextWidth(HWND label, std::string_view text) {
+  HDC context = GetDC(label);
+  if (!context)
+    return 0.0;
+  HGDIOBJ previous = nullptr;
+  // Win32 отдаёт шрифт контрола целым LRESULT: приведения к указателю не
+  // избежать.
+  // NOLINTNEXTLINE(performance-no-int-to-ptr)
+  if (auto *font = reinterpret_cast<HFONT>(SendMessage(label, WM_GETFONT, 0, 0)))
+    previous = SelectObject(context, font);
+  const std::string copy(text);
+  RECT box{.left = 0, .top = 0, .right = 0, .bottom = 0};
+  DrawTextUTF8(context, copy.c_str(), -1, &box,
+               DT_LEFT | DT_TOP | DT_SINGLELINE | DT_CALCRECT);
+  if (previous)
+    SelectObject(context, previous);
+  ReleaseDC(label, context);
+  return static_cast<double>(box.right - box.left);
+}
+
 /// Пишет строку состояния в окно `dialog`, а когда она меняется, — в журнал:
-/// по журналу проверки видят её без снимка экрана.
+/// по журналу проверки видят её без снимка экрана. Строку, которая не
+/// помещается в видимую часть подписи (`statusRect`), обрезает с «...» в
+/// конце (`trainer::fitText`). Цвет текста — по `statusAlert` в
+/// `WM_CTLCOLORSTATIC`.
 void showStatus(HWND dialog) {
   const std::string text = statusText();
   if (text != shownStatus) {
     journal("window status: {}", text);
     shownStatus = text;
   }
-  SetDlgItemText(dialog, IDC_STATUS, text.c_str());
+
+  const RECT box = statusRect(dialog);
+  const int width = static_cast<int>(box.right - box.left);
+  if (text != fittedFrom || width != fittedWidth) {
+    HWND label = GetDlgItem(dialog, IDC_STATUS);
+    fittedStatus = trainer::fitText(
+        text, width, [label](std::string_view part) { return labelTextWidth(label, part); });
+    fittedFrom = text;
+    fittedWidth = width;
+  }
+  statusCut = fittedStatus != text;
+  SetDlgItemText(dialog, IDC_STATUS, fittedStatus.c_str());
 }
 
 /// Пишет окно попадания из настроек в поля Offset и Tolerance, кроме поля
@@ -194,6 +278,15 @@ void showHitWindow(HWND dialog, int editing = 0) {
     SetDlgItemText(dialog, IDC_TOLERANCE,
                    grid::halfMsText(hit.toleranceMs, grid::MsStyle::Plain).c_str());
   SetDlgItemText(dialog, IDC_RANGE, rangeText(hit).c_str());
+  showingSettings = showing;
+}
+
+/// Пишет порог тишины из настроек в поле Silence.
+void showSilence(HWND dialog) {
+  const bool showing = showingSettings;
+  showingSettings = true;
+  SetDlgItemText(dialog, IDC_SILENCE,
+                 fmt::format("{}", std::lround(trainer().settings().silenceDb())).c_str());
   showingSettings = showing;
 }
 
@@ -267,13 +360,13 @@ void fillInputs(HWND dialog) {
   const int channels = GetNumAudioInputs();
   for (int i = 0; i < channels; ++i) {
     const char *name = GetInputChannelName(i);
-    if (settings.midiInput.empty() && settings.channel == i)
+    if (settings.midiInput().empty() && settings.channel() == i)
       selected = static_cast<int>(labels.size());
     labels.push_back(fmt::format("{}: {}", i + 1, name ? name : ""));
     inputChoices.push_back({.channel = i, .midi = {}});
   }
   for (MidiInput &input : midiInputs()) {
-    if (!settings.midiInput.empty() && chosen && chosen->device == input.device)
+    if (!settings.midiInput().empty() && chosen && chosen->device == input.device)
       selected = static_cast<int>(labels.size());
     labels.push_back(
         fmt::format("MIDI: {}{}", input.name, input.enabled ? "" : " (not enabled)"));
@@ -295,18 +388,23 @@ void fillInputs(HWND dialog) {
   showingSettings = showing;
 }
 
+void setRejection(HWND dialog, std::optional<Rejection> next);
+
+/// Пишет настройки в контролы окна; вписанное в поля, которое настройки не
+/// приняли, заменяется действующими значениями.
 void fillControls(HWND dialog) {
   showingSettings = true;
   const Settings &settings = trainer().settings();
 
   SendDlgItemMessage(dialog, IDC_MODE, CB_SETCURSEL,
-                     static_cast<WPARAM>(modeIndex(settings.mode)), 0);
+                     static_cast<WPARAM>(modeIndex(settings.mode())), 0);
   showHitWindow(dialog);
-  SetDlgItemText(dialog, IDC_SILENCE,
-                 fmt::format("{}", static_cast<int>(settings.silenceDb)).c_str());
+  showSilence(dialog);
+  setRejection(dialog, std::nullopt);
   CheckDlgButton(dialog, IDC_SHOW_NUMBERS,
-                 settings.showBarNumbers ? BST_CHECKED : BST_UNCHECKED);
-  CheckDlgButton(dialog, IDC_SHOW_STATS, settings.showBarStats ? BST_CHECKED : BST_UNCHECKED);
+                 settings.showBarNumbers() ? BST_CHECKED : BST_UNCHECKED);
+  CheckDlgButton(dialog, IDC_SHOW_STATS,
+                 settings.showBarStats() ? BST_CHECKED : BST_UNCHECKED);
 
   // Входы — заново при каждом показе: звуковую карту могли сменить, а
   // устройство MIDI — подключить.
@@ -357,66 +455,107 @@ bool chooseInput(HWND dialog, Settings &settings) {
 
   const InputChoice &choice = inputChoices[static_cast<std::size_t>(index)];
   if (choice.channel >= 0) {
-    settings.channel = choice.channel;
-    settings.midiInput.clear();
-    settings.midiIndex = -1;
+    // Каналы списка — каналы звуковой карты с 0: сеттер их принимает.
+    settings.setChannel(choice.channel);
+    settings.setMidiInput({});
+    settings.setMidiIndex(-1);
   } else {
-    settings.midiInput = choice.midi.key;
-    settings.midiIndex = choice.midi.device;
+    settings.setMidiInput(choice.midi.key);
+    settings.setMidiIndex(choice.midi.device);
   }
   return true;
 }
 
-/// Окно попадания настроек `settings` после правки поля `control` — Offset
-/// или Tolerance: вписанное значение прижато к шкале.
+/// Настройки после правки контрола `control` с уведомлением `notification`;
+/// правка полей с числом — `editField`.
 ///
-/// @return пусто, если в поле недописанное число.
-std::optional<grid::HitWindow> editedWindow(HWND dialog, int control,
-                                            const Settings &settings) {
-  const auto value = halfEditValue(dialog, control);
-  if (!value)
-    return std::nullopt;
-  return control == IDC_OFFSET
-             ? grid::withOffset(settings.window(), *value, settings.scaleMs)
-             : grid::withTolerance(settings.window(), *value, settings.scaleMs);
-}
-
-/// Настройки после правки контрола `control` с уведомлением `notification`.
-///
-/// @return пусто, если уведомление настроек не меняет: контрол не настройка,
-///   в поле недописанное число или в списке ничего не выбрано.
+/// @return пусто, если уведомление настроек не меняет: контрол не настройка
+///   или в списке ничего не выбрано.
 std::optional<Settings> editedSettings(HWND dialog, int control, int notification) {
   Settings settings = trainer().settings();
   if (notification == CBN_SELCHANGE && control == IDC_MODE) {
     const auto index = SendDlgItemMessage(dialog, IDC_MODE, CB_GETCURSEL, 0, 0);
     if (index < 0 || index >= static_cast<LRESULT>(kModes.size()))
       return std::nullopt;
-    settings.mode = kModes[static_cast<std::size_t>(index)];
+    settings.setMode(kModes[static_cast<std::size_t>(index)]);
   } else if (notification == CBN_SELCHANGE && control == IDC_CHANNEL) {
     if (!chooseInput(dialog, settings))
       return std::nullopt;
-  } else if (notification == EN_CHANGE &&
-             (control == IDC_OFFSET || control == IDC_TOLERANCE)) {
-    // Недописанное число настройки не трогает; вне границ — прижимается.
-    const auto hit = editedWindow(dialog, control, settings);
-    if (!hit)
-      return std::nullopt;
-    setWindow(settings, *hit);
   } else if (notification == BN_CLICKED && control == IDC_SETTINGS_TOGGLE) {
-    settings.panelCollapsed = !settings.panelCollapsed;
-  } else if (notification == EN_CHANGE && control == IDC_SILENCE) {
-    const auto value = editValue(dialog, IDC_SILENCE);
-    if (!value)
-      return std::nullopt;
-    settings.silenceDb = *value;
+    settings.setPanelCollapsed(!settings.panelCollapsed());
   } else if (notification == BN_CLICKED && control == IDC_SHOW_NUMBERS) {
-    settings.showBarNumbers = IsDlgButtonChecked(dialog, IDC_SHOW_NUMBERS) == BST_CHECKED;
+    settings.setShowBarNumbers(IsDlgButtonChecked(dialog, IDC_SHOW_NUMBERS) == BST_CHECKED);
   } else if (notification == BN_CLICKED && control == IDC_SHOW_STATS) {
-    settings.showBarStats = IsDlgButtonChecked(dialog, IDC_SHOW_STATS) == BST_CHECKED;
+    settings.setShowBarStats(IsDlgButtonChecked(dialog, IDC_SHOW_STATS) == BST_CHECKED);
   } else {
     return std::nullopt;
   }
   return settings;
+}
+
+/// Ставит и сохраняет настройки `settings`, правленные в окне контролом
+/// `control`: правка снимает сообщение о не принятых строках
+/// `reaper-extstate.ini` (`trainer::FileNotice::onSettingsEdit`).
+void applyEdit(HWND dialog, int control, const Settings &settings) {
+  trainer().setSettings(settings);
+  trainer().fileNotice().onSettingsEdit();
+  journalSettings("settings");
+  if (control == IDC_OFFSET || control == IDC_TOLERANCE)
+    showHitWindow(dialog, control);
+  // Развёрнутые настройки — показ настроек: устройство MIDI могли подключить,
+  // отключить или включить в настройках REAPER, пока они были свёрнуты.
+  if (control == IDC_SETTINGS_TOGGLE && !settings.panelCollapsed())
+    fillInputs(dialog);
+  refreshWindow();
+  if (control == IDC_SETTINGS_TOGGLE)
+    journal("panel {}: rows from {} px", settings.panelCollapsed() ? "collapsed" : "expanded",
+            rowsArea(dialog).top);
+}
+
+/// Ставит в настройки `settings` число `value` поля `control` — Offset,
+/// Tolerance или Silence — его сеттером.
+///
+/// @return ложь, если сеттер отклонил число: настройки не меняются.
+bool setField(Settings &settings, int control, double value) {
+  switch (control) {
+  case IDC_OFFSET:
+    return settings.setOffsetMs(value);
+  case IDC_TOLERANCE:
+    return settings.setToleranceMs(value);
+  default:
+    return settings.setSilenceDb(value);
+  }
+}
+
+/// Ставит в настройки число, вписанное в поле `control` — Offset, Tolerance
+/// или Silence. Недописанное число настроек не меняет. Допустимое — сразу
+/// действует и сохраняется (`applyEdit`). Недопустимое настройки не меняет,
+/// а поле с вписанным становится отклонённым (`setRejection`).
+void editField(HWND dialog, int control) {
+  const std::string text = editText(dialog, control);
+  // Порог тишины — целое; смещение и допуск округляются до 0.5 мс.
+  std::optional<double> value;
+  if (control == IDC_SILENCE) {
+    if (const std::optional<int> silence = trainer::integerOf(text))
+      value = *silence;
+  } else {
+    value = grid::halfMsOf(text);
+  }
+
+  if (!value) {
+    // Недописанное число — не отклонённое значение: рамки и сообщения нет.
+    if (rejection && rejection->control == control)
+      setRejection(dialog, std::nullopt);
+    return;
+  }
+
+  Settings settings = trainer().settings();
+  if (!setField(settings, control, *value)) {
+    setRejection(dialog, Rejection{.control = control, .text = text});
+    return;
+  }
+  setRejection(dialog, std::nullopt);
+  applyEdit(dialog, control, settings);
 }
 
 void onCommand(HWND dialog, int control, int notification) {
@@ -430,27 +569,23 @@ void onCommand(HWND dialog, int control, int notification) {
     fillInputs(dialog);
     return;
   }
-  if (notification == EN_KILLFOCUS && (control == IDC_OFFSET || control == IDC_TOLERANCE)) {
-    // Ушли из поля — в нём прижатое значение: видно, что вписанное прижалось.
-    showHitWindow(dialog);
+  if (fieldOf(control)) {
+    if (notification == EN_KILLFOCUS) {
+      // Ушли из поля — в нём действующее значение, вписанное не принятым не
+      // считается.
+      setRejection(dialog, std::nullopt);
+      if (control == IDC_SILENCE)
+        showSilence(dialog);
+      else
+        showHitWindow(dialog);
+    } else if (notification == EN_CHANGE) {
+      editField(dialog, control);
+    }
     return;
   }
 
-  const std::optional<Settings> settings = editedSettings(dialog, control, notification);
-  if (!settings)
-    return;
-  trainer().setSettings(*settings);
-  journalSettings("settings");
-  if (control == IDC_OFFSET || control == IDC_TOLERANCE)
-    showHitWindow(dialog, control);
-  // Развёрнутые настройки — показ настроек: устройство MIDI могли подключить,
-  // отключить или включить в настройках REAPER, пока они были свёрнуты.
-  if (control == IDC_SETTINGS_TOGGLE && !settings->panelCollapsed)
-    fillInputs(dialog);
-  refreshWindow();
-  if (control == IDC_SETTINGS_TOGGLE)
-    journal("panel {}: rows from {} px", settings->panelCollapsed ? "collapsed" : "expanded",
-            rowsArea(dialog).top);
+  if (const std::optional<Settings> settings = editedSettings(dialog, control, notification))
+    applyEdit(dialog, control, *settings);
 }
 
 /// Цвета окна на тёмном фоне.
@@ -620,8 +755,8 @@ Layout layoutOf(double left, double width, double height, const Settings &settin
   // Колонка номера — под пять цифр, до такта 10000; колонка среднего и
   // разброса — около 9 % ширины.
   layout.sideSize = std::max(kMinFont, layout.rowHeight * 0.34);
-  layout.labelWidth = settings.showBarNumbers ? layout.sideSize * 0.6 * 5.0 + 10.0 : 0.0;
-  layout.statsWidth = settings.showBarStats ? width * 0.09 : 0.0;
+  layout.labelWidth = settings.showBarNumbers() ? layout.sideSize * 0.6 * 5.0 + 10.0 : 0.0;
+  layout.statsWidth = settings.showBarStats() ? width * 0.09 : 0.0;
   layout.statsSize = std::max(kMinFont, std::min(layout.sideSize, layout.statsWidth / 6.0));
   layout.scaleWidth = width - layout.labelWidth - layout.statsWidth;
   layout.markSize = std::max(kMinFont, layout.rowHeight * 0.2);
@@ -1069,7 +1204,7 @@ class PanelPainter {
 public:
   PanelPainter(HDC context, const RECT &area, const CalibrationSession &session)
       : context_(context), fonts_(context), layout_(panelLayout(area)), session_(session),
-        silence_(trainer().settings().silenceDb),
+        silence_(trainer().settings().silenceDb()),
         headSize_(std::max(kMinFont, layout_.height * 0.045)),
         saySize_(std::max(kMinFont + 4.0, layout_.height * 0.095)),
         hintSize_(std::max(kMinFont, layout_.height * 0.046)),
@@ -1374,9 +1509,9 @@ RECT rowsArea(HWND dialog) {
 
   const Settings &settings = trainer().settings();
   int lowest = IDC_SILENCE;
-  if (settings.panelCollapsed)
+  if (settings.panelCollapsed())
     lowest = IDC_SETTINGS_TOGGLE;
-  else if (!settings.midiInput.empty())
+  else if (!settings.midiInput().empty())
     lowest = IDC_GAUGE;
 
   RECT controls{};
@@ -1396,11 +1531,10 @@ void paintRows(HWND dialog, HDC context) {
     paintArea(context, area);
 }
 
-/// Прямоугольник шкалы окна попадания в окне — место невидимого контрола
-/// `IDC_GAUGE`.
-RECT gaugeRect(HWND dialog) {
+/// Прямоугольник контрола `control` в окне `dialog`, в координатах окна.
+RECT controlRect(HWND dialog, int control) {
   RECT box{};
-  GetWindowRect(GetDlgItem(dialog, IDC_GAUGE), &box);
+  GetWindowRect(GetDlgItem(dialog, control), &box);
   POINT corner{.x = box.left, .y = box.top};
   POINT opposite{.x = box.right, .y = box.bottom};
   ScreenToClient(dialog, &corner);
@@ -1412,11 +1546,69 @@ RECT gaugeRect(HWND dialog) {
               .bottom = std::max(corner.y, opposite.y)};
 }
 
+/// Прямоугольник шкалы окна попадания в окне — место невидимого контрола
+/// `IDC_GAUGE`.
+RECT gaugeRect(HWND dialog) { return controlRect(dialog, IDC_GAUGE); }
+
 /// Рисует шкалу окна попадания, если панель настроек развёрнута.
 void paintGaugeIn(HWND dialog, HDC context) {
   const Settings &settings = trainer().settings();
-  if (!settings.panelCollapsed)
-    paintGauge(context, gaugeRect(dialog), settings.window(), settings.scaleMs);
+  if (!settings.panelCollapsed())
+    paintGauge(context, gaugeRect(dialog), settings.window(), settings.scaleMs());
+}
+
+/// Ширина рамки вокруг отклонённого поля, пикселей: рамка — снаружи поля.
+constexpr int kRejectionFrame = 2;
+
+/// Поля с числом настройки.
+constexpr std::array<int, 3> kNumberFields{IDC_OFFSET, IDC_TOLERANCE, IDC_SILENCE};
+
+/// Полоса вокруг поля `control` шириной `kRejectionFrame`: прямоугольник
+/// поля, расширенный на неё.
+RECT frameBand(HWND dialog, int control) {
+  RECT band = controlRect(dialog, control);
+  band.left -= kRejectionFrame;
+  band.top -= kRejectionFrame;
+  band.right += kRejectionFrame;
+  band.bottom += kRejectionFrame;
+  return band;
+}
+
+/// Перерисовывает полосу вокруг поля `control` (`frameBand`).
+void invalidateBand(HWND dialog, int control) {
+  const RECT band = frameBand(dialog, control);
+  InvalidateRect(dialog, &band, FALSE);
+}
+
+/// Рисует вокруг видимых полей с числом полосу `frameBand`: у отклонённого
+/// поля — красную рамку, у остальных — цветом фона диалога, стирая прежнюю
+/// рамку.
+void paintFieldFrames(HWND dialog, HDC context) {
+  for (const int control : kNumberFields) {
+    HWND field = GetDlgItem(dialog, control);
+    if (!field || (GetWindowLong(field, GWL_STYLE) & WS_VISIBLE) == 0)
+      continue;
+    const int color =
+        rejection && rejection->control == control ? kBad : GetSysColor(COLOR_3DFACE);
+    const RECT box = controlRect(dialog, control);
+    for (int ring = 1; ring <= kRejectionFrame; ++ring)
+      drawFrame(context, box.left - ring, box.top - ring, box.right + ring, box.bottom + ring,
+                color);
+  }
+}
+
+/// Ставит отклонённое поле `next`; пусто — отклонённого поля нет. Если
+/// отклонённое поле меняется, перерисовывает полосы вокруг прежнего и нового
+/// поля и строку состояния.
+void setRejection(HWND dialog, std::optional<Rejection> next) {
+  if (rejection == next)
+    return;
+  if (rejection)
+    invalidateBand(dialog, rejection->control);
+  rejection = std::move(next);
+  if (rejection)
+    invalidateBand(dialog, rejection->control);
+  showStatus(dialog);
 }
 
 /// Что тянут мышью на шкале окна попадания.
@@ -1454,10 +1646,10 @@ std::optional<Grip> handleAt(const GaugeLayout &layout, const grid::HitWindow &h
 /// Ставит окно попадания `hit` в настройки без сохранения и показывает его
 /// в полях, на шкале и в строке состояния.
 void previewWindow(HWND dialog, const grid::HitWindow &hit) {
+  // Ползунки дают только окно в шкале: сеттер его принимает.
   Settings settings = trainer().settings();
-  if (settings.window() == hit)
+  if (settings.window() == hit || !settings.setWindow(hit))
     return;
-  setWindow(settings, hit);
   trainer().previewSettings(settings);
   showHitWindow(dialog);
   refreshWindow();
@@ -1468,19 +1660,19 @@ void dragTo(HWND dialog, double x) {
   if (!drag)
     return;
   const Settings &settings = trainer().settings();
-  const GaugeLayout layout = gaugeLayout(gaugeRect(dialog), settings.scaleMs);
+  const GaugeLayout layout = gaugeLayout(gaugeRect(dialog), settings.scaleMs());
   const double ms = layout.ms(x);
   switch (drag->grip) {
   case Grip::Early:
-    previewWindow(dialog, grid::withEarly(settings.window(), ms, settings.scaleMs));
+    previewWindow(dialog, grid::withEarly(settings.window(), ms, settings.scaleMs()));
     return;
   case Grip::Late:
-    previewWindow(dialog, grid::withLate(settings.window(), ms, settings.scaleMs));
+    previewWindow(dialog, grid::withLate(settings.window(), ms, settings.scaleMs()));
     return;
   case Grip::Band:
     break;
   }
-  previewWindow(dialog, grid::shifted(drag->start, ms - drag->fromMs, settings.scaleMs));
+  previewWindow(dialog, grid::shifted(drag->start, ms - drag->fromMs, settings.scaleMs()));
 }
 
 /// Начинает перетаскивание, если точка (`x`, `y`) окна на шкале: ползунок
@@ -1491,12 +1683,12 @@ void dragTo(HWND dialog, double x) {
 bool startDrag(HWND dialog, int x, int y) {
   const Settings &settings = trainer().settings();
   const RECT box = gaugeRect(dialog);
-  if (settings.panelCollapsed || x < box.left || x >= box.right || y < box.top ||
+  if (settings.panelCollapsed() || x < box.left || x >= box.right || y < box.top ||
       y >= box.bottom)
     return false;
 
   const grid::HitWindow hit = settings.window();
-  const GaugeLayout layout = gaugeLayout(box, settings.scaleMs);
+  const GaugeLayout layout = gaugeLayout(box, settings.scaleMs());
   const double ms = layout.ms(x);
   Grip grip = Grip::Band;
   if (const auto handle = handleAt(layout, hit, x))
@@ -1513,7 +1705,8 @@ bool startDrag(HWND dialog, int x, int y) {
   return true;
 }
 
-/// Кончает перетаскивание: отпускает мышь и сохраняет окно попадания.
+/// Кончает перетаскивание: отпускает мышь и сохраняет окно попадания —
+/// правку настроек в окне (`trainer::FileNotice::onSettingsEdit`).
 void endDrag(HWND dialog) {
   if (!drag)
     return;
@@ -1521,7 +1714,9 @@ void endDrag(HWND dialog) {
   if (GetCapture() == dialog)
     ReleaseCapture();
   trainer().setSettings(trainer().settings());
+  trainer().fileNotice().onSettingsEdit();
   journalSettings("settings");
+  refreshWindow();
 }
 
 /// Ставит курсор «влево-вправо», если точка (`x`, `y`) окна над ползунком
@@ -1531,10 +1726,10 @@ void endDrag(HWND dialog) {
 bool gaugeCursor(HWND dialog, int x, int y) {
   const Settings &settings = trainer().settings();
   const RECT box = gaugeRect(dialog);
-  if (settings.panelCollapsed || x < box.left || x >= box.right || y < box.top ||
+  if (settings.panelCollapsed() || x < box.left || x >= box.right || y < box.top ||
       y >= box.bottom)
     return false;
-  if (!drag && !handleAt(gaugeLayout(box, settings.scaleMs), settings.window(), x))
+  if (!drag && !handleAt(gaugeLayout(box, settings.scaleMs()), settings.window(), x))
     return false;
   if (drag && drag->grip == Grip::Band)
     return false;
@@ -1608,8 +1803,8 @@ std::optional<bool> placedMidi;
 /// начинаются строки тактов.
 void placePanel(HWND dialog) {
   const Settings &settings = trainer().settings();
-  const bool collapsed = settings.panelCollapsed;
-  const bool midi = !settings.midiInput.empty();
+  const bool collapsed = settings.panelCollapsed();
+  const bool midi = !settings.midiInput().empty();
   for (const int control : kPanelControls)
     showControl(dialog, control, !collapsed);
   for (const int control : kSilenceControls)
@@ -1630,7 +1825,7 @@ void paintToggle(const DRAWITEMSTRUCT &item) {
   HDC context = item.hDC;
   const RECT &box = item.rcItem;
   const bool pressed = (item.itemState & ODS_SELECTED) != 0;
-  const bool collapsed = trainer().settings().panelCollapsed;
+  const bool collapsed = trainer().settings().panelCollapsed();
   drawnCollapsed = collapsed;
 
   const double left = box.left;
@@ -1700,7 +1895,8 @@ void placeCalibrationButtons(HWND dialog) {
                finished ||
                    (!session && trainer().measurement().measuring == Measuring::Waiting));
   showControl(dialog, IDC_CALIBRATE,
-              !trainer().settings().panelCollapsed && trainer().settings().midiInput.empty());
+              !trainer().settings().panelCollapsed() &&
+                  trainer().settings().midiInput().empty());
 
   const PanelLayout layout = panelLayout(rowsArea(dialog));
   const std::optional<CalibrationPhase> phase =
@@ -1727,6 +1923,127 @@ void placeCalibrationButtons(HWND dialog) {
   placeButton(dialog, IDC_CAL_APPLY, apply.has_value(), box(right, 160, layout.buttonsTop));
 }
 
+/// Правда, пока у курсора стоит подсказка, которую поставило окно.
+bool tipShown = false;
+
+/// Подсказка у курсора над контролом `over` в точке `at` окна `dialog`:
+/// допустимые значения поля с числом (`trainer::rangeHint`) или полный текст
+/// обрезанной строки состояния. Строка состояния ищется по месту курсора: на
+/// Windows подпись для мыши прозрачна, и `over` — само окно.
+///
+/// @return пусто — над этим местом подсказки нет.
+std::optional<std::string> tipText(HWND dialog, HWND over, POINT at) {
+  for (const int control : kNumberFields)
+    if (over && over == GetDlgItem(dialog, control))
+      if (const std::optional<trainer::Field> field = fieldOf(control))
+        return trainer::rangeHint(*field, trainer().settings());
+
+  const RECT status = statusRect(dialog);
+  if (statusCut && at.x >= status.left && at.x < status.right && at.y >= status.top &&
+      at.y < status.bottom)
+    return shownStatus;
+  return std::nullopt;
+}
+
+/// Ставит у курсора подсказку `tipText` на 20 пикселей ниже курсора, чтобы
+/// она не закрывала то, над чем курсор. Где подсказки нет, убирает
+/// подсказку, которую ставило окно. REAPER убирает подсказку сам, когда мышь
+/// отходит от точки показа, поэтому подсказка ставится заново при каждом
+/// вызове.
+///
+/// @return правда, если подсказка поставлена.
+bool showTip(HWND dialog, HWND over) {
+  POINT screen{};
+  GetCursorPos(&screen);
+  POINT at = screen;
+  ScreenToClient(dialog, &at);
+
+  const std::optional<std::string> text = tipText(dialog, over, at);
+  if (!text) {
+    if (tipShown)
+      TrackCtl_SetToolTip("", 0, 0, true);
+    tipShown = false;
+    return false;
+  }
+  TrackCtl_SetToolTip(text->c_str(), screen.x, screen.y + 20, true);
+  tipShown = true;
+  return true;
+}
+
+/// Кисть фона строки состояния, пока она пишет сообщение красным; создаётся
+/// при первом сообщении и удаляется вместе с окном.
+HBRUSH statusBrush = nullptr;
+
+/// Цвет текста и фон строки состояния `control` для `WM_CTLCOLORSTATIC`:
+/// пока она пишет сообщение (`statusAlert`), текст красный, фон — цвета
+/// диалога.
+///
+/// @return кисть фона; пусто — у контрола цвета по умолчанию.
+HBRUSH statusColors(HWND dialog, HDC context, HWND control) {
+  if (control != GetDlgItem(dialog, IDC_STATUS) || !statusAlert())
+    return nullptr;
+  // Без своей кисти цвет текста не держится: SWELL на Linux берёт цвета по
+  // умолчанию, Windows не красит текст.
+  if (!statusBrush)
+    statusBrush = CreateSolidBrush(GetSysColor(COLOR_3DFACE));
+  SetTextColor(context, kBad);
+  SetBkColor(context, GetSysColor(COLOR_3DFACE));
+  SetBkMode(context, TRANSPARENT);
+  return statusBrush;
+}
+
+/// Отвечает на `WM_SETCURSOR` окна `dialog` над контролом `over`: над полем с
+/// числом и над обрезанной строкой состояния ставит подсказку (`showTip`) и
+/// оставляет курсор, который ставит контрол, — над полем курсор ввода текста;
+/// над ползунком шкалы ставит курсор «влево-вправо».
+///
+/// @return результат диалоговой процедуры: 1 — курсор поставлен окном.
+INT_PTR onSetCursor(HWND dialog, HWND over) {
+  if (showTip(dialog, over))
+    return 0;
+  POINT at{};
+  GetCursorPos(&at);
+  ScreenToClient(dialog, &at);
+  if (!gaugeCursor(dialog, at.x, at.y))
+    return 0;
+#ifdef _WIN32
+  // Иначе Windows вернёт курсор окна сразу после диалоговой процедуры.
+  SetWindowLongPtr(dialog, DWLP_MSGRESULT, TRUE);
+#endif
+  return 1;
+}
+
+/// Забывает состояние окна, которое уничтожается: перетаскивание, нарисованное,
+/// отклонённое поле, обрезанную строку состояния, подсказку у курсора и кисть
+/// строки состояния.
+void forgetWindowState() {
+  drag.reset();
+  drawnCollapsed.reset();
+  placedMidi.reset();
+  rejection.reset();
+  fittedWidth = -1;
+  statusCut = false;
+  if (tipShown)
+    TrackCtl_SetToolTip("", 0, 0, true);
+  tipShown = false;
+  if (statusBrush)
+    DeleteObject(statusBrush);
+  statusBrush = nullptr;
+}
+
+/// Кончает правку поля с числом при щелчке по окну `dialog` вне контролов —
+/// по строкам тактов, шкале окна попадания, свободному месту панели: если
+/// фокус ввода в Offset, Tolerance или Silence, окно ставит фокус себе, и поле
+/// шлёт `EN_KILLFOCUS` (`onCommand`). Фокус ввода в другом месте остаётся там.
+void leaveNumberField(HWND dialog) {
+  HWND focus = GetFocus();
+  for (const int control : kNumberFields)
+    if (focus && focus == GetDlgItem(dialog, control)) {
+      SetFocus(dialog);
+      return;
+    }
+}
+
 /// Координата x точки мыши из `lParam` сообщения мыши.
 int mouseX(LPARAM lParam) { return static_cast<short>(LOWORD(lParam)); }
 
@@ -1749,6 +2066,8 @@ INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam) {
     return 0;
 
   case WM_SIZE:
+    // Ширина окна в доке меняет видимую часть строки состояния.
+    showStatus(dialog);
     placeCalibrationButtons(dialog);
     InvalidateRect(dialog, nullptr, FALSE);
     return 0;
@@ -1757,6 +2076,7 @@ INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam) {
     PAINTSTRUCT paint{};
     if (HDC context = BeginPaint(dialog, &paint)) {
       paintGaugeIn(dialog, context);
+      paintFieldFrames(dialog, context);
       paintRows(dialog, context);
       EndPaint(dialog, &paint);
     }
@@ -1774,6 +2094,9 @@ INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam) {
   }
 
   case WM_LBUTTONDOWN:
+    // Сначала поле с числом отдаёт действующее значение, затем шкала берёт
+    // окно попадания.
+    leaveNumberField(dialog);
     return startDrag(dialog, mouseX(lParam), mouseY(lParam)) ? 1 : 0;
 
   case WM_MOUSEMOVE:
@@ -1801,27 +2124,24 @@ INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam) {
     endDrag(dialog);
     return 0;
 
-  case WM_SETCURSOR: {
-    POINT at{};
-    GetCursorPos(&at);
-    ScreenToClient(dialog, &at);
-    if (!gaugeCursor(dialog, at.x, at.y))
-      return 0;
-#ifdef _WIN32
-    // Иначе Windows вернёт курсор окна сразу после диалоговой процедуры.
-    SetWindowLongPtr(dialog, DWLP_MSGRESULT, TRUE);
-#endif
-    return 1;
-  }
+  case WM_CTLCOLORSTATIC:
+    // Кисть возвращается результатом диалоговой процедуры: так заведено для
+    // WM_CTLCOLOR*.
+    // NOLINTNEXTLINE(performance-no-int-to-ptr)
+    return reinterpret_cast<INT_PTR>(statusColors(dialog, reinterpret_cast<HDC>(wParam),
+                                                  // NOLINTNEXTLINE(performance-no-int-to-ptr)
+                                                  reinterpret_cast<HWND>(lParam)));
+
+  case WM_SETCURSOR:
+    // NOLINTNEXTLINE(performance-no-int-to-ptr)
+    return onSetCursor(dialog, reinterpret_cast<HWND>(wParam));
 
   case WM_CLOSE:
     closeWindow();
     return 1;
 
   case WM_DESTROY:
-    drag.reset();
-    drawnCollapsed.reset();
-    placedMidi.reset();
+    forgetWindowState();
     if (window == dialog)
       window = nullptr;
     return 0;
@@ -1843,6 +2163,9 @@ void toggleWindow() {
     return;
   }
 
+  // До WM_INITDIALOG: строка состояния нового окна уже с сообщением о не
+  // принятых строках reaper-extstate.ini.
+  trainer().fileNotice().onWindowOpen();
   window =
       CreateDialogParam(resourceModule, MAKEINTRESOURCE(IDD_TRAINER), GetMainHwnd(), proc, 0);
   if (!window) {

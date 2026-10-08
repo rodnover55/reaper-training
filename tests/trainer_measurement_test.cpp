@@ -37,7 +37,12 @@ InputState channel() {
 }
 
 /// Вход MIDI «KeyStep» в настройках и у хоста.
-Settings midiSettings() { return Settings{.midiInput = "KeyStep", .midiIndex = 2}; }
+Settings midiSettings() {
+  Settings settings;
+  settings.setMidiInput("KeyStep");
+  settings.setMidiIndex(2);
+  return settings;
+}
 
 InputState keyStep(bool enabled) {
   return InputState{.channelName = {},
