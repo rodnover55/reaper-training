@@ -67,7 +67,7 @@ python3 tools/live/live.py start                            # Xvfb и REAPER с 
 python3 tools/live/live.py run tools/live/window.lua        # открыть окно тренажёра
 python3 tools/live/live.py click IDC_CALIBRATE              # щелчок в контрол из src/views/forms.rc
 python3 tools/live/live.py click IDC_CHANNEL --item 1 --of 20  # второй из 20 пунктов списка Input
-python3 tools/live/live.py run tools/live/transport.lua play   # play, record, pause или stop
+python3 tools/live/live.py run tools/live/transport.lua play   # play, record, pause, stop или restart
 python3 tools/live/live.py run tools/live/midi.lua 60 100      # нота виртуальной MIDI-клавиатуры
 python3 tools/live/live.py shot window.png                  # снимок окна тренажёра
 python3 tools/live/live.py quit                             # выход без вопросов о сохранении

@@ -82,6 +82,8 @@ double journalSeconds(std::chrono::steady_clock::time_point at) {
   return std::chrono::duration<double>(at - journalStart).count();
 }
 
+std::chrono::steady_clock::time_point journalOpenedAt() { return journalStart; }
+
 void journalLine(std::string_view line) {
   const std::string tag = threadTag();
   const double seconds = std::chrono::duration<double>(Clock::now() - journalStart).count();

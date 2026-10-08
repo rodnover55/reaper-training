@@ -2,6 +2,7 @@
 
 #include "training/trainer/settings.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <utility>
@@ -50,7 +51,7 @@ CalibrationPhase phaseOf(const CalibrationSession &session) {
 }
 
 bool Calibrator::start(bool running, const Measurement &measurement, int channel,
-                       double silenceDb, double now) {
+                       double silenceDb, Moment now) {
   if (running || measurement.midi || measurement.measuring == Measuring::NoInput)
     return false;
 
@@ -126,7 +127,7 @@ void Calibrator::feed(std::span<const float> samples, double sampleRate, bool ga
           calibration.attacksDb()[i]);
 }
 
-CalibrationUpdate Calibrator::update(double now) {
+CalibrationUpdate Calibrator::update(Moment now) {
   if (!session_)
     return {};
   CalibrationSession &session = *session_;
@@ -149,9 +150,10 @@ CalibrationUpdate Calibrator::update(double now) {
     if (const std::optional<onset::CalibrationResult> &result = session.calibration->result())
       return finish(session, *result);
 
-  if (now - lastSound_ >= kNoSoundSeconds) {
+  if (now - lastSound_ >= kNoSoundTime) {
     session.noSound = true;
-    write(journal_, "calibration: no sound from the audio device for {} s", kNoSoundSeconds);
+    write(journal_, "calibration: no sound from the audio device for {} s",
+          std::chrono::duration<double>(kNoSoundTime).count());
     return {.changed = true, .silenceDb = std::nullopt};
   }
   return {.changed = heard, .silenceDb = std::nullopt};

@@ -16,10 +16,13 @@
 
 #include <reaper_plugin_functions.h>
 
+#include "clock.hpp"
 #include "journal.hpp"
 #include "window.hpp"
 
 #include "training/grid/note_time.hpp"
+#include "training/trainer/audio_mode.hpp"
+#include "training/trainer/clock.hpp"
 #include "training/trainer/journal.hpp"
 #include "training/trainer/loop.hpp"
 
@@ -76,13 +79,6 @@ void onMainTimer() {
     refreshWindow();
 }
 
-/// Секунды монотонных часов — те же, что ставит атакам аудиохук
-/// (`trainer::AudioOnset::monotonic`).
-double monotonicNow() {
-  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-}
-
 /// Приёмник строк журнала ядра тренажёра: журнал расширения.
 trainer::Journal journalSink() {
   return [](std::string_view line) { journalLine(line); };
@@ -124,7 +120,8 @@ trainer::Loop projectLoop() {
 } // namespace
 
 Trainer::Trainer()
-    : rate_(Master_GetPlayRate(nullptr)), settings_(loadSettings()), midiNotes_(journalSink()),
+    : transport_(journalSink()), input_(transport_.onsetSearch()),
+      rate_(Master_GetPlayRate(nullptr)), settings_(loadSettings()),
       calibrator_(journalSink()) {
   input_.setChannel(trainer::audioChannel(settings_));
   input_.setSilenceDb(settings_.silenceDb);
@@ -145,13 +142,13 @@ void Trainer::apply(const Settings &settings) {
   const bool inputChanged = trainer::inputChanged(settings_, next);
   if (inputChanged) {
     calibrator_.onInputChange();
-    midiNotes_.onInputChange();
+    transport_.midiNotes().onInputChange();
   }
 
   settings_ = next;
   input_.setChannel(trainer::audioChannel(settings_));
   input_.setSilenceDb(settings_.silenceDb);
-  input_.setCalibrating(calibrator_.listening());
+  updateAudioMode();
   transport_.setMode(settings_.mode);
 
   if (inputChanged) {
@@ -275,21 +272,20 @@ void Trainer::onPlayState(bool play, bool pause) {
     // Компенсация держится до конца запуска — как постоянный сдвиг у записи.
     // Позиция начала берётся в момент запуска, до того как её сдвинул звук:
     // count-in — пока позиция стоит.
-    if (transport_.start(monotonicNow(), compensationNow(input_.sampleRate()))) {
-      input_.startRun();
+    const trainer::Moment now = momentNow();
+    const double position = GetPlayPosition2Ex(nullptr);
+    if (transport_.start(now, position, compensationNow(input_.sampleRate()))) {
       const trainer::Compensation &compensation = transport_.compensation();
-      const double position = GetPlayPosition2Ex(nullptr);
-      midiNotes_.start(position);
       calibrator_.onStart();
-      journal("start: compensation {:.3f} ms, MIDI compensation {:.3f} ms, rate {}, position "
-              "{:.6f}",
-              compensation.audio * 1000.0, compensation.midi * 1000.0, rate_, position);
+      journal("start: at {}, compensation {:.3f} ms, MIDI compensation {:.3f} ms, rate {}, "
+              "position {:.6f}",
+              trainer::momentText(now), compensation.audio * 1000.0,
+              compensation.midi * 1000.0, rate_, position);
     }
   } else if (transport_.stop()) {
-    input_.stopRun();
     calibrator_.onStop();
   }
-  input_.setCalibrating(calibrator_.listening());
+  updateAudioMode();
 }
 
 void Trainer::onPlayRate(double rate) { rate_ = rate; }
@@ -351,9 +347,10 @@ bool Trainer::takeOnsets() {
 
     // Задержка показа: от блока атаки до этого тика плюс задержка ввода,
     // которую звук прошёл до хука. Окно перерисуется на этом же тике.
-    const double age = monotonicNow() - hit->monotonic + compensation.inputLatency;
-    journal("note t={:.6f} level={:.1f} dB, shown after {:.1f} ms", time, hit->levelDb,
-            age * 1000.0);
+    const double ageMs =
+        std::chrono::duration<double, std::milli>(momentNow() - hit->monotonic).count() +
+        compensation.inputLatency * 1000.0;
+    journal("note t={:.6f} level={:.1f} dB, shown after {:.1f} ms", time, hit->levelDb, ageMs);
   }
   return taken;
 }
@@ -365,7 +362,7 @@ bool Trainer::takeMidiNotes() {
                                .device = midi_ ? midi_->device : -1,
                                .position = GetPlayPosition2Ex(nullptr),
                                .compensation = transport_.compensation().midi * rate_};
-  const std::vector<trainer::MidiNote> notes = midiNotes_.take(midiEvents_, read);
+  const std::vector<trainer::MidiNote> notes = transport_.midiNotes().take(midiEvents_, read);
   for (const trainer::MidiNote &note : notes) {
     const double time = trainer::loopWrapped(note.time, note.event.position, projectLoop(),
                                              settings_.mode, timeline_);
@@ -383,8 +380,8 @@ bool Trainer::pollCalibration() {
   while (const auto chunk = input_.popCalibration(chunkSamples_))
     calibrator_.feed(chunkSamples_, chunk->sampleRate, chunk->gap);
 
-  const trainer::CalibrationUpdate update = calibrator_.update(monotonicNow());
-  input_.setCalibrating(calibrator_.listening());
+  const trainer::CalibrationUpdate update = calibrator_.update(momentNow());
+  updateAudioMode();
   if (update.silenceDb)
     setSilence(*update.silenceDb);
   return update.changed;
@@ -399,13 +396,13 @@ void Trainer::setSilence(double silenceDb) {
 
 bool Trainer::startCalibration() {
   if (!calibrator_.start(transport_.running(), measurement_, settings_.channel,
-                         settings_.silenceDb, monotonicNow()))
+                         settings_.silenceDb, momentNow()))
     return false;
 
   // Куски прошлой сессии, которые ещё в очереди, — не этой калибровки.
   while (input_.popCalibration(chunkSamples_)) {
   }
-  input_.setCalibrating(calibrator_.listening());
+  updateAudioMode();
 
   // REAPER закрывает звуковую карту при остановке, если так настроено; без
   // неё хук не вызывается. Калибровка открывает её один раз: если REAPER
@@ -419,14 +416,18 @@ bool Trainer::startCalibration() {
 
 void Trainer::endCalibration() {
   calibrator_.end();
-  input_.setCalibrating(calibrator_.listening());
+  updateAudioMode();
 }
 
 void Trainer::applyCalibration() {
   const std::optional<double> silenceDb = calibrator_.applyAnyway();
-  input_.setCalibrating(calibrator_.listening());
+  updateAudioMode();
   if (silenceDb)
     setSilence(*silenceDb);
+}
+
+void Trainer::updateAudioMode() {
+  input_.setMode(trainer::audioModeOf(transport_, calibrator_));
 }
 
 Trainer &trainer() { return *instance; }

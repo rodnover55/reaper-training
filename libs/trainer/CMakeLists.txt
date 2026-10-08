@@ -3,7 +3,9 @@
 # Всё, что даёт хост, приходит параметрами. От ОС и хоста не зависит: это
 # проверяет тест trainer_isolation.
 add_library(training_trainer STATIC
+  src/audio_mode.cpp
   src/calibration.cpp
+  src/clock.cpp
   src/loop.cpp
   src/measurement.cpp
   src/midi_notes.cpp

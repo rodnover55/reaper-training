@@ -2,19 +2,21 @@
 
 // Сессия калибровки входа: от запуска калибровки до её конца (`input-calibration`).
 
+#include "training/trainer/clock.hpp"
 #include "training/trainer/journal.hpp"
 #include "training/trainer/measurement.hpp"
 
 #include "training/onset/calibration.hpp"
 
+#include <chrono>
 #include <optional>
 #include <span>
 #include <string>
 
 namespace training::trainer {
 
-/// Сколько секунд без звука от звуковой карты обрывают калибровку.
-inline constexpr double kNoSoundSeconds = 2.0;
+/// Сколько времени без звука от звуковой карты обрывает калибровку.
+inline constexpr std::chrono::nanoseconds kNoSoundTime = std::chrono::seconds(2);
 
 /// Сессия калибровки входа.
 struct CalibrationSession {
@@ -28,7 +30,7 @@ struct CalibrationSession {
   /// Имя калибруемого входного канала звуковой карты у хоста.
   std::string channelName;
 
-  /// Правда, если звук от звуковой карты не приходил `kNoSoundSeconds` и
+  /// Правда, если звук от звуковой карты не приходил `kNoSoundTime` и
   /// калибровка оборвана без итога.
   bool noSound = false;
 
@@ -84,12 +86,12 @@ public:
   /// @param measurement состояние измерения: выбранный вход и есть ли он.
   /// @param channel выбранный канал, 0 — первый.
   /// @param silenceDb порог тишины до калибровки, dBFS.
-  /// @param now момент начала, секунды монотонных часов: от него
-  ///   отсчитываются `kNoSoundSeconds` до первого звука.
+  /// @param now момент начала: от него отсчитывается `kNoSoundTime` до первого
+  ///   звука.
   /// @return ложь, если идёт запуск, выбран вход MIDI или выбранного канала
   ///   нет: калибровка не начата, прежняя сессия осталась.
   bool start(bool running, const Measurement &measurement, int channel, double silenceDb,
-             double now);
+             Moment now);
 
   /// Кончает сессию без изменений порога тишины; поставленный удачной
   /// калибровкой порог остаётся. Без сессии ничего не делает.
@@ -123,13 +125,13 @@ public:
   /// вызова.
   ///
   /// - Калибровка подводит итог; удачный итог ставит порог тишины.
-  /// - Если звука не было `kNoSoundSeconds` от начала сессии или от
+  /// - Если звука не было `kNoSoundTime` от начала сессии или от
   ///   последнего куска, сессия обрывается без итога (`noSound`).
   /// - Удар по струнам после итога (`onset::Calibration::soundAfterResult`)
   ///   кончает сессию.
   ///
-  /// @param now секунды тех же монотонных часов, что у `start`.
-  CalibrationUpdate update(double now);
+  /// @param now момент хода.
+  CalibrationUpdate update(Moment now);
 
   /// «Apply anyway»: ставит порог тишины, посчитанный калибровкой, хотя она
   /// его не поставила, и кончает сессию.
@@ -166,7 +168,7 @@ private:
   Journal journal_;
   std::optional<CalibrationSession> session_;
   // Когда пришёл последний звук и был ли звук с прошлого update.
-  double lastSound_ = 0.0;
+  Moment lastSound_{};
   bool heard_ = false;
   bool cancelledByPlayback_ = false;
 };

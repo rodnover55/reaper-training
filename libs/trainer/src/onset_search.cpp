@@ -6,17 +6,10 @@
 
 namespace training::trainer {
 
-OnsetSearch::OnsetSearch(Journal journal) : journal_(std::move(journal)) {}
+OnsetSearch::OnsetSearch(const RunState &run, Journal journal)
+    : run_(run), journal_(std::move(journal)) {}
 
-void OnsetSearch::start() {
-  if (running_)
-    return;
-  running_ = true;
-  ++run_;
-}
-
-void OnsetSearch::stop() {
-  running_ = false;
+void OnsetSearch::forget() {
   detector_.reset();
   history_.clear();
   previousPosition_.reset();
@@ -25,7 +18,18 @@ void OnsetSearch::stop() {
 
 void OnsetSearch::process(const AudioBlock &block, std::span<const float> samples,
                           double silenceDb, std::vector<AudioOnset> &onsets) {
-  if (!running_)
+  // Прошлый звук собран для другого запуска или без запуска: к этому он не
+  // относится.
+  const Moment runStart = run_.load();
+  if (runStart != collectedFor_) {
+    forget();
+    collectedFor_ = runStart;
+  }
+
+  // Звук, взятый до начала запуска, — прошлого запуска или остановленного
+  // транспорта, даже если звук шёл без перерыва: в поток звука запуска он не
+  // входит.
+  if (runStart == kNoRun || block.monotonic < runStart)
     return;
 
   // Окна детектора посчитаны в сэмплах его частоты: звук другой частоты
@@ -73,9 +77,8 @@ void OnsetSearch::process(const AudioBlock &block, std::span<const float> sample
                          .offset = found.position - static_cast<double>(start->streamStart),
                          .sampleRate = start->block.sampleRate,
                          .levelDb = found.levelDb,
-                         .monotonic = start->block.monotonic,
-                         .run = run_};
-    write(journal_, "onset run={} P={:.6f} i={:.3f} level={:.1f} dB", hit.run,
+                         .monotonic = start->block.monotonic};
+    write(journal_, "onset at {} P={:.6f} i={:.3f} level={:.1f} dB", momentText(hit.monotonic),
           hit.blockPosition, hit.offset, hit.levelDb);
     onsets.push_back(hit);
   }

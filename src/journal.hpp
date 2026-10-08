@@ -1,7 +1,7 @@
 #pragma once
 
-// Журнал расширения: что расширение видит в REAPER и как быстро отвечает
-// (design.md D10). Пишется в любой сборке (`platform-support`).
+// Журнал расширения: что расширение видит в REAPER и как быстро отвечает.
+// Пишется в любой сборке (`platform-support`).
 
 #include <fmt/format.h>
 
@@ -37,6 +37,10 @@ void journalLine(std::string_view line);
 /// Время по часам журнала, в секундах от его открытия: для отметок, снятых
 /// в одном потоке, а записанных в журнал из другого.
 double journalSeconds(std::chrono::steady_clock::time_point at);
+
+/// Момент открытия журнала по монотонным часам: от него журнал отсчитывает
+/// отметки времени строк. Без блокировок — годится и звуковому потоку.
+std::chrono::steady_clock::time_point journalOpenedAt();
 
 /// Форматирует строку по правилам {fmt} и пишет её в журнал (`journalLine`).
 template <class... Args> void journal(fmt::format_string<Args...> format, Args &&...args) {

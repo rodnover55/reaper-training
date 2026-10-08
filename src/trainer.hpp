@@ -115,7 +115,7 @@ public:
   /// пока идёт воспроизведение и транспорт не на паузе: запись REAPER всегда
   /// ведёт с воспроизведением. Начало запуска (`trainer::Transport::start`)
   /// снимает компенсацию задержки и позицию начала для нот MIDI, начинает
-  /// поиск атак и прерывает калибровку; конец запуска
+  /// поиск атак и отбор нот MIDI и прерывает калибровку; конец запуска
   /// (`trainer::Transport::stop`) кончает поиск атак и оставляет строки.
   /// Зовётся из главного потока, когда транспорт меняется.
   ///
@@ -149,8 +149,13 @@ private:
   bool takeMidiNotes();
   bool pollCalibration();
   void setSilence(double silenceDb);
+  void updateAudioMode();
 
-  // Поля стоят в порядке, который не оставляет дыр выравнивания.
+  // Поля стоят в порядке, который не оставляет дыр выравнивания. Транспорт —
+  // раньше входа звуковой карты: рабочий поток входа подаёт блоки в поиск
+  // атак транспорта, и транспорт создаётся раньше этого потока и разрушается
+  // после его остановки.
+  trainer::Transport transport_;
   AudioInput input_;
   ProjectTimeline timeline_;
   double rate_ = 1.0;
@@ -164,9 +169,7 @@ private:
   Settings settings_;
   trainer::InputState inputs_;
   Measurement measurement_;
-  trainer::MidiNotes midiNotes_;
   trainer::Calibrator calibrator_;
-  trainer::Transport transport_;
   // Номер последнего прочитанного события истории MIDI-входа.
   int midiSequence_ = 0;
 };

@@ -185,10 +185,10 @@ add_library(reaper_training MODULE
   src/main.cpp
   src/actions.cpp
   src/audio_input.cpp
-  src/control_surface.cpp
   src/journal.cpp
   src/midi_inputs.cpp
   src/project_timeline.cpp
+  src/reaper_notification_relay.cpp
   src/settings.cpp
   src/trainer.cpp
   src/window.cpp)

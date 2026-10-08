@@ -10,6 +10,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -33,7 +34,10 @@ using training::trainer::CalibrationUpdate;
 using training::trainer::Calibrator;
 using training::trainer::Measurement;
 using training::trainer::Measuring;
+using training::trainer::Moment;
 using training::trainer::phaseOf;
+
+using namespace std::chrono_literals;
 
 namespace {
 
@@ -98,7 +102,7 @@ Measurement waiting() {
 struct Bench {
   std::vector<std::string> lines;
   Calibrator calibrator{[this](std::string_view line) { lines.emplace_back(line); }};
-  double now = 100.0;
+  Moment now{100s};
   /// Пороги, которые калибровка велела поставить.
   std::vector<double> set;
 
@@ -123,7 +127,8 @@ struct Bench {
     for (std::size_t from = 0; from < signal.size(); from += 512) {
       const std::size_t length = std::min<std::size_t>(512, signal.size() - from);
       calibrator.feed(signal.subspan(from, length), sampleRate, false);
-      now += static_cast<double>(length) / sampleRate;
+      now += std::chrono::round<std::chrono::nanoseconds>(
+          std::chrono::duration<double>(static_cast<double>(length) / sampleRate));
       tick();
     }
   }
@@ -269,11 +274,11 @@ TEST_CASE("Калибровка тренажёра: перегруз — пор�
 TEST_CASE("Калибровка тренажёра: без звука 2 с — обрыв без итога") {
   Bench bench;
   REQUIRE(bench.start());
-  bench.now += 1.9;
+  bench.now += 1900ms;
   CHECK_FALSE(bench.tick().changed);
   CHECK_FALSE(bench.calibrator.session()->noSound);
 
-  bench.now += 0.1;
+  bench.now += 100ms;
   CHECK(bench.tick().changed);
   REQUIRE(bench.calibrator.session());
   CHECK(bench.calibrator.session()->noSound);
@@ -291,10 +296,10 @@ TEST_CASE("Калибровка тренажёра: звук пропал пос
   Bench bench;
   REQUIRE(bench.start());
   bench.play(noise(1.0, -96.0));
-  bench.now += 1.99;
+  bench.now += 1990ms;
   bench.tick();
   CHECK_FALSE(bench.calibrator.session()->noSound);
-  bench.now += 0.01;
+  bench.now += 10ms;
   bench.tick();
   CHECK(bench.calibrator.session()->noSound);
   CHECK(bench.calibrator.session()->calibration);
@@ -411,7 +416,7 @@ TEST_CASE("Калибровка тренажёра: этапы сессии") {
 
   Bench quiet;
   REQUIRE(quiet.start());
-  quiet.now += 2.0;
+  quiet.now += 2s;
   quiet.tick();
   CHECK(phaseOf(*quiet.calibrator.session()) == CalibrationPhase::NoSound);
   CHECK(quiet.calibrator.finished());

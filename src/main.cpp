@@ -9,7 +9,6 @@
 #define REAPERAPI_WANT_GetResourcePath
 #define REAPERAPI_WANT_Audio_RegHardwareHook
 #define REAPERAPI_WANT_GetPlayPosition2Ex
-#define REAPERAPI_WANT_GetPlayStateEx
 #define REAPERAPI_WANT_GetNumAudioInputs
 #define REAPERAPI_WANT_GetInputOutputLatency
 #define REAPERAPI_WANT_get_config_var
@@ -45,8 +44,8 @@
 
 #include "actions.hpp"
 #include "build_stamp.hpp"
-#include "control_surface.hpp"
 #include "journal.hpp"
+#include "reaper_notification_relay.hpp"
 #include "settings.hpp"
 #include "trainer.hpp"
 #include "window.hpp"
@@ -92,7 +91,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE instance, reaper_plugin_info_t 
 
     training::reaper::unregisterActions();
     training::reaper::closeWindow();
-    training::reaper::unregisterSurface();
+    training::reaper::unregisterNotificationRelay();
     training::reaper::shutdownTrainer();
     training::reaper::journal("unload");
     training::reaper::closeJournal();
@@ -116,7 +115,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE instance, reaper_plugin_info_t 
 
   training::reaper::setResourceModule(instance);
   training::reaper::initTrainer(rec);
-  training::reaper::registerSurface(rec);
+  training::reaper::registerNotificationRelay(rec);
   training::reaper::registerActions(rec);
 
   // Версия и время сборки — чтобы было видно, тот ли модуль загружен:

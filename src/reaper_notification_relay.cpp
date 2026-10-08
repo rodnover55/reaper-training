@@ -1,7 +1,7 @@
 #define REAPERAPI_MINIMAL
 #define REAPERAPI_WANT_Master_GetPlayRate
 
-#include "control_surface.hpp"
+#include "reaper_notification_relay.hpp"
 
 #include <reaper_plugin_functions.h>
 
@@ -12,9 +12,10 @@
 namespace training::reaper {
 namespace {
 
-/// Поверхность без устройства и без окна настроек: только принимает
-/// уведомления REAPER и передаёт их тренажёру.
-class Surface final : public IReaperControlSurface {
+/// Передатчик уведомлений REAPER: только принимает их и передаёт тренажёру.
+/// Это невидимая поверхность управления REAPER (`csurf_inst`) без устройства и
+/// без окна настроек: так REAPER доставляет уведомления.
+class ReaperNotificationRelay final : public IReaperControlSurface {
 public:
   const char *GetTypeString() override { return "REAPERTRAINING"; }
   const char *GetDescString() override { return "reaper-training"; }
@@ -48,25 +49,25 @@ int (*hostRegister)(const char *name, void *infostruct) = nullptr;
 
 // Обычный указатель, а не unique_ptr: деструктор статического объекта зовёт
 // любой exit() в процессе, в том числе в копии REAPER после fork (см.
-// trainer.cpp). Поверхность уничтожает только unregisterSurface.
-Surface *surface = nullptr;
+// trainer.cpp). Передатчик уничтожает только unregisterNotificationRelay.
+ReaperNotificationRelay *relay = nullptr;
 
 } // namespace
 
-void registerSurface(reaper_plugin_info_t *rec) {
+void registerNotificationRelay(reaper_plugin_info_t *rec) {
   if (!rec || !rec->Register)
     return;
 
   hostRegister = rec->Register;
-  surface = new Surface();
-  hostRegister("csurf_inst", surface);
+  relay = new ReaperNotificationRelay();
+  hostRegister("csurf_inst", relay);
 }
 
-void unregisterSurface() {
-  if (hostRegister && surface)
-    hostRegister("-csurf_inst", surface);
+void unregisterNotificationRelay() {
+  if (hostRegister && relay)
+    hostRegister("-csurf_inst", relay);
 
-  delete std::exchange(surface, nullptr);
+  delete std::exchange(relay, nullptr);
 }
 
 } // namespace training::reaper

@@ -21,7 +21,9 @@ add_executable(training_tests
   grid_timeline_test.cpp
   journal_test.cpp
   midi_device_remap_test.cpp
+  trainer_audio_mode_test.cpp
   trainer_calibration_test.cpp
+  trainer_clock_test.cpp
   trainer_loop_test.cpp
   trainer_measurement_test.cpp
   trainer_midi_notes_test.cpp

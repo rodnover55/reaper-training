@@ -1,9 +1,12 @@
 #pragma once
 
 // Звук гитары со входа звуковой карты: аудиохук копирует блоки выбранного
-// канала, рабочий поток ищет в них атаки и отдаёт главному.
+// канала, в рабочем потоке ядро (`trainer::OnsetSearch`) ищет в них атаки, и
+// поток отдаёт их главному.
 
 #include "training/concurrency/spsc_ring.hpp"
+#include "training/trainer/audio_mode.hpp"
+#include "training/trainer/clock.hpp"
 #include "training/trainer/onset_search.hpp"
 
 // SWELL объявляет max и min макросами, и они ломают стандартную библиотеку.
@@ -36,21 +39,27 @@ struct CalibrationChunk {
   bool gap = false;
 };
 
-/// Вход звуковой карты: аудиохук и рабочий поток поиска атак.
+/// Вход звуковой карты: аудиохук и рабочий поток, в котором ядро
+/// (`trainer::OnsetSearch`) ищет атаки.
 ///
 /// Существует от создания до уничтожения; хук зарегистрирован всё это время.
-/// Звук блока идёт в поиск атак, пока транспорт воспроизводит или записывает и
-/// не стоит на паузе, и в калибровку, пока транспорт стоит и включён звук
-/// калибровки. Поиск атак ядра (`trainer::OnsetSearch`) идёт от `startRun` до
-/// `stopRun` и сам решает, какие атаки отдавать.
+/// Звук выбранного канала хук берёт по режиму звукового пути (`setMode`): в
+/// режиме атак рабочий поток подаёт его в поиск атак ядра, а тот сам решает
+/// по запуску транспорта, какие блоки разбирать и какие атаки отдавать; в
+/// режиме калибровки — в очередь калибровки.
 ///
 /// Многопоточность: все методы, кроме деструктора, можно звать из любого
 /// потока, но `popOnset` — только из одного и `popCalibration` — только из
 /// одного.
 class AudioInput {
 public:
-  /// Регистрирует аудиохук и запускает рабочий поток. Выбранный канал — 0.
-  AudioInput();
+  /// Регистрирует аудиохук и запускает рабочий поток. Выбранный канал — 0,
+  /// режим звукового пути — «ничего».
+  ///
+  /// @param search поиск атак (`trainer::Transport::onsetSearch`), в который
+  ///   рабочий поток подаёт блоки; живёт дольше входа, и блоки в него подаёт
+  ///   только этот вход.
+  explicit AudioInput(trainer::OnsetSearch &search);
 
   /// Снимает аудиохук и останавливает рабочий поток. Атаки, не забранные
   /// `popOnset`, пропадают.
@@ -90,13 +99,11 @@ public:
     silenceDb_.store(silenceDb, std::memory_order_relaxed);
   }
 
-  /// Включает и выключает звук для калибровки входа. Пока он включён и
-  /// транспорт стоит, сэмплы выбранного канала идут в очередь калибровки
-  /// (`popCalibration`); при воспроизведении и записи — как всегда, в поиск
-  /// атак. Действует со следующего блока.
-  void setCalibrating(bool calibrating) {
-    calibrating_.store(calibrating, std::memory_order_relaxed);
-  }
+  /// Задаёт режим звукового пути (`trainer::audioModeOf`): в режиме атак
+  /// сэмплы выбранного канала идут в поиск атак, в режиме калибровки — в
+  /// очередь калибровки (`popCalibration`), в режиме «ничего» хук их не
+  /// берёт. Действует со следующего блока.
+  void setMode(trainer::AudioMode mode) { mode_.store(mode, std::memory_order_relaxed); }
 
   /// Забирает следующий кусок звука калибровки. Если очередь калибровки
   /// переполнена, куски пропадают, и следующий за ними помечен `gap`.
@@ -112,19 +119,6 @@ public:
   /// Забирает следующую найденную атаку; пусто — новых нет.
   std::optional<trainer::AudioOnset> popOnset() { return onsets_.pop(); }
 
-  /// Отмечает начало запуска транспорта (`trainer::Transport::start`): рабочий
-  /// поток начнёт поиск атак (`trainer::OnsetSearch::start`) перед следующим
-  /// блоком. Зовётся из главного потока.
-  void startRun() {
-    running_.store(true);
-    runs_.fetch_add(1);
-  }
-
-  /// Отмечает конец запуска транспорта (`trainer::Transport::stop`): рабочий
-  /// поток кончит поиск атак (`trainer::OnsetSearch::stop`) перед следующим
-  /// блоком. Зовётся из главного потока.
-  void stopRun() { running_.store(false); }
-
   /// Сколько блоков пропало между хуком и рабочим потоком: рабочий поток не
   /// успевал. Пропавший звук поиск атак отсчитывает как время без звука.
   std::size_t droppedBlocks() const { return headers_.dropped(); }
@@ -136,10 +130,11 @@ private:
     std::uint64_t firstSample = 0;
     double position = 0.0;
     double sampleRate = 0.0;
-    double monotonic = 0.0;
+    trainer::Moment monotonic{};
     int length = 0;
+    // Режим, с которым хук взял блок.
+    trainer::AudioMode mode = trainer::AudioMode::Off;
     bool hasSamples = false;
-    bool calibration = false;
   };
 
   static constexpr std::size_t kMaxBlock = 16384;
@@ -149,7 +144,6 @@ private:
   void onBlock(int length, double sampleRate, audio_hook_register_t *registration);
 
   void work();
-  void followRun();
   void feed(const BlockHeader &header);
   void forwardCalibration(const BlockHeader &header, bool gap);
 
@@ -188,7 +182,7 @@ private:
   std::thread worker_;
 
   // Только рабочий поток.
-  trainer::OnsetSearch search_;
+  trainer::OnsetSearch &search_;
   std::vector<float> blockSamples_;
   std::vector<trainer::AudioOnset> found_;
 
@@ -203,11 +197,8 @@ private:
   // одном числе, чтобы читатель не взял ответ для другого канала.
   std::atomic<int> checkedChannel_{-1};
 
-  // Главный поток пишет, рабочий читает: сколько было запусков.
-  std::atomic<std::uint32_t> runs_{0};
-
-  // Только рабочий поток: сколько запусков он уже передал поиску атак.
-  std::uint32_t seenRuns_ = 0;
+  // Главный поток пишет, звуковой читает.
+  std::atomic<trainer::AudioMode> mode_{trainer::AudioMode::Off};
 
   // Только звуковой поток: блок, переведённый в float перед отправкой.
   std::array<float, kMaxBlock> scratch_{};
@@ -216,12 +207,6 @@ private:
   // калибровки.
   bool calibrationStreaming_ = false;
   bool calibrationLost_ = false;
-
-  // Главный поток пишет, звуковой читает.
-  std::atomic<bool> calibrating_{false};
-
-  // Главный поток пишет, рабочий читает: идёт ли запуск.
-  std::atomic<bool> running_{false};
 
   bool registered_ = false;
   std::atomic<bool> stop_{false};

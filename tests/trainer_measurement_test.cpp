@@ -5,6 +5,8 @@
 #include "training/trainer/settings.hpp"
 #include "training/trainer/transport.hpp"
 
+#include <chrono>
+
 using training::trainer::Calibrator;
 using training::trainer::Compensation;
 using training::trainer::InputState;
@@ -12,7 +14,10 @@ using training::trainer::Measurement;
 using training::trainer::measurementOf;
 using training::trainer::measuresMidi;
 using training::trainer::Measuring;
+using training::trainer::Moment;
 using training::trainer::Settings;
+
+using namespace std::chrono_literals;
 
 namespace {
 
@@ -131,7 +136,7 @@ TEST_CASE("Состояние измерения: калибровку прер�
   Calibrator calibrator;
   REQUIRE(calibrator.start(false,
                            measurementOf(Settings{}, channel(), false, kNow, kNow, 1.0, false),
-                           0, -50.0, 10.0));
+                           0, -50.0, Moment(10s)));
   calibrator.onStart();
   const Measurement running = measurementOf(Settings{}, channel(), true, kNow, kNow, 1.0,
                                             calibrator.cancelledByPlayback());

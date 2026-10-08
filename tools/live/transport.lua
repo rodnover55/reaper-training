@@ -1,10 +1,11 @@
--- Транспорт REAPER, как кнопками: arg[1] — play, record, pause или stop.
--- Запись — действием Transport: Record (1013). Без дорожки, готовой к записи,
--- REAPER показал бы окно «Record Warning», поэтому перед записью первая
--- дорожка готовится к записи со входа виртуальной MIDI-клавиатуры; если
--- дорожек нет, она создаётся. Выход из записи — действием 40667, которое не
--- спрашивает, сохранять ли записанное. Возвращает состояние транспорта после
--- команды (GetPlayState).
+-- Транспорт REAPER, как кнопками: arg[1] — play, record, pause, stop или
+-- restart. restart — остановка и запуск в одном вызове: REAPER сообщает обе
+-- перемены, а звук идёт без перерыва. Запись — действием Transport: Record
+-- (1013). Без дорожки, готовой к записи, REAPER показал бы окно «Record
+-- Warning», поэтому перед записью первая дорожка готовится к записи со входа
+-- виртуальной MIDI-клавиатуры; если дорожек нет, она создаётся. Выход из
+-- записи — действием 40667, которое не спрашивает, сохранять ли записанное.
+-- Возвращает состояние транспорта после команды (GetPlayState).
 
 -- Вход дорожки: MIDI (4096), устройство 62 — виртуальная клавиатура, все
 -- каналы.
@@ -29,7 +30,10 @@ elseif command == "stop" then
   else
     reaper.OnStopButton()
   end
+elseif command == "restart" then
+  reaper.OnStopButton()
+  reaper.OnPlayButton()
 else
-  error("транспорт: play, record, pause или stop, а не " .. tostring(command))
+  error("транспорт: play, record, pause, stop или restart, а не " .. tostring(command))
 end
 return "play state " .. reaper.GetPlayState() .. ", position " .. reaper.GetPlayPosition()
