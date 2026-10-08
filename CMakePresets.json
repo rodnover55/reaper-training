@@ -21,8 +21,8 @@
     {
       "name": "debug",
       "inherits": "default",
-      "displayName": "Отладочная сборка для живых проверок",
-      "description": "Журнал и отладочные действия (design.md D10). Пользователю эта сборка не ставится.",
+      "displayName": "Отладочная сборка",
+      "description": "Без оптимизации и с отладочной информацией — для отладчика. Пользователю эта сборка не ставится.",
       "binaryDir": "${sourceDir}/build/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"

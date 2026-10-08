@@ -96,8 +96,8 @@ FetchContent_Declare(wdl
   URL_HASH SHA256=ca87bdfdeddf8c5590ed75d64a980c3bbaf6dcb96f1be170461e7c90c19f0490)
 
 # {fmt} вместо std::format: на macOS 12 системная библиотека C++ дробные числа
-# не форматирует, а {fmt} делает это своим кодом (design.md D9). Ставить и
-# проверять его нечего, файловые API ОС и модуль C++20 не нужны.
+# не форматирует, а {fmt} делает это своим кодом. Ставить и проверять его
+# нечего, файловые API ОС и модуль C++20 не нужны.
 #
 # EXCLUDE_FROM_ALL: {fmt} объявляет ещё и обёртку для C, без условия. Так
 # собирается только то, с чем линкуются свои цели.
@@ -142,10 +142,11 @@ endif()
 
 # --- Библиотеки ---------------------------------------------------------------
 # Всё, что решает точность, собирается и проверяется без REAPER и без
-# заголовков ОС (design.md D9). Модуль расширения собирает их вместе.
+# заголовков ОС. Модуль расширения собирает их вместе.
 add_subdirectory(libs/concurrency)
 add_subdirectory(libs/onset)
 add_subdirectory(libs/grid)
+add_subdirectory(libs/trainer)
 
 # --- Ресурсы форм -------------------------------------------------------------
 # Формы описаны в src/views/forms.rc — одним исходником на все платформы. Под
@@ -185,7 +186,6 @@ add_library(reaper_training MODULE
   src/actions.cpp
   src/audio_input.cpp
   src/control_surface.cpp
-  src/debug_actions.cpp
   src/journal.cpp
   src/midi_inputs.cpp
   src/project_timeline.cpp
@@ -209,11 +209,6 @@ endif()
 # Свои заголовки включаются от корня src/.
 target_include_directories(reaper_training PRIVATE src)
 
-# Журнал и отладочные действия есть только в отладочной сборке (design.md D10):
-# пользователю они не показываются.
-target_compile_definitions(reaper_training PRIVATE
-  $<$<CONFIG:Debug>:TRAINING_DEBUG_BUILD>)
-
 # Версия и отметка времени сборки, которые расширение печатает при загрузке.
 # По ним видно, тот ли модуль в REAPER: не поставленный вовремя плагин выглядит
 # как «поведение не изменилось», и отличить это от настоящей ошибки иначе нечем.
@@ -232,7 +227,7 @@ add_dependencies(reaper_training reaper_training_stamp)
 target_include_directories(reaper_training PRIVATE "${CMAKE_BINARY_DIR}")
 
 target_link_libraries(reaper_training PRIVATE
-  training_concurrency training_onset training_grid fmt::fmt)
+  training_concurrency training_onset training_grid training_trainer fmt::fmt)
 
 # SYSTEM: SDK и WDL чужие, их предупреждения не наши.
 target_include_directories(reaper_training SYSTEM PRIVATE

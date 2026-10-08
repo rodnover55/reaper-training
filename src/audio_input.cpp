@@ -11,20 +11,16 @@
 
 #include <algorithm>
 #include <chrono>
-#include <ranges>
 #include <span>
+#include <string_view>
 
 namespace training::reaper {
 namespace {
 
-// Биты состояния транспорта (`GetPlayStateEx`).
+// Биты состояния транспорта (`GetPlayStateEx`). Запись всегда идёт с битом
+// воспроизведения, поэтому бит записи запуску ничего не добавляет.
 constexpr int kPlaying = 1;
 constexpr int kPaused = 2;
-constexpr int kRecording = 4;
-
-/// За сколько секунд звука помнить блоки: атака сообщается позже своего
-/// начала, и блок её начала должен найтись.
-constexpr double kHistorySeconds = 1.0;
 
 /// Секунды монотонных часов — тех же, что в журнале.
 double monotonicNow() {
@@ -36,7 +32,8 @@ double monotonicNow() {
 
 AudioInput::AudioInput()
     : samples_(std::make_unique<concurrency::SpscRing<float, (1U << 18)>>()),
-      calibrationSamples_(std::make_unique<concurrency::SpscRing<float, (1U << 18)>>()) {
+      calibrationSamples_(std::make_unique<concurrency::SpscRing<float, (1U << 18)>>()),
+      search_([](std::string_view line) { journalLine(line); }) {
   blockSamples_.reserve(kMaxBlock);
 
   worker_ = std::thread([this] { work(); });
@@ -59,8 +56,7 @@ AudioInput::~AudioInput() {
 
 void AudioInput::onAudioBuffer(bool isPost, int length, double sampleRate,
                                audio_hook_register_t *registration) {
-  // Звуковой поток: только копирование — ни блокировок, ни выделения памяти
-  // (design.md D3).
+  // Звуковой поток: только копирование — ни блокировок, ни выделения памяти.
   if (isPost || !registration || !registration->userdata1)
     return;
 
@@ -72,25 +68,26 @@ void AudioInput::onBlock(int length, double sampleRate, audio_hook_register_t *r
   const int state = GetPlayStateEx(nullptr);
   sampleRate_.store(sampleRate, std::memory_order_relaxed);
 
-  BlockHeader header{.sequence = nextSequence_++,
+  BlockHeader header{.firstSample = nextSample_,
                      .position = GetPlayPosition2Ex(nullptr),
                      .sampleRate = sampleRate,
                      .monotonic = monotonicNow(),
                      .length = length};
+  nextSample_ += static_cast<std::uint64_t>(std::max(length, 0));
 
-  // Места для заголовка нет — пропадает весь блок, а пропуск номера скажет
-  // рабочему потоку, что поток сэмплов разорван.
+  // Места для заголовка нет — пропадает весь блок, а скачок номера сэмпла у
+  // следующего скажет рабочему потоку, сколько звука пропало.
   if (headers_.freeSpace() == 0) {
     (void)headers_.push(header);
     return;
   }
 
-  const bool playing = (state & kPaused) == 0 && (state & (kPlaying | kRecording)) != 0;
+  const bool playing = (state & kPlaying) != 0 && (state & kPaused) == 0;
   header.calibration = !playing && calibrating_.load(std::memory_order_relaxed);
   const int channel = channel_.load(std::memory_order_relaxed);
 
   // Числа входов хук не знает: `input_nch` REAPER не заполняет, а для канала,
-  // которого нет у карты, GetBuffer отдаёт пустой указатель (findings.md, R4).
+  // которого нет у карты, GetBuffer отдаёт пустой указатель.
   const ReaSample *input = channel >= 0 ? registration->GetBuffer(false, channel) : nullptr;
   if (channel >= 0)
     checkedChannel_.store(channel * 2 + (input ? 1 : 0), std::memory_order_relaxed);
@@ -109,110 +106,55 @@ void AudioInput::onBlock(int length, double sampleRate, audio_hook_register_t *r
 
 void AudioInput::work() {
   while (!stop_.load()) {
-    while (const auto header = headers_.pop())
+    while (const auto header = headers_.pop()) {
+      followRun();
       feed(*header);
+    }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
 }
 
-void AudioInput::feed(const BlockHeader &header) {
-  const bool gap = header.sequence != expectedSequence_;
-  expectedSequence_ = header.sequence + 1;
+void AudioInput::followRun() {
+  // Главный поток ставит признак запуска раньше, чем считает запуск: новый
+  // запуск виден вместе с тем, идёт ли он ещё.
+  const std::uint32_t runs = runs_.load();
+  const bool running = running_.load();
+  if (runs != seenRuns_) {
+    seenRuns_ = runs;
+    search_.stop();
+    if (running)
+      search_.start();
+  } else if (!running && search_.running()) {
+    search_.stop();
+  }
+}
 
-  // Звук калибровки поиску атак не подаётся, а следующий запуск
-  // воспроизведения начинает поиск заново.
+void AudioInput::feed(const BlockHeader &header) {
+  const bool gap = header.firstSample != expectedSample_;
+  expectedSample_ = header.firstSample + static_cast<std::uint64_t>(header.length);
+
   if (header.hasSamples && header.calibration) {
-    streaming_ = false;
-    previousPosition_.reset();
     forwardCalibration(header, gap || !calibrationStreaming_);
     calibrationStreaming_ = true;
     return;
   }
   calibrationStreaming_ = false;
 
-  if (!header.hasSamples) {
-    streaming_ = false;
-    previousPosition_.reset();
+  if (!header.hasSamples)
     return;
-  }
 
   blockSamples_.resize(static_cast<std::size_t>(header.length));
   (void)samples_->pop(std::span<float>(blockSamples_));
 
-  const double silenceDb = silenceDb_.load(std::memory_order_relaxed);
-  const double energyRatio = energyRatio_.load(std::memory_order_relaxed);
-
-  if (!detector_ || header.sampleRate != detectorRate_) {
-    detector_.emplace(onset::Settings{
-        .sampleRate = header.sampleRate, .silenceDb = silenceDb, .energyRatio = energyRatio});
-    detectorRate_ = header.sampleRate;
-    appliedSilenceDb_ = silenceDb;
-    appliedEnergyRatio_ = energyRatio;
-    streaming_ = false;
-  }
-
-  if (silenceDb != appliedSilenceDb_) {
-    detector_->setSilenceDb(silenceDb);
-    appliedSilenceDb_ = silenceDb;
-  }
-
-  if (energyRatio != appliedEnergyRatio_) {
-    detector_->setEnergyRatio(energyRatio);
-    appliedEnergyRatio_ = energyRatio;
-  }
-
-  // Новый запуск транспорта или разрыв потока: сэмплы до и после несмежны.
-  if (!streaming_ || gap) {
-    if (!streaming_)
-      ++run_;
-    detector_->reset();
-    history_.clear();
-    previousPosition_.reset();
-    streaming_ = true;
-  }
-
-  const bool moving = previousPosition_ && header.position != *previousPosition_;
-  previousPosition_ = header.position;
-  history_.push_back(
-      {.streamStart = detector_->position(), .header = header, .moving = moving});
-
   found_.clear();
-  detector_->process(blockSamples_, found_);
-
-  for (const onset::Onset &found : found_) {
-    // Блок начала атаки — последний из начавшихся не позже неё.
-    auto newestFirst = std::views::reverse(history_);
-    const auto block =
-        std::ranges::find_if(newestFirst, [&found](const StreamBlock &candidate) {
-          return static_cast<double>(candidate.streamStart) <= found.position;
-        });
-    if (block == newestFirst.end())
-      continue;
-    if (!block->moving) {
-      journal("onset dropped: position {:.6f} is not moving", block->header.position);
-      continue;
-    }
-
-    const HookOnset hit{.blockPosition = block->header.position,
-                        .offset = found.position - static_cast<double>(block->streamStart),
-                        .sampleRate = block->header.sampleRate,
-                        .levelDb = found.levelDb,
-                        .monotonic = block->header.monotonic,
-                        .run = run_};
-
-    journal("onset run={} P={:.6f} i={:.3f} level={:.1f} dB", hit.run, hit.blockPosition,
-            hit.offset, hit.levelDb);
+  search_.process(trainer::AudioBlock{.firstSample = header.firstSample,
+                                      .position = header.position,
+                                      .sampleRate = header.sampleRate,
+                                      .monotonic = header.monotonic},
+                  blockSamples_, silenceDb_.load(std::memory_order_relaxed), found_);
+  for (const trainer::AudioOnset &hit : found_)
     (void)onsets_.push(hit);
-  }
-
-  // Блоки старше kHistorySeconds звука больше не понадобятся.
-  const auto keep = static_cast<std::uint64_t>(kHistorySeconds * header.sampleRate);
-  const std::uint64_t now = detector_->position();
-  const auto stale = std::ranges::find_if(history_, [now, keep](const StreamBlock &candidate) {
-    return candidate.streamStart + keep >= now;
-  });
-  history_.erase(history_.begin(), stale);
 }
 
 void AudioInput::forwardCalibration(const BlockHeader &header, bool gap) {

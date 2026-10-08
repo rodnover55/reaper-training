@@ -127,3 +127,60 @@ TEST_CASE("детектор: порог тишины меняется на хо�
   CHECK(onsets.size() == 1);
   CHECK(detector.position() == quiet.size());
 }
+
+TEST_CASE("детектор: пропуск двигает время, атака после него — с учётом пропуска") {
+  Detector detector(Settings{.sampleRate = kSampleRate});
+  std::vector<Onset> onsets;
+  const std::vector<float> silence(4410, 0.0F);
+  detector.process(silence, onsets);
+  detector.skip(4410);
+  CHECK(detector.position() == 8820);
+
+  detector.process(clicks({4410}, 13230), onsets);
+  REQUIRE(onsets.size() == 1);
+  CHECK(std::abs(onsets[0].position - 13230.0) < 11.0);
+  CHECK(detector.position() == 8820 + 13230);
+}
+
+TEST_CASE("детектор: мёртвое время отсчитывается и через пропуск") {
+  // Мёртвое время 100 мс, щелчок на 100 мс. Пропуск начинается на 110 мс.
+  const Settings settings{.sampleRate = kSampleRate, .deadTimeMs = 100.0};
+  const std::vector<float> before = clicks({4410}, 4851);
+  const std::vector<float> after = clicks({1764}, 4410);
+
+  // Пропуск 80 мс: второй щелчок через 40 мс после пропуска — на 230 мс, через
+  // 130 мс после первого. Мёртвое время кончилось.
+  Detector longSkip(settings);
+  std::vector<Onset> found;
+  longSkip.process(before, found);
+  longSkip.skip(3528);
+  longSkip.process(after, found);
+  REQUIRE(found.size() == 2);
+  CHECK(std::abs(found[1].position - (4851.0 + 3528.0 + 1764.0)) < 11.0);
+
+  // Пропуск 20 мс: второй щелчок на 170 мс, через 70 мс после первого — ещё в
+  // мёртвом времени.
+  Detector shortSkip(settings);
+  std::vector<Onset> suppressed;
+  shortSkip.process(before, suppressed);
+  shortSkip.skip(882);
+  shortSkip.process(after, suppressed);
+  CHECK(suppressed.size() == 1);
+}
+
+TEST_CASE("детектор: звук после пропуска не даёт ложной атаки") {
+  // Ровный тон до пропуска и после: на стыке звук прыгает, но окна, задевающие
+  // пропуск, в сравнения не идут.
+  std::vector<float> tone(8820);
+  for (std::size_t i = 0; i < tone.size(); ++i)
+    tone[i] = static_cast<float>(0.3 * std::sin(2.0 * std::numbers::pi * 3000.0 *
+                                                static_cast<double>(i) / kSampleRate));
+
+  Detector detector(Settings{.sampleRate = kSampleRate});
+  std::vector<Onset> onsets;
+  detector.process(tone, onsets);
+  const std::size_t beforeSkip = onsets.size();
+  detector.skip(2205);
+  detector.process(std::span<const float>(tone).subspan(1234), onsets);
+  CHECK(onsets.size() == beforeSkip);
+}

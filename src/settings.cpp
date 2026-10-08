@@ -14,7 +14,6 @@
 
 #include <fmt/format.h>
 
-#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <optional>
@@ -56,33 +55,6 @@ void store(const char *key, const std::string &value) {
 }
 
 } // namespace
-
-Settings clamped(Settings settings) {
-  switch (settings.mode) {
-  case grid::Mode::Quarters:
-  case grid::Mode::Eighths:
-  case grid::Mode::EighthTriplets:
-  case grid::Mode::Sixteenths:
-  case grid::Mode::SixteenthTriplets:
-    break;
-  default:
-    settings.mode = grid::Mode::Quarters;
-  }
-
-  settings.scaleMs = std::clamp(std::round(settings.scaleMs), 10.0, 200.0);
-  const grid::HitWindow window = grid::fitted(settings.window(), settings.scaleMs);
-  settings.offsetMs = window.offsetMs;
-  settings.toleranceMs = window.toleranceMs;
-  settings.silenceDb = std::clamp(settings.silenceDb, -90.0, -10.0);
-  settings.channel = std::max(settings.channel, 0);
-  return settings;
-}
-
-std::string inputText(const Settings &settings) {
-  if (settings.midiInput.empty())
-    return fmt::format("channel {}", settings.channel + 1);
-  return fmt::format("MIDI «{}» #{}", settings.midiInput, settings.midiIndex);
-}
 
 bool consoleLogEnabled() {
   const auto value = numberOf("console_log");

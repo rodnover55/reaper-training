@@ -34,7 +34,6 @@
 #include <charconv>
 #include <cmath>
 #include <cstddef>
-#include <cstdio>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -47,6 +46,9 @@ namespace {
 REAPER_PLUGIN_HINSTANCE resourceModule = nullptr;
 
 HWND window = nullptr;
+
+using trainer::CalibrationPhase;
+using trainer::phaseOf;
 
 /// Режимы в порядке списка в окне.
 constexpr std::array<grid::Mode, 5> kModes{grid::Mode::Quarters, grid::Mode::Eighths,
@@ -118,48 +120,21 @@ void journalSettings(std::string_view what) {
           settings.panelCollapsed);
 }
 
-/// Что показывает панель калибровки.
-enum class Panel {
-  /// Шаг тишины, в том числе до первого звука.
-  Silence,
-  /// Шаг нот.
-  Notes,
-  /// Звук от звуковой карты не приходит.
-  NoSound,
-  /// Итог калибровки.
-  Result,
-};
-
-Panel panelOf(const CalibrationSession &session) {
-  if (session.noSound)
-    return Panel::NoSound;
-  if (!session.calibration)
-    return Panel::Silence;
-
-  switch (session.calibration->step()) {
-  case onset::CalibrationStep::Silence:
-    break;
-  case onset::CalibrationStep::Notes:
-    return Panel::Notes;
-  case onset::CalibrationStep::Done:
-    return Panel::Result;
-  }
-  return Panel::Silence;
-}
-
+/// Строка состояния по состоянию измерения (`Trainer::measurement`) и сессии
+/// калибровки.
 std::string statusText() {
   const Trainer &trainerRef = trainer();
-  const Status &status = trainerRef.status();
+  const Measurement &status = trainerRef.measurement();
   const Settings &settings = trainerRef.settings();
 
   if (const auto &session = trainerRef.calibration()) {
-    switch (panelOf(*session)) {
-    case Panel::Silence:
+    switch (phaseOf(*session)) {
+    case CalibrationPhase::Silence:
       return fmt::format("Calibrating {}: step 1 of 2 — silence", session->channelName);
-    case Panel::Notes:
+    case CalibrationPhase::Notes:
       return fmt::format("Calibrating {}: step 2 of 2 — notes", session->channelName);
-    case Panel::NoSound:
-    case Panel::Result:
+    case CalibrationPhase::NoSound:
+    case CalibrationPhase::Result:
       break;
     }
     return "Calibration finished";
@@ -478,7 +453,7 @@ void onCommand(HWND dialog, int control, int notification) {
             rowsArea(dialog).top);
 }
 
-/// Цвета окна на тёмном фоне (design.md D8).
+/// Цвета окна на тёмном фоне.
 constexpr int kBackground = RGB(24, 24, 24);
 constexpr int kCurrentRow = RGB(36, 36, 36);
 constexpr int kCurrentBeatBack = RGB(69, 59, 40);
@@ -615,7 +590,7 @@ private:
   std::vector<Made> fonts_;
 };
 
-/// Раскладка области строк по горизонтали и общие кегли (design.md D8).
+/// Раскладка области строк по горизонтали и общие кегли.
 struct Layout {
   /// Левый край области строк и её ширина, пикселей.
   double left = 0.0;
@@ -716,8 +691,8 @@ void paintRow(HDC context, Fonts &fonts, const Layout &layout, const grid::BarVi
     fonts.use(size);
     int color = colorOf(value.cell.tone);
     if (value.cell.tone == grid::Tone::Target) {
-      // Подложка — по mockup.html: поля 0.2 кегля по сторонам и 0.08 сверху и
-      // снизу, скругление 0.18 кегля.
+      // Подложка: поля 0.2 кегля по сторонам и 0.08 сверху и снизу,
+      // скругление 0.18 кегля.
       const double halfWidth = textWidth(context, value.cell.text) / 2.0 + size * 0.2;
       const double halfHeight = size * 0.58;
       fillRounded(context, x(value.beat) - halfWidth, middle - halfHeight,
@@ -740,7 +715,7 @@ void paintRow(HDC context, Fonts &fonts, const Layout &layout, const grid::BarVi
   }
 }
 
-/// Цвета панели калибровки, которых нет у строк (design D7, mockup.html).
+/// Цвета панели калибровки, которых нет у строк.
 constexpr int kGood = RGB(90, 210, 90);
 constexpr int kBad = RGB(235, 80, 70);
 constexpr int kDim = RGB(125, 125, 125);
@@ -916,7 +891,7 @@ void paintScale(HDC context, Fonts &fonts, double left, double right, double top
     label(dbText(db), kDim, x(db), top + height - std::max(kMinFont, height * 0.125) * 1.2);
 }
 
-/// Цвета шкалы окна попадания (mockup.html этого изменения).
+/// Цвета шкалы окна попадания.
 constexpr int kOutside = RGB(80, 40, 37);
 constexpr int kGaugeFrame = RGB(60, 60, 60);
 constexpr int kHandle = RGB(228, 228, 228);
@@ -986,8 +961,8 @@ double tickStep(const GaugeLayout &layout) {
 }
 
 /// Рисует шкалу окна попадания `hit` с границей `scaleMs` в прямоугольнике
-/// `box` (mockup.html): дорожку вне окна, полосу окна, пунктир смещения,
-/// отметку клика, ползунки краёв и подписи делений. Фон — цвет фона диалога.
+/// `box`: дорожку вне окна, полосу окна, пунктир смещения, отметку клика,
+/// ползунки краёв и подписи делений. Фон — цвет фона диалога.
 void paintGauge(HDC context, const RECT &box, const grid::HitWindow &hit, double scaleMs) {
   const GaugeLayout layout = gaugeLayout(box, scaleMs);
   fillBox(context, box.left, box.top, box.right, box.bottom, GetSysColor(COLOR_3DFACE));
@@ -1031,8 +1006,8 @@ void paintGauge(HDC context, const RECT &box, const grid::HitWindow &hit, double
   }
 }
 
-/// Раскладка панели калибровки в области `area` (mockup.html): края, кегли и
-/// места частей — доли высоты и ширины области.
+/// Раскладка панели калибровки в области `area`: края, кегли и места частей —
+/// доли высоты и ширины области.
 struct PanelLayout {
   double left = 0.0;
   double right = 0.0;
@@ -1062,15 +1037,16 @@ PanelLayout panelLayout(const RECT &area) {
 /// Сколько секунд шага нот без нот до подсказки проверить вход.
 constexpr double kQuietHintSeconds = 5.0;
 
-/// Номер шага панели для строки шагов: 1 — тишина, 2 — ноты, 3 — итог.
-int stepOf(Panel panel) {
-  switch (panel) {
-  case Panel::Silence:
+/// Номер этапа калибровки `phase` в строке шагов панели: 1 — тишина, 2 — ноты,
+/// 3 — итог.
+int stepOf(CalibrationPhase phase) {
+  switch (phase) {
+  case CalibrationPhase::Silence:
     return 1;
-  case Panel::Notes:
+  case CalibrationPhase::Notes:
     return 2;
-  case Panel::NoSound:
-  case Panel::Result:
+  case CalibrationPhase::NoSound:
+  case CalibrationPhase::Result:
     break;
   }
   return 3;
@@ -1087,8 +1063,8 @@ int stepColor(int index, int current) {
 }
 
 /// Рисует панель калибровки сессии `session` в области `area` вместо строк
-/// тактов (design D7, mockup.html): строку шагов, крупную подсказку,
-/// пояснение и то, что показывает шаг или итог.
+/// тактов: строку шагов, крупную подсказку, пояснение и то, что показывает шаг
+/// или итог.
 class PanelPainter {
 public:
   PanelPainter(HDC context, const RECT &area, const CalibrationSession &session)
@@ -1103,23 +1079,23 @@ public:
   }
 
   void paint() {
-    const Panel panel = panelOf(session_);
-    steps(stepOf(panel));
+    const CalibrationPhase phase = phaseOf(session_);
+    steps(stepOf(phase));
     const onset::Calibration *calibration =
         session_.calibration ? &*session_.calibration : nullptr;
 
-    switch (panel) {
-    case Panel::Silence:
+    switch (phase) {
+    case CalibrationPhase::Silence:
       silenceStep(calibration);
       return;
-    case Panel::Notes:
+    case CalibrationPhase::Notes:
       if (calibration)
         notesStep(*calibration);
       return;
-    case Panel::NoSound:
+    case CalibrationPhase::NoSound:
       noSound();
       return;
-    case Panel::Result:
+    case CalibrationPhase::Result:
       break;
     }
     if (!calibration)
@@ -1359,9 +1335,8 @@ private:
   double scaleHeight_;
 };
 
-/// Рисует в области `area` контекста строки тактов (design.md D8), а пока идёт
-/// калибровка — её панель (design D7). Размеры — доли высоты, так что окно
-/// одинаково на любом мониторе.
+/// Рисует в области `area` контекста строки тактов, а пока идёт калибровка —
+/// её панель. Размеры — доли высоты, так что окно одинаково на любом мониторе.
 void paintArea(HDC context, const RECT &area) {
   if (const auto &session = trainer().calibration()) {
     PanelPainter(context, area, *session).paint();
@@ -1714,31 +1689,24 @@ void paintToggle(const DRAWITEMSTRUCT &item) {
 
 /// Ставит кнопки калибровки по состоянию тренажёра: Calibrate… доступна без
 /// сессии при остановленном транспорте и с каналом, на итоге называется
-/// Finish, а в свёрнутой панели настроек и у входа MIDI скрыта; Cancel — справа вверху
-/// панели калибровки на шагах; Close, Calibrate again и Apply anyway — справа
-/// внизу на итоге (design D7).
+/// Finish, а в свёрнутой панели настроек и у входа MIDI скрыта; Cancel —
+/// справа вверху панели калибровки на шагах; Close, Calibrate again и Apply
+/// anyway — справа внизу на итоге.
 void placeCalibrationButtons(HWND dialog) {
   const auto &session = trainer().calibration();
   const bool finished = trainer().calibrationFinished();
   setButtonText(dialog, IDC_CALIBRATE, finished ? "Finish" : "Calibrate...");
   EnableWindow(GetDlgItem(dialog, IDC_CALIBRATE),
-               finished || (!session && trainer().status().measuring == Measuring::Waiting));
+               finished ||
+                   (!session && trainer().measurement().measuring == Measuring::Waiting));
   showControl(dialog, IDC_CALIBRATE,
               !trainer().settings().panelCollapsed && trainer().settings().midiInput.empty());
 
-  const RECT area = rowsArea(dialog);
-  const PanelLayout layout = panelLayout(area);
-  const std::optional<Panel> panel = session ? std::optional(panelOf(*session)) : std::nullopt;
-  const bool stepping = panel == Panel::Silence || panel == Panel::Notes;
-
-  // Apply anyway — у итога с нотами, где порог не поставлен.
-  std::optional<double> apply;
-  if (session && session->calibration) {
-    const std::optional<onset::CalibrationResult> &result = session->calibration->result();
-    if (result && (result->verdict == onset::Verdict::NoiseTooClose ||
-                   result->verdict == onset::Verdict::Clipping))
-      apply = clamped(Settings{.silenceDb = result->thresholdDb}).silenceDb;
-  }
+  const PanelLayout layout = panelLayout(rowsArea(dialog));
+  const std::optional<CalibrationPhase> phase =
+      session ? std::optional(phaseOf(*session)) : std::nullopt;
+  const bool stepping = phase == CalibrationPhase::Silence || phase == CalibrationPhase::Notes;
+  const std::optional<double> apply = trainer().anywaySilenceDb();
 
   const auto box = [&](double right, int width, double top) {
     return RECT{.left = pixel(right) - width,
@@ -1901,119 +1869,6 @@ void showSettings() {
   if (window)
     fillControls(window);
 }
-
-#ifdef TRAINING_DEBUG_BUILD
-std::optional<bool> clickCheckbox(int control) {
-  if (!window || !GetDlgItem(window, control))
-    return std::nullopt;
-
-  // Как щелчок мышью: флажок переключается, окно получает BN_CLICKED.
-  const bool checked = IsDlgButtonChecked(window, control) != BST_CHECKED;
-  CheckDlgButton(window, control, checked ? BST_CHECKED : BST_UNCHECKED);
-  SendMessage(window, WM_COMMAND, MAKEWPARAM(control, BN_CLICKED),
-              reinterpret_cast<LPARAM>(GetDlgItem(window, control)));
-  return checked;
-}
-
-bool clickButton(int control) {
-  HWND button = window ? GetDlgItem(window, control) : nullptr;
-  if (!button || !IsWindowVisible(button) || !IsWindowEnabled(button))
-    return false;
-
-  SendMessage(window, WM_COMMAND, MAKEWPARAM(control, BN_CLICKED),
-              reinterpret_cast<LPARAM>(button));
-  return true;
-}
-#endif
-
-#ifdef TRAINING_DEBUG_BUILD
-bool dragGauge(double fromMs, double toMs) {
-  if (!window || trainer().settings().panelCollapsed)
-    return false;
-
-  const GaugeLayout layout = gaugeLayout(gaugeRect(window), trainer().settings().scaleMs);
-  const int y = pixel((layout.top + layout.bottom) / 2.0);
-  const auto point = [&](double ms) {
-    return static_cast<LPARAM>(MAKELONG(pixel(layout.x(ms)), y));
-  };
-  SendMessage(window, WM_LBUTTONDOWN, MK_LBUTTON, point(fromMs));
-  SendMessage(window, WM_MOUSEMOVE, MK_LBUTTON, point(toMs));
-  SendMessage(window, WM_LBUTTONUP, 0, point(toMs));
-  return true;
-}
-
-std::optional<std::string> typeText(int control, const char *text) {
-  HWND field = window ? GetDlgItem(window, control) : nullptr;
-  if (!field || !IsWindowVisible(field) || !text || !*text)
-    return std::nullopt;
-
-  SetDlgItemText(window, control, text);
-  SendMessage(window, WM_COMMAND, MAKEWPARAM(control, EN_CHANGE),
-              reinterpret_cast<LPARAM>(field));
-  SendMessage(window, WM_COMMAND, MAKEWPARAM(control, EN_KILLFOCUS),
-              reinterpret_cast<LPARAM>(field));
-  std::array<char, 64> left{};
-  GetDlgItemText(window, control, left.data(), static_cast<int>(left.size()));
-  return std::string(left.data());
-}
-#endif
-
-#if defined(TRAINING_DEBUG_BUILD) && !defined(_WIN32)
-namespace {
-
-/// Рисует `paint` в память размером `width`×`height` точек и пишет картинку в
-/// файл PPM `path`.
-///
-/// @return правда, если файл записан.
-template <typename Paint>
-bool snapshot(const char *path, int width, int height, const Paint &paint) {
-  if (!path || width <= 0 || height <= 0)
-    return false;
-
-  HDC context = SWELL_CreateMemContext(nullptr, width, height);
-  if (!context)
-    return false;
-  paint(context, RECT{.left = 0, .top = 0, .right = width, .bottom = height});
-
-  // Кадр контекста — точки по строкам, 0xAARRGGBB; в PPM — R, G, B.
-  const auto *pixels = static_cast<const unsigned int *>(SWELL_GetCtxFrameBuffer(context));
-  std::FILE *file = pixels ? std::fopen(path, "wb") : nullptr;
-  bool written = file != nullptr;
-  if (file) {
-    written = std::fprintf(file, "P6\n%d %d\n255\n", width, height) > 0;
-    std::vector<unsigned char> line(static_cast<std::size_t>(width) * 3);
-    for (int y = 0; y < height && written; ++y) {
-      for (int x = 0; x < width; ++x) {
-        const unsigned int pixel =
-            pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
-                   static_cast<std::size_t>(x)];
-        const auto at = static_cast<std::size_t>(x) * 3;
-        line[at] = static_cast<unsigned char>(pixel >> 16U);
-        line[at + 1] = static_cast<unsigned char>(pixel >> 8U);
-        line[at + 2] = static_cast<unsigned char>(pixel);
-      }
-      written = std::fwrite(line.data(), 1, line.size(), file) == line.size();
-    }
-    // Ошибка записи из буфера всплывает только при закрытии.
-    written = std::fclose(file) == 0 && written;
-  }
-  SWELL_DeleteGfxContext(context);
-  return written;
-}
-
-} // namespace
-
-bool snapshotGauge(const char *path, int width, int height) {
-  return snapshot(path, width, height, [](HDC context, const RECT &area) {
-    const Settings &settings = trainer().settings();
-    paintGauge(context, area, settings.window(), settings.scaleMs);
-  });
-}
-
-bool snapshotRows(const char *path, int width, int height) {
-  return snapshot(path, width, height, paintArea);
-}
-#endif
 
 void closeWindow() {
   if (!window)

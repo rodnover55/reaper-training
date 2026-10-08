@@ -21,6 +21,13 @@ add_executable(training_tests
   grid_timeline_test.cpp
   journal_test.cpp
   midi_device_remap_test.cpp
+  trainer_calibration_test.cpp
+  trainer_loop_test.cpp
+  trainer_measurement_test.cpp
+  trainer_midi_notes_test.cpp
+  trainer_onset_search_test.cpp
+  trainer_settings_test.cpp
+  trainer_transport_test.cpp
   # Журнал расширения от REAPER не зависит, и его замена файла проверяется
   # здесь же.
   ${CMAKE_SOURCE_DIR}/src/journal.cpp)
@@ -30,7 +37,8 @@ target_link_libraries(training_tests PRIVATE
   fmt::fmt
   training_concurrency
   training_onset
-  training_grid)
+  training_grid
+  training_trainer)
 
 target_include_directories(training_tests PRIVATE . ${CMAKE_SOURCE_DIR}/src)
 
@@ -75,9 +83,9 @@ endif()
 
 # Изоляция проверяется отдельно и текстом: заголовки ОС и SDK REAPER находятся
 # в системных путях без всякой зависимости, и направление зависимостей их не
-# ловит (design.md D9). Механика общая, списки — у каждой библиотеки свои и
-# лежат в её isolation.cmake.
-foreach(isolated concurrency onset grid)
+# ловит. Механика общая, списки — у каждой библиотеки свои и лежат в её
+# isolation.cmake.
+foreach(isolated concurrency onset grid trainer)
   add_test(NAME ${isolated}_isolation
     COMMAND "${CMAKE_COMMAND}"
       -D "LIBRARY_DIR=${CMAKE_SOURCE_DIR}/libs/${isolated}"

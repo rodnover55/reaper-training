@@ -13,21 +13,6 @@
 #define REAPERAPI_WANT_GetNumAudioInputs
 #define REAPERAPI_WANT_GetInputOutputLatency
 #define REAPERAPI_WANT_get_config_var
-#define REAPERAPI_WANT_projectconfig_var_getoffs
-#define REAPERAPI_WANT_projectconfig_var_addr
-#define REAPERAPI_WANT_EnumProjects
-#define REAPERAPI_WANT_GetSelectedMediaItem
-#define REAPERAPI_WANT_GetActiveTake
-#define REAPERAPI_WANT_GetMediaItemInfo_Value
-#define REAPERAPI_WANT_GetMediaItemTakeInfo_Value
-#define REAPERAPI_WANT_SetMediaItemTakeInfo_Value
-#define REAPERAPI_WANT_GetMediaItemTake_Source
-#define REAPERAPI_WANT_GetMediaSourceNumChannels
-#define REAPERAPI_WANT_CreateTakeAudioAccessor
-#define REAPERAPI_WANT_DestroyAudioAccessor
-#define REAPERAPI_WANT_GetAudioAccessorStartTime
-#define REAPERAPI_WANT_GetAudioAccessorEndTime
-#define REAPERAPI_WANT_GetAudioAccessorSamples
 #define REAPERAPI_WANT_Master_GetPlayRate
 #define REAPERAPI_WANT_DockWindowActivate
 #define REAPERAPI_WANT_DockWindowRemove
@@ -42,7 +27,6 @@
 #define REAPERAPI_WANT_GetTempoTimeSigMarker
 #define REAPERAPI_WANT_GetProjectTimeSignature2
 #define REAPERAPI_WANT_GetPlayPositionEx
-#define REAPERAPI_WANT_GetCursorPosition
 #define REAPERAPI_WANT_SetExtState
 #define REAPERAPI_WANT_GetExtState
 #define REAPERAPI_WANT_Audio_IsRunning
@@ -52,11 +36,6 @@
 #define REAPERAPI_WANT_GetNumMIDIInputs
 #define REAPERAPI_WANT_GetMIDIInputName
 #define REAPERAPI_WANT_GetMIDIInputNameNoAlias
-#define REAPERAPI_WANT_TakeIsMIDI
-#define REAPERAPI_WANT_MIDI_CountEvts
-#define REAPERAPI_WANT_MIDI_GetNote
-#define REAPERAPI_WANT_MIDI_GetProjTimeFromPPQPos
-#define REAPERAPI_WANT_MIDI_GetPPQPosFromProjTime
 
 // SWELL объявляет max и min макросами, и они ломают стандартную библиотеку.
 #define WDL_NO_DEFINE_MINMAX
@@ -67,7 +46,6 @@
 #include "actions.hpp"
 #include "build_stamp.hpp"
 #include "control_surface.hpp"
-#include "debug_actions.hpp"
 #include "journal.hpp"
 #include "settings.hpp"
 #include "trainer.hpp"
@@ -112,7 +90,6 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE instance, reaper_plugin_info_t 
     if (inForkedCopy())
       return 0;
 
-    training::reaper::unregisterDebugActions();
     training::reaper::unregisterActions();
     training::reaper::closeWindow();
     training::reaper::unregisterSurface();
@@ -141,7 +118,6 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE instance, reaper_plugin_info_t 
   training::reaper::initTrainer(rec);
   training::reaper::registerSurface(rec);
   training::reaper::registerActions(rec);
-  training::reaper::registerDebugActions(rec);
 
   // Версия и время сборки — чтобы было видно, тот ли модуль загружен:
   // забытый `cmake --install` выглядит как «ничего не изменилось». В журнале

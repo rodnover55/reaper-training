@@ -20,14 +20,16 @@ public:
   const char *GetDescString() override { return "reaper-training"; }
   const char *GetConfigString() override { return ""; }
 
-  void SetPlayState(bool play, bool pause, bool rec) override {
-    trainer().onPlayState(play, pause, rec);
+  // Запись REAPER всегда ведёт с воспроизведением: флаг записи запуску ничего
+  // не добавляет.
+  void SetPlayState(bool play, bool pause, bool /*rec*/) override {
+    trainer().onPlayState(play, pause);
   }
 
   int Extended(int call, void *parm1, void *parm2, void *parm3) override {
     // Скорость — второй параметр; первый, темп, тренажёру не нужен. При
     // открытии проекта и смене вкладки REAPER скорость не передаёт, а
-    // Master_GetPlayRate уже отдаёт скорость нового проекта (findings.md, R3).
+    // Master_GetPlayRate уже отдаёт скорость нового проекта.
     if (call == CSURF_EXT_SETBPMANDPLAYRATE)
       trainer().onPlayRate(parm2 ? *static_cast<const double *>(parm2)
                                  : Master_GetPlayRate(nullptr));

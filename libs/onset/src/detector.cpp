@@ -79,7 +79,22 @@ void Detector::setSilenceDb(double silenceDb) {
   threshold_ = std::pow(10.0, silenceDb / 20.0);
 }
 
-void Detector::setEnergyRatio(double energyRatio) { energyRatio_ = energyRatio; }
+void Detector::skip(std::uint64_t count) {
+  if (count == 0)
+    return;
+
+  // Звук после пропуска — как начало потока, но время и мёртвое время прошлой
+  // атаки идут дальше. Сравнения — только по окнам целиком после пропуска:
+  // окно максимума огибающей лежит от 25 до 5 мс назад, окна энергии второго
+  // пути — 60 мс.
+  const std::uint64_t position = position_ + count;
+  const std::uint64_t armedFrom = armedFrom_;
+  const std::uint64_t energyArmedFrom = energyArmedFrom_;
+  reset();
+  position_ = position;
+  armedFrom_ = std::max(armedFrom, position + backOldest_);
+  energyArmedFrom_ = std::max({energyArmedFrom, armedFrom_, position + 3 * energyLength_});
+}
 
 void Detector::process(std::span<const float> samples, std::vector<Onset> &onsets) {
   for (const float sample : samples)
