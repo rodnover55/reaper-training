@@ -39,14 +39,34 @@ struct CalibrationChunk {
   bool gap = false;
 };
 
+/// Часы звука хоста по блокам — от них хост отсчитывает возраст событий
+/// истории MIDI-входа.
+struct HostClock {
+  /// Номер сэмпла в счёте хука на конце последнего блока, который обработал
+  /// хост: от этого конца хост отсчитывает возраст событий.
+  std::uint64_t end = 0;
+
+  /// Сколько сэмплов прошло от начала первого блока запуска до `end`; пусто —
+  /// запуска нет или хост ещё не обработал ни одного его блока.
+  std::optional<std::uint64_t> elapsed;
+
+  /// Длина последнего блока, сэмплов.
+  int blockLength = 0;
+
+  /// Частота дискретизации звуковой карты, Гц.
+  double sampleRate = 0.0;
+
+  friend bool operator==(const HostClock &, const HostClock &) = default;
+};
+
 /// Вход звуковой карты: аудиохук и рабочий поток, в котором ядро
 /// (`trainer::OnsetSearch`) ищет атаки.
 ///
 /// Существует от создания до уничтожения; хук зарегистрирован всё это время.
 /// Звук выбранного канала хук берёт по режиму звукового пути (`setMode`): в
 /// режиме атак рабочий поток подаёт его в поиск атак ядра, а тот сам решает
-/// по запуску транспорта, какие блоки разбирать и какие атаки отдавать; в
-/// режиме калибровки — в очередь калибровки.
+/// по запуску транспорта, какие атаки отдавать; в режиме калибровки — в
+/// очередь калибровки.
 ///
 /// Многопоточность: все методы, кроме деструктора, можно звать из любого
 /// потока, но `popOnset` — только из одного и `popCalibration` — только из
@@ -72,6 +92,16 @@ public:
 
   /// Ложь, если REAPER не принял аудиохук: тогда атак не будет никогда.
   bool registered() const { return registered_; }
+
+  /// Часы звука хоста на конец последнего блока — и при запуске, и на
+  /// остановке. Для запуска, начатого в момент `run`, — ещё и время от его
+  /// первого блока: первого блока звука хоста, взятого не раньше `run`, в
+  /// любом режиме звукового пути.
+  ///
+  /// @param run момент начала запуска (`trainer::Transport::start`);
+  ///   `trainer::kNoRun` — запуска нет.
+  /// @return часы; пусто — хост ещё не обработал ни одного блока.
+  std::optional<HostClock> clock(trainer::Moment run) const;
 
   /// Выбирает входной канал звуковой карты, 0 — первый. Действует со
   /// следующего блока.
@@ -143,6 +173,7 @@ private:
                             audio_hook_register_t *registration);
   void onBlock(int length, double sampleRate, audio_hook_register_t *registration);
 
+  void publishClock(const BlockHeader &header);
   void work();
   void feed(const BlockHeader &header);
   void forwardCalibration(const BlockHeader &header, bool gap);
@@ -188,6 +219,19 @@ private:
 
   // Заполняет конструктор до регистрации хука, дальше его читает REAPER.
   audio_hook_register_t hook_{};
+
+  // Звуковой поток пишет, читают все: часы звука хоста и запуска. Счётчик
+  // нечётный, пока хук их пишет; читатель повторяет чтение, если счётчик
+  // сменился; ноль — блоков ещё не было.
+  std::atomic<std::uint64_t> clockSequence_{0};
+  std::atomic<trainer::Moment::rep> clockRun_{trainer::kNoRun.time_since_epoch().count()};
+  std::atomic<std::uint64_t> clockRunStart_{0};
+  std::atomic<std::uint64_t> clockBlock_{0};
+  std::atomic<int> clockLength_{0};
+
+  // Только звуковой поток: запуск, для которого найден первый блок.
+  trainer::Moment hookRun_ = trainer::kNoRun;
+  std::uint64_t hookRunStart_ = 0;
 
   // Главный поток пишет, звуковой читает.
   std::atomic<int> channel_{0};

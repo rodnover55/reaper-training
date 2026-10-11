@@ -17,6 +17,7 @@
 using training::trainer::AudioBlock;
 using training::trainer::AudioOnset;
 using training::trainer::Compensation;
+using training::trainer::CountIn;
 using training::trainer::Moment;
 using training::trainer::Transport;
 
@@ -142,47 +143,138 @@ TEST_CASE("Поиск атак: атака у конца блока — с эт�
   }
 }
 
-TEST_CASE("Поиск атак: при count-in позиция стоит, и атаки отбрасываются") {
-  Bench bench;
+TEST_CASE("Поиск атак: атака отсчёта — перед позицией начала на свой путь до конца "
+          "отсчёта") {
+  // Отсчёт 19200 сэмплов (0.4 с) перед запуском с 8 с: позиция блоков отсчёта
+  // стоит на 8 с.
+  Bench bench(false);
+  REQUIRE(bench.transport.start(momentOf(0), 8.0, Compensation{},
+                                CountIn{.samples = 19200, .sampleRate = kSampleRate}, 1.0));
   bench.feed(clicks({4800, 12000}, 19200), 512, 8.0, true);
-  CHECK(bench.onsets.empty());
-  CHECK(bench.logged("onset dropped: position 8.000000 is not moving"));
+  REQUIRE(bench.onsets.size() == 2);
+  // Отсчёт начался на 8.0 − 0.4 = 7.6 с.
+  CHECK(std::abs(startOf(bench.onsets[0], 7.6) - 4800.0) < kStartTolerance);
+  CHECK(std::abs(startOf(bench.onsets[1], 7.6) - 12000.0) < kStartTolerance);
+  CHECK(bench.onsets[0].beforeStart);
+  CHECK(bench.onsets[1].beforeStart);
 
-  // Позиция пошла: атаки берутся.
+  // После отсчёта позиция пошла с 8 с.
   bench.feed(clicks({4800}, 9600), 512, 8.0, false, 19200);
-  REQUIRE(bench.onsets.size() == 1);
-  CHECK(std::abs(startOf(bench.onsets[0], 8.0) - 4800.0) < kStartTolerance);
+  REQUIRE(bench.onsets.size() == 3);
+  CHECK(std::abs(startOf(bench.onsets[2], 8.0) - 4800.0) < kStartTolerance);
+  CHECK_FALSE(bench.onsets[2].beforeStart);
 }
 
-TEST_CASE("Поиск атак: атака в первом блоке запуска отбрасывается") {
-  // У первого блока нет прошлого: позиция ещё не сдвигалась.
+TEST_CASE("Поиск атак: атака отсчёта учитывает скорость запуска") {
+  // Скорость 2: 19200 сэмплов отсчёта — 0.8 с шкалы.
+  Bench bench(false);
+  REQUIRE(bench.transport.start(momentOf(0), 8.0, Compensation{},
+                                CountIn{.samples = 19200, .sampleRate = kSampleRate}, 2.0));
+  bench.feed(clicks({9600}, 19200), 512, 8.0, true);
+  REQUIRE(bench.onsets.size() == 1);
+  // Атака за 9600 сэмплов (0.2 с) до конца отсчёта — за 0.4 с шкалы до 8 с.
+  const double place =
+      bench.onsets[0].blockPosition + bench.onsets[0].offset / kSampleRate * 2.0;
+  CHECK(place == doctest::Approx(7.6).epsilon(1e-3));
+}
+
+TEST_CASE("Поиск атак: атака в первом блоке запуска измеряется") {
   Bench bench;
   bench.feed(clicks({4000, 12000}, 14400), 4800);
-  REQUIRE(bench.onsets.size() == 1);
-  CHECK(std::abs(startOf(bench.onsets[0]) - 12000.0) < kStartTolerance);
-  CHECK(bench.logged("onset dropped: position 0.000000 is not moving"));
+  REQUIRE(bench.onsets.size() == 2);
+  CHECK(std::abs(startOf(bench.onsets[0]) - 4000.0) < kStartTolerance);
+  CHECK(std::abs(startOf(bench.onsets[1]) - 12000.0) < kStartTolerance);
+  CHECK_FALSE(bench.onsets[0].beforeStart);
 }
 
-TEST_CASE("Поиск атак: без запуска транспорта блоки не разбираются") {
+TEST_CASE("Поиск атак: атака за 15 мс до конца отсчёта — за 15 мс до позиции начала") {
+  Bench bench(false);
+  REQUIRE(bench.transport.start(momentOf(0), 0.0, Compensation{},
+                                CountIn{.samples = 19200, .sampleRate = kSampleRate}, 1.0));
+  bench.feed(clicks({19200 - 720}, 19200 + 4800), 512, 0.0, true);
+  REQUIRE_FALSE(bench.onsets.empty());
+  const AudioOnset &onset = bench.onsets[0];
+  CHECK(onset.beforeStart);
+  CHECK(std::abs((onset.blockPosition * kSampleRate + onset.offset) - (-720.0)) <
+        kStartTolerance);
+}
+
+TEST_CASE("Поиск атак: атака на 300-м сэмпле первого блока — на 6.25 мс") {
+  Bench bench;
+  bench.feed(clicks({300}, 9600), 512);
+  REQUIRE(bench.onsets.size() == 1);
+  CHECK(std::abs(startOf(bench.onsets[0]) - 300.0) < kStartTolerance);
+}
+
+TEST_CASE("Поиск атак: атака через 2 мс после Play находится — поток идёт и до Play") {
+  // Поиск слушает вход и на остановке: до Play — тишина, щелчок — через 100
+  // сэмплов после первого блока запуска на 9600.
+  Bench bench(false);
+  REQUIRE(bench.transport.start(momentOf(9600), 0.0, Compensation{}));
+  bench.feed(clicks({9700}, 19200), 480);
+  REQUIRE(bench.onsets.size() == 1);
+  CHECK(std::abs(startOf(bench.onsets[0], 0.2) - 100.0) < kStartTolerance);
+  CHECK_FALSE(bench.onsets[0].beforeStart);
+  CHECK(bench.onsets[0].run == momentOf(9600));
+}
+
+TEST_CASE("Поиск атак: звон до Play атакой на старте не становится") {
+  // Струна 196 Гц звенит с ноты за 2 с до Play и в момент Play ещё громче
+  // порога тишины; через 20 мс после Play — щелчок. Атака струны старше
+  // секунды и запуска не ждёт.
+  constexpr std::size_t kPlay = 96000;
+  std::vector<float> signal = clicks({kPlay + 960}, kPlay + 9600);
+  for (std::size_t i = 0; i < signal.size(); ++i) {
+    const double t = static_cast<double>(i) / kSampleRate;
+    signal[i] += static_cast<float>(0.5 * std::sin(2.0 * std::numbers::pi * 196.0 * t) *
+                                    std::exp(-t / 1.0));
+  }
+  Bench bench(false);
+  REQUIRE(bench.transport.start(momentOf(kPlay), 0.0, Compensation{}));
+  bench.feed(signal, 480);
+  REQUIRE(bench.onsets.size() == 1);
+  CHECK(std::abs(startOf(bench.onsets[0], 2.0) - 960.0) < kStartTolerance);
+  CHECK_FALSE(bench.onsets[0].beforeStart);
+}
+
+TEST_CASE("Поиск атак: без запуска атаки не отдаются") {
   Bench bench(false);
   bench.feed(clicks({4800, 12000}, 24000), 512);
   CHECK(bench.onsets.empty());
   CHECK(bench.lines.empty());
 }
 
-TEST_CASE("Поиск атак: блоки, взятые до начала запуска, не разбираются") {
+TEST_CASE("Поиск атак: атака до Play отдаётся с первым блоком запуска перед позицией "
+          "начала") {
   Bench bench(false);
   REQUIRE(bench.transport.start(momentOf(9600), 0.0, Compensation{}));
   bench.feed(clicks({4800, 12000}, 19200), 512);
 
-  // Щелчок на 4800 — в блоке до начала: ни атаки, ни строки журнала. Первый
-  // блок запуска — на 9728.
-  REQUIRE(bench.onsets.size() == 1);
-  CHECK(std::abs(startOf(bench.onsets[0]) - 12000.0) < kStartTolerance);
-  CHECK_FALSE(bench.logged("onset dropped"));
+  // Щелчок на 4800 — до первого блока запуска на 9728: на шкале он перед
+  // позицией начала на путь до этого блока.
+  REQUIRE(bench.onsets.size() == 2);
+  CHECK(bench.onsets[0].beforeStart);
+  CHECK(std::abs(startOf(bench.onsets[0]) - (4800.0 - 9728.0)) < kStartTolerance);
+  CHECK_FALSE(bench.onsets[1].beforeStart);
+  CHECK(std::abs(startOf(bench.onsets[1]) - 12000.0) < kStartTolerance);
+  CHECK(bench.logged("onset at"));
 }
 
-TEST_CASE("Поиск атак: после остановки блоки не разбираются") {
+TEST_CASE("Поиск атак: атака до Play с отсчётом — перед позицией начала на путь до конца "
+          "отсчёта") {
+  // Отсчёт 19200 сэмплов после Play на 9600, позиция начала 8 с; щелчок за
+  // 240 сэмплов (5 мс) до Play.
+  Bench bench(false);
+  REQUIRE(bench.transport.start(momentOf(9600), 8.0, Compensation{},
+                                CountIn{.samples = 19200, .sampleRate = kSampleRate}, 1.0));
+  bench.feed(clicks({9360}, 9600 + 19200), 480, 8.0, true);
+  REQUIRE(bench.onsets.size() == 1);
+  CHECK(bench.onsets[0].beforeStart);
+  CHECK(std::abs(startOf(bench.onsets[0], 8.0) - (9360.0 - 9600.0 - 19200.0)) <
+        kStartTolerance);
+}
+
+TEST_CASE("Поиск атак: после остановки атаки не отдаются") {
   Bench bench;
   const std::vector<float> signal = clicks({4800, 12000}, 19200);
   bench.feed(std::vector(signal.begin(), signal.begin() + 9600), 512);
@@ -196,10 +288,10 @@ TEST_CASE("Поиск атак: после остановки блоки не р
   CHECK(bench.lines.empty());
 }
 
-TEST_CASE("Поиск атак: блок, взятый до нового начала, не входит в поток нового запуска") {
+TEST_CASE("Поиск атак: блок, взятый до нового начала, — звук до Play нового запуска") {
   // Остановка и запуск без перерыва в звуке: блок 9 (4608–5119) взят до
   // нового начала на 5120, а подан поиску после него. В нём щелчок, а через
-  // 30 мс, в мёртвом времени после него, — щелчок нового запуска на 6240.
+  // 30 мс — второй щелчок, на 6240.
   const std::vector<float> signal = clicks({4800, 6240}, 9600);
   constexpr std::size_t kBlock = 512;
 
@@ -210,34 +302,27 @@ TEST_CASE("Поиск атак: блок, взятый до нового нач�
   for (std::size_t at = 9 * kBlock; at < signal.size(); at += kBlock)
     restarted.feedBlock(signal, at, kBlock);
 
-  // Тот же запуск без блока 9.
-  Bench clean(false);
-  REQUIRE(clean.transport.start(momentOf(5120), 0.0, Compensation{}));
-  for (std::size_t at = 10 * kBlock; at < signal.size(); at += kBlock)
-    clean.feedBlock(signal, at, kBlock);
-
-  // Щелчок блока 9 атаки не дал, а щелчок нового запуска стоит там же, где
-  // без блока 9: блок 9 детектор не видел.
-  REQUIRE(clean.onsets.size() == 1);
+  // Поток не прерывался: щелчок 4800 — атака до Play нового запуска, за 320
+  // сэмплов до позиции начала, а щелчок 6240 — в её мёртвом времени.
   REQUIRE(restarted.onsets.size() == 1);
-  CHECK(restarted.onsets[0].blockPosition == clean.onsets[0].blockPosition);
-  CHECK(restarted.onsets[0].offset == clean.onsets[0].offset);
-  CHECK(std::abs(startOf(restarted.onsets[0]) - 6240.0) < kStartTolerance);
-  CHECK_FALSE(restarted.logged("onset dropped"));
+  CHECK(restarted.onsets[0].beforeStart);
+  CHECK(restarted.onsets[0].run == momentOf(5120));
+  CHECK(std::abs(startOf(restarted.onsets[0]) - (-320.0)) < kStartTolerance);
 }
 
-TEST_CASE("Поиск атак: новый запуск забывает прошлый звук") {
+TEST_CASE("Поиск атак: поток не прерывается на новом запуске") {
   Bench bench;
   bench.feed(clicks({4800}, 9600), 512);
   REQUIRE(bench.onsets.size() == 1);
 
   bench.restart(9600);
   bench.onsets.clear();
-  // Первый блок нового запуска снова без прошлого: его атака отбрасывается,
-  // хотя позиция ушла от последнего блока прошлого запуска.
+  // Атаки нового запуска — на своём месте, в том числе в первом блоке.
   bench.feed(clicks({4000, 12000}, 14400), 4800, 1.0, false, 9600);
-  REQUIRE(bench.onsets.size() == 1);
-  CHECK(std::abs(startOf(bench.onsets[0], 1.0) - 12000.0) < kStartTolerance);
+  REQUIRE(bench.onsets.size() == 2);
+  CHECK(std::abs(startOf(bench.onsets[0], 1.0) - 4000.0) < kStartTolerance);
+  CHECK(std::abs(startOf(bench.onsets[1], 1.0) - 12000.0) < kStartTolerance);
+  CHECK(bench.onsets[0].run == momentOf(9600));
 }
 
 TEST_CASE("Поиск атак: пропавший звук занимает время") {

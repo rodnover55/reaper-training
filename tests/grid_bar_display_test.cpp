@@ -356,3 +356,22 @@ TEST_CASE("показ тактов: среднее красится по окн�
   CHECK(views[1].mean->tone == Tone::Good);
   CHECK(views[1].values[0].cell.tone == Tone::Bad);
 }
+
+TEST_CASE("показ тактов: строка такта затакта подписана номером от конца затакта") {
+  Bars bars;
+  bars.setLeadIn(4);
+  // Ноты в каждом такте: пустые строки свернулись бы.
+  for (const double beats : {8.0, 12.0, 16.0}) {
+    bars.play(beats, 0.0, kWindow, steady());
+    note(bars, beats, 1.0);
+  }
+  const auto views = present(bars);
+  REQUIRE(views.size() == 3);
+  CHECK(views[0].label == "5");
+  CHECK_FALSE(views[0].leadIn);
+  CHECK(views[1].label == "\u2212"
+                          "1");
+  CHECK(views[1].leadIn);
+  CHECK(views[2].label == "\u2212"
+                          "2");
+}

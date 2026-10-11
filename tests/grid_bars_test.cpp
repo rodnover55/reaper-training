@@ -310,3 +310,58 @@ TEST_CASE("такты: позднее значение в свёрнутый т�
   CHECK(shown(bars) == std::vector<std::int64_t>{58, 57, 56, 55});
   CHECK(valueMs(visibleRow(bars, 1), 3, 3) == doctest::Approx(5.0));
 }
+
+TEST_CASE("Свод: такты затакта получают номер от такта, которым затакт кончается") {
+  Bars bars;
+  // Затакт кончается тактом 5 (номер такта 4 от начала проекта).
+  bars.setLeadIn(4);
+  for (const int number : {3, 4, 5, 6}) {
+    play(bars, barStart(number));
+    note(bars, barStart(number), 1.0);
+  }
+
+  const auto &rows = bars.rows();
+  REQUIRE(rows.size() == 4);
+  CHECK(rows[0].bar.index == 5);
+  CHECK_FALSE(rows[0].leadIn);
+  CHECK_FALSE(rows[1].leadIn);
+  REQUIRE(rows[2].leadIn);
+  CHECK(*rows[2].leadIn == -1);
+  REQUIRE(rows[3].leadIn);
+  CHECK(*rows[3].leadIn == -2);
+}
+
+TEST_CASE("Свод: после затакта такты до его конца — уже не затакт") {
+  Bars bars;
+  bars.setLeadIn(4);
+  play(bars, barStart(4));
+  play(bars, barStart(5));
+  // Петля вернула воспроизведение в такт 3.
+  play(bars, barStart(3));
+  CHECK_FALSE(bars.rows().front().leadIn);
+}
+
+TEST_CASE("Свод: новый запуск забывает затакт") {
+  Bars bars;
+  bars.setLeadIn(4);
+  bars.clear();
+  play(bars, barStart(3));
+  CHECK_FALSE(bars.rows().front().leadIn);
+}
+
+TEST_CASE("Свод: ноту до запуска берёт первый узел запуска, узлы до него — нет") {
+  // Запуск с удара 3 такта 1 — с 1.0 с.
+  Bars bars;
+  play(bars, 2.0);
+  const double start = timeline().timeAt(2.0);
+
+  // За 100 мс до начала ближайший узел — удар 3, начало запуска.
+  CHECK(bars.addNote(start - 0.100, 1.0, kWindow, timeline(), start));
+  // За 400 мс — удар 2, до начала запуска.
+  CHECK_FALSE(bars.addNote(start - 0.400, 1.0, kWindow, timeline(), start));
+
+  const BarRow &row = visibleRow(bars, 0);
+  REQUIRE(row.beats[2].slots[0].deviation);
+  CHECK(*row.beats[2].slots[0].deviation == doctest::Approx(-0.100));
+  CHECK_FALSE(row.beats[1].slots[0].deviation);
+}

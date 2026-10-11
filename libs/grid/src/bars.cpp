@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 
 namespace training::grid {
 namespace {
@@ -16,6 +17,10 @@ constexpr double kEarly = 1.0;
 /// Погрешность перевода времени в удары: позиция ровно на начале удара может
 /// прийти как «235.9999…».
 constexpr double kEdge = 1e-6;
+
+/// Погрешность времени узла на шкале, с: узел ровно на начале запуска может
+/// прийти чуть раньше него.
+constexpr double kEdgeSeconds = 1e-9;
 
 /// Строка такта `bar`: удары не начаты, значений нет.
 BarRow rowOf(const Bar &bar, bool entered) {
@@ -150,6 +155,13 @@ void Bars::enter(const Bar &bar, const HitWindow &window) {
   }
   std::erase_if(rows_, [](const BarRow &row) { return !row.entered; });
 
+  if (leadInEnd_) {
+    if (bar.index < *leadInEnd_)
+      fresh.leadIn = bar.index - *leadInEnd_;
+    else
+      leadInEnd_.reset();
+  }
+
   rows_.push_front(std::move(fresh));
   trim();
 }
@@ -193,10 +205,10 @@ BarRow *Bars::rowFor(const Bar &bar, double nodeBeats, bool create) {
   return nullptr;
 }
 
-void Bars::addNote(double time, double rate, const HitWindow &window,
-                   const Timeline &timeline) {
+bool Bars::addNote(double time, double rate, const HitWindow &window, const Timeline &timeline,
+                   std::optional<double> firstNode) {
   if (!position_)
-    return;
+    return false;
 
   const double at = timeline.beatsAt(time);
   const auto beat = static_cast<std::int64_t>(std::floor(at));
@@ -228,7 +240,7 @@ void Bars::addNote(double time, double rate, const HitWindow &window,
       static_cast<double>(nodeBeat) + static_cast<double>(slot) / divisions(mode);
   BarRow *row = rowFor(nodeBar, nodeBeats, true);
   if (!row)
-    return;
+    return false;
 
   RowBeat &cells = row->beats[static_cast<std::size_t>(nodeBeat - row->bar.firstBeat)];
   start(cells, nodeBeat == beat ? mode : mode_);
@@ -240,6 +252,8 @@ void Bars::addNote(double time, double rate, const HitWindow &window,
 
   const double nodeTime = timeline.timeAt(static_cast<double>(nodeBeat) +
                                           static_cast<double>(slot) / divisions(beatMode));
+  if (firstNode && nodeTime < *firstNode - kEdgeSeconds)
+    return false;
   const double deviation = (time - nodeTime) / rate;
   RowSlot &target = cells.slots[static_cast<std::size_t>(slot)];
   if (target.deviation) {
@@ -256,6 +270,7 @@ void Bars::addNote(double time, double rate, const HitWindow &window,
   row->folded = false;
   refresh(*row);
   trim();
+  return true;
 }
 
 void Bars::clear() {
@@ -263,6 +278,7 @@ void Bars::clear() {
   position_.reset();
   currentBeat_.reset();
   loopBeats_ = 0.0;
+  leadInEnd_.reset();
 }
 
 void Bars::trim() {

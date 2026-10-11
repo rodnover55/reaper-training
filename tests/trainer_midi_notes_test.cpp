@@ -4,6 +4,7 @@
 #include "training/trainer/midi_notes.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,19 +30,43 @@ MidiEvent noteOn(double position, double age = 0.0, int loop = 0) {
                    .bytes = {0x90, 60, 100}};
 }
 
-/// Чтение истории при идущем запуске с позицией обработки `position`.
-MidiRead reading(double position) {
-  return MidiRead{
-      .measuring = true, .device = kDevice, .position = position, .compensation = 0.0};
+/// Длина блока хоста в тестах: 512 сэмплов при 48 кГц, секунды.
+constexpr double kBlock = 512.0 / 48000.0;
+
+/// Чтение истории при идущем запуске с позицией обработки `position`; время
+/// запуска `runTime` — пусто, если хост ещё не обработал блоков запуска.
+MidiRead reading(double position, std::optional<double> runTime = std::nullopt) {
+  return MidiRead{.measuring = true,
+                  .device = kDevice,
+                  .position = position,
+                  .runTime = runTime,
+                  .blockLength = kBlock,
+                  .hostTime = std::nullopt,
+                  .compensation = 0.0};
 }
 
-/// Ноты MIDI со строками журнала в `lines`, запуск начат с позиции 1 с и
-/// позиция уже сдвинулась.
+/// Чтение истории на остановке: тренажёр не меряет, часы звука хоста —
+/// `hostTime`.
+MidiRead stopped(double hostTime) {
+  MidiRead read = reading(0.0);
+  read.measuring = false;
+  read.hostTime = hostTime;
+  return read;
+}
+
+/// Чтение при идущем запуске: время запуска `runTime`, первый блок запуска
+/// начался на `runStart` по часам звука хоста.
+MidiRead running(double position, double runTime, double runStart) {
+  MidiRead read = reading(position, runTime);
+  read.hostTime = runStart + runTime;
+  return read;
+}
+
+/// Ноты MIDI со строками журнала в `lines`, запуск без отсчёта начат с позиции
+/// 1 с.
 MidiNotes moving(std::vector<std::string> &lines) {
   MidiNotes notes([&lines](std::string_view line) { lines.emplace_back(line); });
-  notes.start(1.0);
-  notes.take({}, reading(1.5));
-  lines.clear();
+  notes.start(1.0, 0.0);
   return notes;
 }
 
@@ -65,7 +90,7 @@ TEST_CASE("Ноты MIDI: вход только для управления не
   CHECK(lines.empty());
 }
 
-TEST_CASE("Ноты MIDI: нота при стоящем транспорте (pp < 0) не измеряется") {
+TEST_CASE("Ноты MIDI: нота при стоящем транспорте (pp < 0) без часов хоста не измеряется") {
   std::vector<std::string> lines;
   MidiNotes notes = moving(lines);
   CHECK(notes.take(std::vector{noteOn(-1.0)}, reading(2.1)).empty());
@@ -89,59 +114,78 @@ TEST_CASE("Ноты MIDI: не начало ноты не измеряется")
   CHECK(lines.empty());
 }
 
-TEST_CASE("Ноты MIDI: при count-in позиция стоит, и ноты отбрасываются") {
+TEST_CASE("Ноты MIDI: нота первого блока с позицией хоста с остановки получает место от "
+          "позиции начала") {
   std::vector<std::string> lines;
   MidiNotes notes([&lines](std::string_view line) { lines.emplace_back(line); });
-  notes.start(4.0);
+  notes.start(0.0, 0.0);
 
-  // Позиция у начала записи и не сдвигается, пока идёт count-in.
-  CHECK(notes.take(std::vector{noteOn(4.0, 0.010)}, reading(4.0)).empty());
-  CHECK(notes.take(std::vector{noteOn(4.0, 0.0)}, reading(4.0)).empty());
-  REQUIRE(lines.size() == 2);
-  CHECK(lines[0] == "midi note dropped by count-in: pp=4.000000 note=60 channel=1 "
-                    "velocity=100, arrived 10.0 ms of project time ago");
-}
-
-TEST_CASE("Ноты MIDI: в первом блоке после запуска отбрасывается нота, пришедшая "
-          "до сдвига позиции") {
-  std::vector<std::string> lines;
-  MidiNotes notes([&lines](std::string_view line) { lines.emplace_back(line); });
-  notes.start(0.0);
-
-  // Позиция сдвинулась на 10 мс: нота 15 мс назад пришла раньше сдвига, нота
-  // 5 мс назад — после. Первой хост ставит позицию остановленного транспорта.
+  // Хост поставил ноте позицию, которую вёл на остановке; пришла она в первом
+  // блоке запуска — её возраст равен времени запуска при чтении.
+  const double runTime = 5632.0 / 48000.0;
   const std::vector<MidiNote> taken =
-      notes.take(std::vector{noteOn(22.0, 0.015), noteOn(0.005, 0.005)}, reading(0.010));
+      notes.take(std::vector{noteOn(21.941333, runTime)}, reading(runTime, runTime));
   REQUIRE(taken.size() == 1);
-  CHECK(taken[0].event.position == doctest::Approx(0.005));
-  CHECK(taken[0].event.age == doctest::Approx(0.005));
-  REQUIRE(lines.size() == 2);
-  CHECK(lines[0] == "position moved by 10.0 ms");
-  CHECK(lines[1].starts_with("midi note dropped by count-in: pp=22.000000"));
-}
-
-TEST_CASE("Ноты MIDI: возраст ноты и сдвиг позиции сравниваются на шкале проекта") {
-  MidiNotes earlier;
-  earlier.start(0.0);
-  // Позиция ушла на 20 мс шкалы, нота пришла 30 мс шкалы назад — до сдвига.
-  CHECK(earlier.take(std::vector{noteOn(0.010, 0.030)}, reading(0.020)).empty());
-
-  MidiNotes later;
-  later.start(0.0);
-  CHECK(later.take(std::vector{noteOn(0.010, 0.010)}, reading(0.020)).size() == 1);
-}
-
-TEST_CASE("Ноты MIDI: после сдвига позиции нота измеряется с компенсацией") {
-  std::vector<std::string> lines;
-  MidiNotes notes = moving(lines);
-  MidiRead read = reading(5.0);
-  read.compensation = 0.006;
-
-  // Сдвиг был на прошлом чтении: и давняя нота — не count-in.
-  const std::vector<MidiNote> taken = notes.take(std::vector{noteOn(4.0, 1.0)}, read);
-  REQUIRE(taken.size() == 1);
-  CHECK(taken[0].time == doctest::Approx(4.0 - 0.006));
+  CHECK(taken[0].time == doctest::Approx(0.0));
+  CHECK_FALSE(taken[0].beforeStart);
   CHECK(lines.empty());
+}
+
+TEST_CASE("Ноты MIDI: нота второго блока и дальше — по позиции события") {
+  MidiNotes notes;
+  notes.start(0.0, 0.0);
+  const double runTime = 0.117333;
+  const std::vector<MidiNote> taken = notes.take(
+      std::vector{noteOn(0.021333, runTime - 0.021333), noteOn(0.096, runTime - 0.096)},
+      reading(runTime, runTime));
+  REQUIRE(taken.size() == 2);
+  CHECK(taken[0].time == doctest::Approx(0.021333));
+  CHECK(taken[1].time == doctest::Approx(0.096));
+}
+
+TEST_CASE("Ноты MIDI: без времени запуска место — позиция события") {
+  MidiNotes notes;
+  notes.start(0.0, 0.0);
+  const std::vector<MidiNote> taken = notes.take(std::vector{noteOn(0.5, 0.0)}, reading(0.6));
+  REQUIRE(taken.size() == 1);
+  CHECK(taken[0].time == doctest::Approx(0.5));
+}
+
+TEST_CASE("Ноты MIDI: нота отсчёта получает место сразу, пока позиция ещё стоит") {
+  MidiNotes notes;
+  notes.start(2.0, 4.0);
+
+  // Отсчёт 4 с; чтение через 3.99 с после начала запуска, позиция обработки
+  // стоит на позиции начала; нота пришла 5 мс назад — за 15 мс до конца
+  // отсчёта. Хост поставил ей позицию начала.
+  const std::vector<MidiNote> taken =
+      notes.take(std::vector{noteOn(2.0, 0.005)}, reading(2.0, 3.99));
+  REQUIRE(taken.size() == 1);
+  CHECK(taken[0].time == doctest::Approx(2.0 - 0.015));
+  CHECK(taken[0].beforeStart);
+}
+
+TEST_CASE("Ноты MIDI: нота отсчёта, прочитанная после конца отсчёта, — на своём месте") {
+  MidiNotes notes;
+  notes.start(0.0, 4.0);
+  MidiRead read = reading(0.597333, 4.597333);
+  read.compensation = 0.032;
+
+  const std::vector<MidiNote> taken = notes.take(std::vector{noteOn(0.0, 0.608)}, read);
+  REQUIRE(taken.size() == 1);
+  CHECK(taken[0].time == doctest::Approx(-0.010667 - 0.032).epsilon(1e-6));
+  CHECK(taken[0].beforeStart);
+}
+
+TEST_CASE("Ноты MIDI: после отсчёта и первого блока место — позиция события с компенсацией") {
+  MidiNotes notes;
+  notes.start(0.0, 4.0);
+  MidiRead read = reading(0.6, 4.6);
+  read.compensation = 0.006;
+  const std::vector<MidiNote> taken = notes.take(std::vector{noteOn(0.5, 0.1)}, read);
+  REQUIRE(taken.size() == 1);
+  CHECK(taken[0].time == doctest::Approx(0.5 - 0.006));
+  CHECK_FALSE(taken[0].beforeStart);
 }
 
 TEST_CASE("Ноты MIDI: нота в мёртвом времени пропускается, новый проход петли его "
@@ -176,22 +220,95 @@ TEST_CASE("Ноты MIDI: новый запуск и смена входа ко�
   notes.onInputChange();
   CHECK(notes.take(std::vector{noteOn(2.010)}, reading(2.1)).size() == 1);
 
-  notes.start(2.0);
-  REQUIRE(notes.take({}, reading(2.5)).empty());
+  notes.start(2.0, 0.0);
   CHECK(notes.take(std::vector{noteOn(2.020)}, reading(2.6)).size() == 1);
 }
 
-TEST_CASE("Ноты MIDI: пока тренажёр не меряет входом MIDI, нот нет и сдвиг не "
-          "отмечается") {
+TEST_CASE("Ноты MIDI: пока тренажёр не меряет входом MIDI, нот нет") {
   std::vector<std::string> lines;
   MidiNotes notes([&lines](std::string_view line) { lines.emplace_back(line); });
-  notes.start(0.0);
+  notes.start(0.0, 0.0);
   MidiRead read = reading(1.0);
   read.measuring = false;
   CHECK(notes.take(std::vector{noteOn(0.5)}, read).empty());
   CHECK(lines.empty());
+}
 
-  // Сдвиг отмечается на первом чтении, когда тренажёр меряет.
-  CHECK(notes.take({}, reading(1.0)).empty());
-  CHECK(lines == std::vector<std::string>{"position moved by 1000.0 ms"});
+TEST_CASE("Ноты MIDI: нота до Play ждёт запуска и встаёт перед позицией начала") {
+  MidiNotes notes;
+  // Нота пришла на остановке за 2 мс до чтения: по часам хоста — на 9.998 с.
+  CHECK(notes.take(std::vector{noteOn(-1.0, 0.002)}, stopped(10.0)).empty());
+
+  // Запуск с 1 с; первый блок запуска начался на 10.003 с по часам хоста.
+  notes.start(1.0, 0.0);
+  const std::vector<MidiNote> taken =
+      notes.take(std::vector<MidiEvent>{}, running(1.02, 0.021333, 10.003));
+  REQUIRE(taken.size() == 1);
+  CHECK(taken[0].time == doctest::Approx(1.0 - 0.005));
+  CHECK(taken[0].beforeStart);
+}
+
+TEST_CASE("Ноты MIDI: нота до Play с отсчётом — перед позицией начала на путь до конца "
+          "отсчёта") {
+  MidiNotes notes;
+  CHECK(notes.take(std::vector{noteOn(-1.0, 0.002)}, stopped(10.0)).empty());
+  notes.start(2.0, 4.0);
+  const std::vector<MidiNote> taken =
+      notes.take(std::vector<MidiEvent>{}, running(2.0, 0.5, 10.003));
+  REQUIRE(taken.size() == 1);
+  CHECK(taken[0].time == doctest::Approx(2.0 - 4.0 - 0.005));
+}
+
+TEST_CASE("Ноты MIDI: нота до Play старше секунды забывается") {
+  MidiNotes notes;
+  CHECK(notes.take(std::vector{noteOn(-1.0, 0.0)}, stopped(10.0)).empty());
+  CHECK(notes.take(std::vector<MidiEvent>{}, stopped(11.5)).empty());
+  notes.start(1.0, 0.0);
+  CHECK(notes.take(std::vector<MidiEvent>{}, running(1.02, 0.021333, 11.6)).empty());
+}
+
+TEST_CASE("Ноты MIDI: нота до Play, прочитанная при запуске, встаёт сразу") {
+  MidiNotes notes;
+  notes.start(1.0, 0.0);
+  // Время запуска 21.333 мс, нота пришла 30 мс назад — за 8.667 мс до первого
+  // блока запуска; хост поставил ей −1.
+  const std::vector<MidiNote> taken =
+      notes.take(std::vector{noteOn(-1.0, 0.030)}, reading(1.02, 0.021333));
+  REQUIRE(taken.size() == 1);
+  CHECK(taken[0].time == doctest::Approx(1.0 - 0.008667));
+  CHECK(taken[0].beforeStart);
+}
+
+TEST_CASE("Ноты MIDI: нота до Play без времени запуска ждёт следующего чтения") {
+  MidiNotes notes;
+  notes.start(1.0, 0.0);
+  // Хост ещё не обработал блоков запуска; нота пришла на 9.996 с по его часам.
+  MidiRead first = reading(1.0);
+  first.hostTime = 10.0;
+  CHECK(notes.take(std::vector{noteOn(-1.0, 0.004)}, first).empty());
+
+  const std::vector<MidiNote> taken =
+      notes.take(std::vector<MidiEvent>{}, running(1.01, 0.010667, 10.002));
+  REQUIRE(taken.size() == 1);
+  CHECK(taken[0].time == doctest::Approx(1.0 - 0.006));
+}
+
+TEST_CASE("Ноты MIDI: мёртвое время ноты до Play идёт после Play") {
+  MidiNotes notes;
+  CHECK(notes.take(std::vector{noteOn(-1.0, 0.002)}, stopped(10.0)).empty());
+  notes.start(1.0, 0.0);
+  // Нота до Play — на 0.995 с, нота запуска — на 1.020 с, через 25 мс: в
+  // мёртвом времени первой.
+  const std::vector<MidiNote> taken =
+      notes.take(std::vector{noteOn(1.020, 0.020)}, running(1.04, 0.040, 10.003));
+  REQUIRE(taken.size() == 1);
+  CHECK(taken[0].beforeStart);
+}
+
+TEST_CASE("Ноты MIDI: смена входа забывает ноты до Play") {
+  MidiNotes notes;
+  CHECK(notes.take(std::vector{noteOn(-1.0, 0.002)}, stopped(10.0)).empty());
+  notes.onInputChange();
+  notes.start(1.0, 0.0);
+  CHECK(notes.take(std::vector<MidiEvent>{}, running(1.02, 0.021333, 10.003)).empty());
 }

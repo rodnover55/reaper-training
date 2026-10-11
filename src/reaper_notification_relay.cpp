@@ -23,8 +23,8 @@ public:
 
   // Запись REAPER всегда ведёт с воспроизведением: флаг записи запуску ничего
   // не добавляет.
-  void SetPlayState(bool play, bool pause, bool /*rec*/) override {
-    trainer().onPlayState(play, pause);
+  void SetPlayState(bool play, bool pause, bool rec) override {
+    trainer().onPlayState(play, pause, rec);
   }
 
   int Extended(int call, void *parm1, void *parm2, void *parm3) override {

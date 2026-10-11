@@ -38,9 +38,9 @@ TEST_CASE("Режим звукового пути: при идущем запу�
   REQUIRE(transport.start(Moment(1s), 0.0, Compensation{}));
   CHECK(audioModeOf(transport, calibrator) == AudioMode::Onsets);
 
-  // Запуск кончился: звук никуда не идёт.
+  // Запуск кончился: поиск атак слушает вход и на остановке.
   REQUIRE(transport.stop());
-  CHECK(audioModeOf(transport, calibrator) == AudioMode::Off);
+  CHECK(audioModeOf(transport, calibrator) == AudioMode::Onsets);
 }
 
 TEST_CASE("Режим звукового пути: транспорт стоит, калибровка слушает — калибровка") {
@@ -52,11 +52,11 @@ TEST_CASE("Режим звукового пути: транспорт стоит
   // Калибровка оборвалась без звука и больше не слушает.
   (void)calibrator.update(Moment(10s));
   REQUIRE_FALSE(calibrator.listening());
-  CHECK(audioModeOf(transport, calibrator) == AudioMode::Off);
+  CHECK(audioModeOf(transport, calibrator) == AudioMode::Onsets);
 }
 
-TEST_CASE("Режим звукового пути: транспорт стоит без калибровки — ничего") {
+TEST_CASE("Режим звукового пути: транспорт стоит без калибровки — атаки") {
   const Transport transport;
   const Calibrator calibrator;
-  CHECK(audioModeOf(transport, calibrator) == AudioMode::Off);
+  CHECK(audioModeOf(transport, calibrator) == AudioMode::Onsets);
 }

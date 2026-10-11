@@ -596,6 +596,10 @@ constexpr int kCurrentBeat = RGB(255, 190, 60);
 constexpr int kChange = RGB(110, 170, 255);
 constexpr int kLine = RGB(56, 56, 56);
 constexpr int kNeutral = RGB(170, 170, 170);
+// Затакт — пре-ролл и отсчёт перед запуском: строка на синем фоне, подпись —
+// на фоне светлее (`timing-display`).
+constexpr int kLeadInRow = RGB(28, 40, 63);
+constexpr int kLeadInLabel = RGB(35, 52, 84);
 
 /// Строк тактов в окне.
 constexpr int kRows = 8;
@@ -694,8 +698,8 @@ public:
       DeleteObject(made.font);
   }
 
-  /// Выбирает в контекст шрифт кегля `size`, пикселей, — высоты цифр, как
-  /// `font-size` макета; жирный, если `bold`.
+  /// Выбирает в контекст шрифт кегля `size`, пикселей: `size` — высота цифр,
+  /// ячейка шрифта выше; жирный, если `bold`.
   void use(double size, bool bold = true) {
     // Высота ячейки шрифта больше высоты знаков: у Arial — примерно в 1.15 раза.
     const int height = pixel(size * 1.15);
@@ -786,9 +790,18 @@ void paintRow(HDC context, Fonts &fonts, const Layout &layout, const grid::BarVi
   const double scaleLeft = layout.left + layout.labelWidth;
   const auto x = [&](double beat) { return scaleLeft + pad + step * beat; };
 
-  if (row.currentBeat) {
+  if (row.leadIn) {
     fillBox(context, layout.left, top, layout.left + layout.width, top + layout.rowHeight,
-            kCurrentRow);
+            kLeadInRow);
+    if (layout.labelWidth > 0.0)
+      fillBox(context, layout.left, top, layout.left + layout.labelWidth,
+              top + layout.rowHeight, kLeadInLabel);
+  }
+
+  if (row.currentBeat) {
+    if (!row.leadIn)
+      fillBox(context, layout.left, top, layout.left + layout.width, top + layout.rowHeight,
+              kCurrentRow);
     const double beat = *row.currentBeat;
     fillBox(context, std::max(scaleLeft + 1.0, x(beat) - step * 0.125), top,
             x(beat) + step * 0.875, top + layout.rowHeight, kCurrentBeatBack);

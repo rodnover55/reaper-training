@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <limits>
 #include <string>
 #include <utility>
 
@@ -17,66 +16,94 @@ std::string noteText(const MidiEvent &event) {
 
 MidiNotes::MidiNotes(Journal journal) : journal_(std::move(journal)) {}
 
-void MidiNotes::start(double position) {
+void MidiNotes::start(double position, double countIn) {
   // Мёртвое время прошлого запуска в этот не попадает.
   deadTime_.reset();
+  loop_.reset();
   startPosition_ = position;
-  moved_ = false;
+  countIn_ = countIn;
 }
 
-void MidiNotes::onInputChange() { deadTime_.reset(); }
+void MidiNotes::onInputChange() {
+  deadTime_.reset();
+  early_.clear();
+}
 
-std::optional<double> MidiNotes::movedBy(const MidiRead &read) {
-  if (moved_)
-    return std::numeric_limits<double>::infinity();
-  if (read.position == startPosition_)
-    return std::nullopt;
+bool MidiNotes::isNote(const MidiEvent &event, const MidiRead &read) {
+  const auto message = std::span<const std::uint8_t>(event.bytes)
+                           .first(static_cast<std::size_t>(std::clamp(event.size, 0, 3)));
+  return (event.device & 0xFFFF) == read.device && (event.device & kControlOnly) == 0 &&
+         onset::isNoteStart(message);
+}
 
-  moved_ = true;
-  const double by = read.position - startPosition_;
-  write(journal_, "position moved by {:.1f} ms", by * 1000.0);
-  return by;
+double MidiNotes::placeOf(const MidiEvent &event, const MidiRead &read) const {
+  // Во время отсчёта хост ставит событию позицию начала, в первом блоке
+  // запуска — позицию, которую вёл на остановке, а до Play — −1. Место такой
+  // ноты — по её времени от конца отсчёта; позиция после отсчёта идёт с той же
+  // скоростью.
+  if (read.runTime) {
+    const double moment = *read.runTime - event.age;
+    if (moment < countIn_ + read.blockLength)
+      return startPosition_ + (moment - countIn_);
+  }
+  return event.position;
+}
+
+void MidiNotes::measure(const MidiEvent &event, double place, const MidiRead &read,
+                        std::vector<MidiNote> &notes) {
+  // Мёртвое время — по времени ноты на шкале проекта и кончается с проходом
+  // петли. Нота до Play пришла до первого прохода запуска: проход петли она
+  // не меняет.
+  if (event.position >= 0.0) {
+    if (loop_ && event.loop != *loop_)
+      deadTime_.reset();
+    loop_ = event.loop;
+  }
+  const double time = place - read.compensation;
+  if (!deadTime_.add(time)) {
+    write(journal_, "midi note skipped in dead time: t={:.6f} pp={:.6f} loop={} {}", time,
+          event.position, event.loop, noteText(event));
+    return;
+  }
+  notes.push_back({.event = event, .time = time, .beforeStart = place < startPosition_});
 }
 
 std::vector<MidiNote> MidiNotes::take(std::span<const MidiEvent> events,
                                       const MidiRead &read) {
   std::vector<MidiNote> notes;
-  if (!read.measuring)
-    return notes;
 
-  // Count-in: позиция стоит у начала записи, и места нот MIDI на шкале нет.
-  // Нота, пришедшая не позже, чем позиция сдвинулась, отбрасывается: и при
-  // count-in, и в первом блоке после запуска, где хост ставит ноте позицию
-  // остановленного транспорта.
-  const std::optional<double> moved = movedBy(read);
+  // Ноты до Play, ждущие запуска, старше kEarlyNoteSeconds забываются.
+  if (read.hostTime)
+    std::erase_if(early_, [&read](const EarlyNote &early) {
+      return *read.hostTime - early.hostTime > kEarlyNoteSeconds;
+    });
+
+  // Время запуска известно: ноты до Play — перед позицией начала, раньше нот
+  // этого чтения. Начало запуска по часам хоста — их время минус время
+  // запуска.
+  if (read.measuring && read.runTime && read.hostTime) {
+    const double runStart = *read.hostTime - *read.runTime;
+    for (const EarlyNote &early : early_)
+      measure(early.event, startPosition_ + (early.hostTime - runStart - countIn_), read,
+              notes);
+    early_.clear();
+  }
+
   for (const MidiEvent &event : events) {
-    const auto message = std::span<const std::uint8_t>(event.bytes)
-                             .first(static_cast<std::size_t>(std::clamp(event.size, 0, 3)));
-    if ((event.device & 0xFFFF) != read.device || (event.device & kControlOnly) != 0 ||
-        event.position < 0.0 || !onset::isNoteStart(message))
+    if (!isNote(event, read))
       continue;
 
-    if (!moved || event.age >= *moved) {
-      write(
-          journal_,
-          "midi note dropped by count-in: pp={:.6f} {}, arrived {:.1f} ms of project time ago",
-          event.position, noteText(event), event.age * 1000.0);
+    // Нота пришла при стоящем транспорте: место ей даёт время запуска, а
+    // пока его нет, она ждёт запуска по часам хоста.
+    const bool early = event.position < 0.0;
+    if (early && (!read.measuring || !read.runTime)) {
+      if (read.hostTime)
+        early_.push_back({.event = event, .hostTime = *read.hostTime - event.age});
       continue;
     }
-
-    // Мёртвое время — по времени ноты на шкале проекта и кончается с проходом
-    // петли.
-    if (event.loop != loop_)
-      deadTime_.reset();
-    loop_ = event.loop;
-    const double time = event.position - read.compensation;
-    if (!deadTime_.add(time)) {
-      write(journal_, "midi note skipped in dead time: t={:.6f} pp={:.6f} loop={} {}", time,
-            event.position, event.loop, noteText(event));
+    if (!read.measuring)
       continue;
-    }
-
-    notes.push_back({.event = event, .time = time});
+    measure(event, placeOf(event, read), read, notes);
   }
   return notes;
 }

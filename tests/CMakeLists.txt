@@ -31,6 +31,7 @@ add_executable(training_tests
   trainer_onset_search_test.cpp
   trainer_settings_test.cpp
   trainer_settings_file_test.cpp
+  trainer_count_in_test.cpp
   trainer_transport_test.cpp
   # Журнал расширения от REAPER не зависит, и его замена файла проверяется
   # здесь же.

@@ -11,6 +11,9 @@
 #define REAPERAPI_WANT_get_config_var
 #define REAPERAPI_WANT_Audio_IsRunning
 #define REAPERAPI_WANT_Audio_Init
+#define REAPERAPI_WANT_GetCursorPosition
+#define REAPERAPI_WANT_projectconfig_var_addr
+#define REAPERAPI_WANT_projectconfig_var_getoffs
 
 #include "trainer.hpp"
 
@@ -57,6 +60,22 @@ int intConfig(const char *name, int fallback) {
     return fallback;
 
   int value = 0;
+  std::memcpy(&value, address, sizeof(value));
+  return value;
+}
+
+/// Настройка активного проекта REAPER по имени (`projectconfig_var_getoffs`)
+/// типа `T`; нет или другого размера — пусто.
+template <class T> std::optional<T> projectConfig(const char *name) {
+  int size = 0;
+  const int offset = projectconfig_var_getoffs(name, &size);
+  if (size != static_cast<int>(sizeof(T)))
+    return std::nullopt;
+  const void *address = projectconfig_var_addr(nullptr, offset);
+  if (!address)
+    return std::nullopt;
+
+  T value{};
   std::memcpy(&value, address, sizeof(value));
   return value;
 }
@@ -111,6 +130,46 @@ trainer::Compensation compensationNow(double sampleRate) {
   return compensation;
 }
 
+/// Отсчёт перед запуском с позиции `position` по настройкам проекта: метроном
+/// и отсчёт — `projmetroen`, тактов — `projmetrocountin`, с начала такта —
+/// бит 8 `preroll`. Длина такта — по темпу и размеру в позиции начала.
+///
+/// @param sampleRate частота звуковой карты, Гц.
+trainer::CountIn projectCountIn(double position, bool record, const grid::Timeline &timeline,
+                                double rate, double sampleRate) {
+  const int metronome = projectConfig<int>("projmetroen").value_or(0);
+  const int preroll = projectConfig<int>("preroll").value_or(intConfig("preroll", 0));
+  const trainer::CountInSettings settings{
+      .metronome = (metronome & 1) != 0,
+      .beforePlayback = (metronome & 8) != 0,
+      .beforeRecording = (metronome & 16) != 0,
+      .bars = projectConfig<double>("projmetrocountin").value_or(0.0),
+      .fromBarStart = (preroll & 8) != 0};
+
+  return trainer::countInAt(settings, record, timeline, position, rate, sampleRate,
+                            deviceInfo("BSIZE"));
+}
+
+/// Такт, которым кончается затакт запуска с позиции `position`: пре-ролл
+/// кончается на курсоре редактирования, если для этого запуска он включён
+/// (бит 1 `preroll` — перед воспроизведением, бит 2 — перед записью); без
+/// пре-ролла отсчёт кончается тактом позиции начала. Такт места —
+/// `trainer::barAt`. Пусто — затакта нет.
+///
+/// @param sampleRate частота звуковой карты, Гц.
+std::optional<std::int64_t> leadInEndAt(double position, bool record,
+                                        const trainer::CountIn &countIn,
+                                        const grid::Timeline &timeline, double sampleRate) {
+  const int preroll = projectConfig<int>("preroll").value_or(intConfig("preroll", 0));
+  const bool prerollOn = (preroll & (record ? 2 : 1)) != 0;
+  const double cursor = GetCursorPosition();
+  if (prerollOn && cursor > position)
+    return trainer::barAt(timeline, cursor, sampleRate).index;
+  if (countIn.samples > 0)
+    return trainer::barAt(timeline, position, sampleRate).index;
+  return std::nullopt;
+}
+
 /// Петля активного проекта: повтор и границы.
 trainer::Loop projectLoop() {
   trainer::Loop loop{.repeat = GetSetRepeat(-1) == 1, .start = 0.0, .end = 0.0};
@@ -123,8 +182,8 @@ trainer::Loop projectLoop() {
 Trainer::Trainer() : Trainer(loadSettings()) {}
 
 Trainer::Trainer(const trainer::SettingsRead &read)
-    : transport_(journalSink()), input_(transport_.onsetSearch()),
-      rate_(Master_GetPlayRate(nullptr)), settings_(read.settings),
+    : transport_(journalSink()), rate_(Master_GetPlayRate(nullptr)),
+      input_(transport_.onsetSearch()), settings_(read.settings),
       fileNotice_(kSettingsFile, read.rejected), calibrator_(journalSink()) {
   for (const std::string &line : read.rejected)
     journal("{}: {}", kSettingsFile, line);
@@ -240,7 +299,8 @@ void Trainer::readMidiHistory() {
   // idx = 0 защёлкивает свежее состояние, дальше — к старым событиям до
   // прочитанного на прошлом тике.
   midiEvents_.clear();
-  const double sampleRate = transport_.compensation().midiSampleRate;
+  const double sampleRate = transport_.running() ? transport_.compensation().midiSampleRate
+                                                 : current_.midiSampleRate;
   std::array<char, 256> bytes{};
   int newest = 0;
   for (int index = 0;; ++index) {
@@ -271,21 +331,30 @@ void Trainer::readMidiHistory() {
   std::ranges::reverse(midiEvents_);
 }
 
-void Trainer::onPlayState(bool play, bool pause) {
+void Trainer::onPlayState(bool play, bool pause, bool record) {
   if (play && !pause) {
     // Компенсация держится до конца запуска — как постоянный сдвиг у записи.
-    // Позиция начала берётся в момент запуска, до того как её сдвинул звук:
-    // count-in — пока позиция стоит.
+    // Позиция начала берётся в момент запуска, до того как её сдвинул звук.
     const trainer::Moment now = momentNow();
     const double position = GetPlayPosition2Ex(nullptr);
-    if (transport_.start(now, position, compensationNow(input_.sampleRate()))) {
+    const auto sampleRate = static_cast<double>(deviceInfo("SRATE"));
+    const trainer::CountIn countIn =
+        projectCountIn(position, record, timeline_, rate_, sampleRate);
+    const std::optional<std::int64_t> leadInEnd =
+        leadInEndAt(position, record, countIn, timeline_, sampleRate);
+    if (transport_.start(now, position, compensationNow(input_.sampleRate()), countIn, rate_,
+                         leadInEnd)) {
+      startPosition_ = position;
+      countInPassed_ = countIn.samples == 0;
+      countInTimeline_.emplace(timeline_, position, sampleRate);
       const trainer::Compensation &compensation = transport_.compensation();
       calibrator_.onStart();
       fileNotice_.onTransportStart();
       journal("start: at {}, compensation {:.3f} ms, MIDI compensation {:.3f} ms, rate {}, "
-              "position {:.6f}",
+              "position {:.6f}, count-in {} samples, lead-in ends at bar {}",
               trainer::momentText(now), compensation.audio * 1000.0,
-              compensation.midi * 1000.0, rate_, position);
+              compensation.midi * 1000.0, rate_, position, countIn.samples,
+              leadInEnd ? fmt::format("{}", *leadInEnd + 1) : std::string("none"));
     }
   } else if (transport_.stop()) {
     calibrator_.onStop();
@@ -321,11 +390,17 @@ bool Trainer::poll() {
 }
 
 void Trainer::followPlayback() {
-  // Верхняя строка и текущий удар — по слышимой позиции.
+  // Верхняя строка и текущий удар — по слышимой позиции. Во время отсчёта она
+  // раньше позиции начала, и такты — по сетке отсчёта.
   const double heard = GetPlayPositionEx(nullptr);
-  if (!transport_.play(timeline_.beatsAt(heard),
-                       trainer::loopBeats(heard, projectLoop(), timeline_), settings_.window(),
-                       timeline_))
+  if (heard >= startPosition_)
+    countInPassed_ = true;
+  const grid::Timeline &timeline = countInTimeline_ && !countInPassed_
+                                       ? static_cast<const grid::Timeline &>(*countInTimeline_)
+                                       : timeline_;
+  if (!transport_.play(timeline.beatsAt(heard),
+                       trainer::loopBeats(heard, projectLoop(), timeline), settings_.window(),
+                       timeline))
     return;
 
   for (const grid::BarRow &row : transport_.bars().rows()) {
@@ -340,45 +415,96 @@ bool Trainer::takeOnsets() {
   bool taken = false;
   const trainer::Compensation &compensation = transport_.compensation();
   while (const auto hit = input_.popOnset()) {
-    if (!transport_.takesOnset(hit->monotonic))
+    if (!transport_.takesOnset(hit->run))
       continue;
 
-    const double time =
-        trainer::loopWrapped(grid::noteTime(hit->blockPosition, hit->offset, hit->sampleRate,
-                                            compensation.audio, rate_),
-                             hit->blockPosition, projectLoop(), settings_.mode(), timeline_);
-    transport_.addNote(time, rate_, settings_.window(), timeline_);
-    taken = true;
+    const double played = grid::noteTime(hit->blockPosition, hit->offset, hit->sampleRate,
+                                         compensation.audio, rate_);
+    // Атака отсчёта и атака до Play лежат перед позицией начала по сетке
+    // перед ней, петлёй не заворачиваются.
+    const bool before = hit->beforeStart && countInTimeline_;
+    const double time = before
+                            ? played
+                            : trainer::loopWrapped(played, hit->blockPosition, projectLoop(),
+                                                   settings_.mode(), timeline_);
+    const bool placed = transport_.addNote(
+        time, rate_, settings_.window(),
+        before ? static_cast<const grid::Timeline &>(*countInTimeline_) : timeline_, before);
+    taken = taken || placed;
 
     // Задержка показа: от блока атаки до этого тика плюс задержка ввода,
     // которую звук прошёл до хука. Окно перерисуется на этом же тике.
     const double ageMs =
         std::chrono::duration<double, std::milli>(momentNow() - hit->monotonic).count() +
         compensation.inputLatency * 1000.0;
-    journal("note t={:.6f} level={:.1f} dB, shown after {:.1f} ms", time, hit->levelDb, ageMs);
+    if (placed)
+      journal("note t={:.6f} level={:.1f} dB, shown after {:.1f} ms", time, hit->levelDb,
+              ageMs);
+    else
+      journal("note t={:.6f} level={:.1f} dB not placed: no row or node of the run takes it",
+              time, hit->levelDb);
   }
   return taken;
 }
 
 bool Trainer::takeMidiNotes() {
-  readMidiHistory();
-  // Компенсация — в секундах шкалы проекта, как всё время нот MIDI в ядре.
-  const trainer::MidiRead read{.measuring = trainer::measuresMidi(measurement_),
-                               .device = midi_ ? midi_->device : -1,
-                               .position = GetPlayPosition2Ex(nullptr),
-                               .compensation = transport_.compensation().midi * rate_};
+  // Возраст событий хост отсчитывает от конца последнего блока звука: часы
+  // звука хоста берутся на тот же блок. Если за чтение истории хост начал
+  // новый блок, история читается заново.
+  const trainer::Moment run = transport_.started();
+  std::optional<HostClock> clock;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    const std::optional<HostClock> before = input_.clock(run);
+    const int sequence = midiSequence_;
+    readMidiHistory();
+    clock = input_.clock(run);
+    if (clock == before)
+      break;
+    midiSequence_ = sequence;
+  }
+
+  // Компенсация и время — в секундах шкалы проекта, как всё время нот MIDI в
+  // ядре.
+  trainer::MidiRead read{.measuring = trainer::measuresMidi(measurement_),
+                         .device = midi_ ? midi_->device : -1,
+                         .position = GetPlayPosition2Ex(nullptr),
+                         .runTime = std::nullopt,
+                         .blockLength = 0.0,
+                         .hostTime = std::nullopt,
+                         .compensation = transport_.compensation().midi * rate_};
+  if (clock && clock->sampleRate > 0.0) {
+    const double scale = rate_ / clock->sampleRate;
+    read.hostTime = static_cast<double>(clock->end) * scale;
+    if (clock->elapsed)
+      read.runTime = static_cast<double>(*clock->elapsed) * scale;
+    read.blockLength = static_cast<double>(clock->blockLength) * scale;
+  }
   const std::vector<trainer::MidiNote> notes = transport_.midiNotes().take(midiEvents_, read);
+  bool taken = false;
   for (const trainer::MidiNote &note : notes) {
-    const double time = trainer::loopWrapped(note.time, note.event.position, projectLoop(),
-                                             settings_.mode(), timeline_);
-    transport_.addNote(time, rate_, settings_.window(), timeline_);
+    // Нота отсчёта и нота до Play лежат перед позицией начала по сетке перед
+    // ней, петлёй не заворачиваются; остальные — по месту ноты.
+    const bool before = note.beforeStart && countInTimeline_;
+    const double time = before
+                            ? note.time
+                            : trainer::loopWrapped(note.time, note.time + read.compensation,
+                                                   projectLoop(), settings_.mode(), timeline_);
+    const bool placed = transport_.addNote(
+        time, rate_, settings_.window(),
+        before ? static_cast<const grid::Timeline &>(*countInTimeline_) : timeline_, before);
+    taken = taken || placed;
     // Возраст ноты в реальном времени — и задержка показа: окно перерисуется
     // на этом же тике.
-    journal("midi note t={:.6f} pp={:.6f} loop={} {}, shown after {:.1f} ms", time,
-            note.event.position, note.event.loop, trainer::noteText(note.event),
-            note.event.age / rate_ * 1000.0);
+    if (placed)
+      journal("midi note t={:.6f} pp={:.6f} loop={} {}, shown after {:.1f} ms", time,
+              note.event.position, note.event.loop, trainer::noteText(note.event),
+              note.event.age / rate_ * 1000.0);
+    else
+      journal("midi note t={:.6f} pp={:.6f} loop={} {} not placed: no row or node of the run "
+              "takes it",
+              time, note.event.position, note.event.loop, trainer::noteText(note.event));
   }
-  return !notes.empty();
+  return taken;
 }
 
 bool Trainer::pollCalibration() {

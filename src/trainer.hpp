@@ -10,6 +10,7 @@
 #include "settings.hpp"
 
 #include "training/trainer/calibration.hpp"
+#include "training/trainer/count_in.hpp"
 #include "training/trainer/measurement.hpp"
 #include "training/trainer/midi_notes.hpp"
 #include "training/trainer/transport.hpp"
@@ -123,16 +124,17 @@ public:
   /// Отмечает перемену транспорта, о которой сообщил REAPER. Запуск идёт,
   /// пока идёт воспроизведение и транспорт не на паузе: запись REAPER всегда
   /// ведёт с воспроизведением. Начало запуска (`trainer::Transport::start`)
-  /// снимает компенсацию задержки и позицию начала для нот MIDI, начинает
-  /// поиск атак и отбор нот MIDI, прерывает калибровку и снимает сообщение о
-  /// не принятых строках (`trainer::FileNotice::onTransportStart`); конец
-  /// запуска (`trainer::Transport::stop`) кончает поиск атак и оставляет
-  /// строки.
+  /// снимает компенсацию задержки, позицию начала, отсчёт перед запуском по
+  /// настройкам проекта и затакт — пре-ролл или отсчёт, — начинает поиск атак
+  /// и отбор нот MIDI, прерывает калибровку и снимает сообщение о не принятых
+  /// строках (`trainer::FileNotice::onTransportStart`); конец запуска
+  /// (`trainer::Transport::stop`) кончает поиск атак и оставляет строки.
   /// Зовётся из главного потока, когда транспорт меняется.
   ///
   /// @param play идёт воспроизведение.
   /// @param pause транспорт на паузе.
-  void onPlayState(bool play, bool pause);
+  /// @param record идёт запись: отсчёт и пре-ролл — те, что перед записью.
+  void onPlayState(bool play, bool pause, bool record);
 
   /// Ставит скорость воспроизведения проекта, о которой сообщил REAPER. Она
   /// действует на ноты, забранные после вызова, и на строку состояния.
@@ -169,9 +171,11 @@ private:
   // атак транспорта, и транспорт создаётся раньше этого потока и разрушается
   // после его остановки.
   trainer::Transport transport_;
+  double rate_ = 1.0;
   AudioInput input_;
   ProjectTimeline timeline_;
-  double rate_ = 1.0;
+  // Позиция начала идущего запуска, с.
+  double startPosition_ = 0.0;
   // Компенсация задержки сейчас: та, что будет действовать при запуске.
   trainer::Compensation current_;
   // События истории MIDI-входа, прочитанные на тике, от старых к новым.
@@ -179,6 +183,10 @@ private:
   // Сэмплы куска калибровки.
   std::vector<float> chunkSamples_;
   std::optional<MidiInput> midi_;
+  // Карта темпа последнего запуска с сеткой отсчёта перед позицией начала: по
+  // ней лежат ноты отсчёта и ноты, сыгранные до Play, — и без отсчёта. Пусто —
+  // запусков ещё не было.
+  std::optional<trainer::CountInTimeline> countInTimeline_;
   Settings settings_;
   trainer::FileNotice fileNotice_;
   trainer::InputState inputs_;
@@ -186,6 +194,8 @@ private:
   trainer::Calibrator calibrator_;
   // Номер последнего прочитанного события истории MIDI-входа.
   int midiSequence_ = 0;
+  // Слышимая позиция дошла до позиции начала: отсчёт позади.
+  bool countInPassed_ = true;
 };
 
 /// Тренажёр расширения; есть между `initTrainer` и `shutdownTrainer`.

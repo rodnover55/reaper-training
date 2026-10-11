@@ -6,6 +6,7 @@ add_library(training_trainer STATIC
   src/audio_mode.cpp
   src/calibration.cpp
   src/clock.cpp
+  src/count_in.cpp
   src/fit_text.cpp
   src/loop.cpp
   src/measurement.cpp

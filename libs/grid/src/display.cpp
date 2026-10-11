@@ -86,7 +86,9 @@ std::string changeText(const Change &change) {
 /// среднего и разброса.
 BarView barView(const BarRow &row, bool top, const Bars &bars) {
   BarView view;
-  view.label = fmt::format("{}", row.bar.index + 1);
+  view.label = row.leadIn ? fmt::format("{}{}", kMinus, -*row.leadIn)
+                          : fmt::format("{}", row.bar.index + 1);
+  view.leadIn = row.leadIn.has_value();
   view.beats = static_cast<int>(row.beats.size());
 
   for (std::size_t k = 0; k < row.beats.size(); ++k) {

@@ -61,6 +61,7 @@ void AudioInput::onBlock(int length, double sampleRate, audio_hook_register_t *r
                      .length = length,
                      .mode = mode};
   nextSample_ += static_cast<std::uint64_t>(std::max(length, 0));
+  publishClock(header);
 
   // Места для заголовка нет — пропадает весь блок, а скачок номера сэмпла у
   // следующего скажет рабочему потоку, сколько звука пропало.
@@ -87,6 +88,47 @@ void AudioInput::onBlock(int length, double sampleRate, audio_hook_register_t *r
   }
 
   (void)headers_.push(header);
+}
+
+void AudioInput::publishClock(const BlockHeader &header) {
+  // Первый блок запуска — первый, взятый не раньше его начала.
+  const trainer::Moment run = search_.run().load();
+  if (run != hookRun_ && run != trainer::kNoRun && header.monotonic >= run) {
+    hookRun_ = run;
+    hookRunStart_ = header.firstSample;
+  }
+
+  clockSequence_.fetch_add(1);
+  clockRun_.store(hookRun_.time_since_epoch().count());
+  clockRunStart_.store(hookRunStart_);
+  clockBlock_.store(header.firstSample);
+  clockLength_.store(header.length);
+  clockSequence_.fetch_add(1);
+}
+
+std::optional<HostClock> AudioInput::clock(trainer::Moment run) const {
+  for (;;) {
+    const std::uint64_t before = clockSequence_.load();
+    if (before % 2 != 0)
+      continue;
+    const trainer::Moment::rep clockRun = clockRun_.load();
+    const std::uint64_t runStart = clockRunStart_.load();
+    const std::uint64_t block = clockBlock_.load();
+    const int length = clockLength_.load();
+    if (clockSequence_.load() != before)
+      continue;
+    if (before == 0)
+      return std::nullopt;
+
+    HostClock clock{.end = block + static_cast<std::uint64_t>(std::max(length, 0)),
+                    .elapsed = std::nullopt,
+                    .blockLength = length,
+                    .sampleRate = sampleRate_.load(std::memory_order_relaxed)};
+    if (run != trainer::kNoRun && clockRun == run.time_since_epoch().count() &&
+        clock.end >= runStart)
+      clock.elapsed = clock.end - runStart;
+    return clock;
+  }
 }
 
 void AudioInput::work() {

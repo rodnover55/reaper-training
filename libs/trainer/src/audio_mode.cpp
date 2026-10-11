@@ -3,11 +3,9 @@
 namespace training::trainer {
 
 AudioMode audioModeOf(const Transport &transport, const Calibrator &calibrator) {
-  if (transport.running())
-    return AudioMode::Onsets;
-  if (calibrator.listening())
+  if (!transport.running() && calibrator.listening())
     return AudioMode::Calibration;
-  return AudioMode::Off;
+  return AudioMode::Onsets;
 }
 
 } // namespace training::trainer
