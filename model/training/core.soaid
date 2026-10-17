@@ -13,4 +13,6 @@ package training.core {
   }
 
   include "core/clock"
+  include "core/types"
+  include "core/settings"
 }

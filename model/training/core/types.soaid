@@ -1,0 +1,15 @@
+value Range<T> {
+  responsibility Определяет диапазон значений типа `T`.
+
+  field {
+    start: T Начало диапазона.
+    end: T Конец диапазона.
+  }
+
+
+  action {
+    contains(value: T): bool {
+      responsibility Проверяет, находится ли `value` в диапазоне.
+    }
+  }
+}
