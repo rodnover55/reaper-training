@@ -1,0 +1,20 @@
+value Settings {
+  responsibility Настройки ядра.
+
+  field {
+    window: HitWindow Окно попадания.
+
+    silenceDb: float Порог тишины, dBFS.
+  }
+
+  action {
+    changeSettings(window, silenceDb) {
+      responsibility Изменяет настройки ядра.
+      note Может быть реализовано несколькими функциями
+
+      arg window: HitWindow Новое окно попадания
+
+      arg silenceDb: float Новый порог тишины, dBFS.
+    }
+  }
+}

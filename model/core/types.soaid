@@ -1,0 +1,71 @@
+value Range<T> {
+  responsibility Определяет диапазон значений типа `T`.
+
+  field {
+    start: T Начало диапазона.
+    end: T Конец диапазона.
+  }
+
+  action {
+    contains(value: T): bool {
+      responsibility Проверяет, находится ли `value` в диапазоне.
+    }
+  }
+}
+
+enum Hit {
+  value Target Попадание точно в момент
+  value Good Попадание с отклонением в пределах окна попадания
+  value Bad Попадание с отклонением за пределами окна попадания
+}
+
+value HitWindow {
+  responsibility Окно попадания: отклонениe от клика, при которых нота попала.
+
+  field {
+    offset: Interval {
+      responsibility {
+        Смещение окна попадания относительно клика.
+        Примеры:
+          - 0ms — окно попадания симметрично клику;
+          - 10ms — окно попадания смещено на 10 миллисекунд вперёд;
+          - −5ms — окно попадания смещено на 5 миллисекунд назад.
+      }
+    }
+
+    tolerance: Interval {
+      responsibility {
+        Допуск окна попадания: отклонение от клика, при котором нота попала [Hit.Good].
+        Примеры:
+          - 1ms — окно попадания с минимальным допуском;
+          - 10ms — окно попадания с допуском в 10 миллисекунд;
+      }
+
+      invariant #tolerance Не меньше 1ms.
+    }
+
+    exactTolerance: Interval {
+      responsibility {
+        Допуск окна попадания для точного попадания [Hit.Target].
+          - 10ms — окно попадания с допуском в 10 миллисекунд;
+      }
+
+      invariant #lessThanTolerance Не больше tolerance.
+      note Значение по умолчани 0.5ms
+    }
+  }
+
+  action {
+    early(): Interval {
+      responsibility Возвращает интервал, при превышении которого от доли нота считается сыгранной слишком рано.
+      note Равен `offset - tolerance`.
+    }
+
+    late(): Interval {
+      responsibility Возвращает интервал, при превышении которого от доли нота считается сыгранной слишком поздно.
+      note Равен `offset + tolerance`.
+    }
+
+    hit(deviation: Interval): Hit Определяет попала ли нота в интервал.
+  }
+}

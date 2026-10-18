@@ -1,0 +1,4 @@
+error {
+  UnknownTime Временной момент `time` не попадает ни в один такт.
+  UnknownPosition Позиция `position` не попадает ни в один такт.
+}

@@ -49,7 +49,7 @@ value Interval {
 
   action {
     constructor create() Создает нулевой интервал.
-    
+
     abs(): Interval Возвращает длину интервала без знака.
     negated(): Interval Преобразовывает в интервал той же длины с другим знаком.
 

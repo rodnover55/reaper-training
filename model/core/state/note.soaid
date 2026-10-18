@@ -1,0 +1,12 @@
+import training.core
+
+use training.core
+
+value Note {
+  responsibility Нота звука или MIDI, которая легла в долю такта.
+
+  field {
+    deviation: Interval Отклонение ноты от клика.
+    hit: Hit Оценка разницы ([HitWindow.hit]).
+  }
+}
