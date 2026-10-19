@@ -69,3 +69,8 @@ value HitWindow {
     hit(deviation: Interval): Hit Определяет попала ли нота в интервал.
   }
 }
+
+value SampleRate: float {
+  responsibility Частота дискретизации, Гц.
+  invariant #positive Больше нуля.
+}

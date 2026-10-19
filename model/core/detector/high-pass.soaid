@@ -1,0 +1,47 @@
+import training.core
+
+use training.core
+
+entity HighPass {
+  responsibility {
+    Реализует ВЧ-фильтр: отфильтровывает звук ниже частоты среза.
+  }
+
+  link https://www.w3.org/TR/audio-eq-cookbook/#HPF-coef Коэффициенты ВЧ-фильтра (HPF) из Audio EQ Cookbook (RBJ).
+  link https://www.w3.org/TR/audio-eq-cookbook/#formulae Промежуточные величины w0 и alpha с добротностью Q.
+
+  field {
+    cutoffHz: float {
+      responsibility Частота среза, Гц.
+      invariant #range Больше нуля и меньше половины [HighPass.sampleRate].
+    }
+
+    sampleRate: SampleRate Частота дискретизации потока.
+
+    order: int {
+      responsibility Порядок фильтра. Уменьшает звук ниже частоты среза на +6×[HighPass.order] дБ на каждую октаву.
+      invariant #default По умолчанию 2.
+      invariant #range Не меньше 1.
+      invariant #dont-change Не меняется снаружи, т.к. реализовано только для [HighPass.order]=2
+    }
+
+    q: float {
+      responsibility Добротность фильтра, задает форму перехода около частоты среза.
+      invariant #default по умолчанию 1/√2 (фильтр Баттерворта).
+      invariant #range Больше 0.
+      note ai #optional Не требует обязательной инициализации вызывающей стороной.
+      link https://en.wikipedia.org/wiki/Butterworth_filter#Normalized_Butterworth_polynomials Добротности звеньев фильтра Баттерворта порядка выше 2.
+    }
+  }
+
+  action {
+    reset() Сбрасывает состояние фильтра и запускает вычисления сначала.
+
+    process(samples: float[]): float[] {
+      responsibility Фильтрует пачку семплов потока и возвращает их после фильтра.
+      invariant #same-index Количество выходящих семплов всегда равно количеству входящих.
+
+      note Состояние фильтра меняется после каждого вызова этой функции и учитываются предыдущие значения.
+    }
+  }
+}
