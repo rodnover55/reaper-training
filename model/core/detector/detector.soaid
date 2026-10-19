@@ -30,6 +30,8 @@ entity Detector {
 
   relation composition {
     buffer: Buffer<Onset> Буфер найденных атак.
+    hpf: HighPass Фильтр высоких частот.
+    envelope: Envelope Детектор огибающей.
   }
 
   field {
@@ -62,6 +64,7 @@ entity Detector {
         Обрабатывает следующий кусок потока и дописывает в буфер атак ([Detector.buffer])
         атаки, определённые при этой обработке, в порядке возрастания позиции.
       }
+      
       invariant #empty Пустой кусок ничего не меняет.
 
       note ai {
@@ -75,6 +78,13 @@ entity Detector {
       error training.core.detector.Buffer.Empty {
         responsibility Возникает, когда нет атак для возврата
         note ai Можно вернуть пустой элемент для этой ошибки.
+      }
+    }
+
+    filter(): Filter {
+      responsibility {
+        Возвращает копию фильтра с такими же настройками как [Detector] в сброшенном состоянии:
+        [Serial]: [Detector.hpf] + [Detector.envelope]
       }
     }
   }

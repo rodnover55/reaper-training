@@ -2,7 +2,7 @@ import training.core
 
 use training.core
 
-entity HighPass {
+entity HighPass: Filter {
   responsibility {
     Реализует ВЧ-фильтр: отфильтровывает звук ниже частоты среза.
   }

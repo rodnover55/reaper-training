@@ -2,7 +2,7 @@ import training.core
 
 use training.core
 
-entity Envelope {
+entity Envelope: Filter {
   responsibility {
     Вычисляет огибающую звукового потока
   }

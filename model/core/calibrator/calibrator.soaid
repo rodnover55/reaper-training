@@ -1,0 +1,180 @@
+import training.core.input
+import training.core
+
+use training.core.input
+use training.core
+
+entity Calibrator: SoundReceiver {
+  responsibility Управляет функцией калибровки
+
+  value State {
+    responsibility Данные калибровки со всех шагов: [SilenceStep.State] и [NotesStep.State].
+
+    field {
+      step: Step Содержит информацию, на каком шаге вычислений находится калибратор.
+
+      noiseDb: float {
+        responsibility {
+          Уровень шума входящего сигнала, dBFS.
+          Во время [Step.Silence] — [SilenceStep.State.noiseDb],
+          во время [Step.Notes] и [Step.Done] — финальное значение шага тишины.
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+
+      levelDb: float {
+        responsibility {
+          Уровень текущего сигнала, dBFS.
+          Во время [Step.Silence] — [SilenceStep.State.levelDb],
+          во время [Step.Notes] — [NotesStep.State.levelDb].
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+
+      sinceSound: Interval {
+        responsibility {
+          Время, которое прошло с последнего звука во время [Step.Silence]
+          ([SilenceStep.State.sinceSound]).
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+
+      silenceLeft: Interval {
+        responsibility {
+          Время, которое осталось до конца шага тишины во время [Step.Silence]
+          ([SilenceStep.State.silenceLeft]).
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+
+      attacksDb: float[] {
+        responsibility {
+          Значения уровня атаки для каждой найденной ноты, dBFS ([NotesStep.State.attacksDb]).
+          Используется в [Step.Notes],
+          в [Step.Done] не меняется и сохраняет последнее значение.
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+
+      sinceLastNote: Interval {
+        responsibility {
+          Время, которое прошло с последней ноты во время [Step.Notes]
+          ([NotesStep.State.sinceLastNote]).
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+
+      peakDb: float {
+        responsibility {
+          Пик сигнала, dBFS ([NotesStep.State.peakDb]).
+          Используется в [Step.Notes],
+          в [Step.Done] не меняется и сохраняет последнее значение.
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+
+      verdict: NotesStep.Verdict {
+        responsibility {
+          Статус результата ([NotesStep.State.verdict]).
+          Возвращается во время [Step.Done].
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+
+      thresholdDb: float {
+        responsibility {
+          Вычисленный порог тишины ([NotesStep.State.thresholdDb]).
+          Возвращается во время [Step.Done].
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+    }
+  }
+
+  field {
+    state: State Состояние запуска калибратора.
+  }
+
+  relation composition {
+    silenceStep: SilenceStep Выполняется когда [State.step] == [Step.Silence].
+    notesStep: NotesStep Выполняется когда [State.step] == [Step.Notes].
+    resultStep: ResultStep Выполняется когда [State.step] == [Step.Done].
+  }
+
+  action {
+    start() throws InvalidStep {
+      responsibility Запускает калибратор
+
+      invariant #start {
+        Меняет [State.step] с [Step.Off] -> [Step.Silence]
+      } 
+
+      error InvalidStep Возникает когда [State.step] не соответствует [Step.Off]
+    }
+
+    stop() {
+      responsibility Останавливает калибратор.
+      
+      body {
+        Меняет [State.step]:
+        [Step.Silence] -> [Step.Off]
+        [Step.Notes] -> [Step.Off]
+        [Step.Done] -> [Step.Off]
+
+        Выключает [Calibrator.silenceStep], [Calibrator.notesStep], [Calibrator.resultStep]
+        если они включены.
+      }
+    }
+
+    result(): State Возвращает состояние текущего шага выполнения.
+
+    receive(block: AudioBlock) {
+      body {
+        В зависимости от [State.step] передает блоки обработчику:
+        [Step.Silence]: [Calibrator.silenceStep],
+        [Step.Notes]: [Calibrator.notesStep],
+        [Step.Done]: [Calibrator.resultStep]
+
+        для [Step.Off] ничего не делает.
+
+        После обработки шагом проверяет и сохраняет в [Calibrator.state] состояние шага и 
+        при необходимости переводит выполнение на следующий шаг, 
+        выключая текущий шаг и запуская следующий.
+        Для запуска следующего шага используют данные из [Calibrator.state].
+        При статусе [Step.Done] и [ResultStep.Step.Done] выполняется [Calibrator.stop].
+      }
+
+      invariant #fix-overlapping {
+        Для упрощения логики шагов [SilenceStep], [NotesStep], [ResultStep] 
+        метод [Calibrator.receive] проверяет пересечение уже обработанных блоков и нового и 
+        передает в шаги уже исправленный блок с отброшенным началом, поэтому им не надо
+        соблюдать [SoundReceiver.receive#order].
+      }
+
+      note ai {
+        [Calibrator.receive#fix-overlapping] специально реализуется здесь, чтобы реализовать
+        [SoundReceiver.receive#order] один раз здесь и не дублировать реализацию
+        во вложенных шагах. они всё равно не живут без [Calibrator].
+        Это не противоречие - это архитектурное решение.
+      }
+    }
+  }
+}

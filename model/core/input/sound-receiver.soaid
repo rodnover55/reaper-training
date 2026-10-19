@@ -1,0 +1,32 @@
+import training.core
+
+interface SoundReceiver {
+  responsibility Интерфейс для приема звукового потока блоками
+
+  action {
+    setSampleRate(rate: training.core.SampleRate) {
+      responsibility Устанавливает частоту приходящего потока
+
+      outside {
+        За перезапуск [SoundReceiver] отвечает вызывающая сторона, 
+        которая меняет частоту. Сами [SoundReceiver] себя не перезапускают.
+      }
+
+      note ai {
+        Не требуется устанавливать его перед каждым вызовом [SoundReceiver.receive].
+        Только при смене частоты.
+      }
+    }
+
+    receive(block: AudioBlock) {
+        responsibility Принимает блок семплов для обработки
+
+        invariant #order {
+          Блоки идут по времени. Начало нового блока, которое по времени 
+          совпадает с уже полученным звуком, отбрасывается.
+        }
+
+        invariant #xrun Если аудиоблок пропущен - звук считается тишиной.
+    }
+  }
+}

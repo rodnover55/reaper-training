@@ -1,0 +1,12 @@
+import training.core
+
+use training.core
+
+value AudioBlock {
+  responsibility Описывает блок семплов.
+
+  field {
+    samples: float[] Массив семплов.
+    start: Moment Время начала блока семплов.
+  }
+}

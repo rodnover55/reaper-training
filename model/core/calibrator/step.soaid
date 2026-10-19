@@ -1,0 +1,18 @@
+enum Step {
+  responsibility Определяет в каком состоянии калибратор.
+
+  invariant #transitions {
+    Разрещены следующие перемещения:
+    [Step.Off] -> [Step.Silence] -> [Step.Notes] -> [Step.Done]
+    [Step.Silence] -> [Step.Off]
+    [Step.Notes] -> [Step.Off]
+    [Step.Done] -> [Step.Off]
+  }
+
+  value {
+    Off Калибратор не запущен.
+    Silence Калибратор измеряет порог тишины.
+    Notes Калибратор измеряет уровень нот.
+    Done Калибратор завершил измерения.
+  }
+}
