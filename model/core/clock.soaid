@@ -1,0 +1,79 @@
+value Moment {
+  responsibility Определяет единицу измерения времени в ядре.
+  invariant #independency Не зависит от системного времени
+  invariant #ordered Cравнимы между собой.
+
+  action {
+    constructor create() Создает нулевую точку отсчета времени.
+
+    shift(interval: Interval): Moment {
+      responsibility {
+        Сдвигает время на `interval`. 
+        Положительный интервал сдвигает время вперёд, отрицательный — назад.
+      }
+
+      note Может быть реализовано несколькими функциями, например, сложением или вычитанием интервала.
+    }
+
+    since(earlier: Moment): Interval Интервал от времени `earlier` до этого времени.
+  }
+}
+
+value Interval {
+  responsibility Период времени между двумя моментами времени
+  invariant #negative Если конечный момент времени меньше начального, то интервал отрицательный.
+  invariant #ordered Cравнимы между собой.
+
+  const {
+    Nanosecond 1ns
+    Microsecond 1us
+    Millisecond 1ms
+    Second 1s
+  }
+
+  value Ratio: float {
+    responsibility Отношение двух интервалов
+
+    note {
+      Используется для определения количество секунд в интервале. Например: 
+        `interval` / [Interval.Second] = значение в секундах, 
+        `interval` / [Interval.Millisecond] = значение в миллисекундах.
+    }
+
+    action {
+      whole(): int {
+        responsibility Возвращает целую часть отношения интервалов.
+      }
+    }
+  }
+
+  action {
+    constructor create() Создает нулевой интервал.
+
+    abs(): Interval Возвращает длину интервала без знака.
+    negated(): Interval Преобразовывает в интервал той же длины с другим знаком.
+
+    add(other: Interval): Interval {
+      responsibility {
+        Расширяет интервал на `other`.
+        Положительный интервал расширяет интервал, отрицательный — сокращает.
+      }
+      note Может быть реализовано несколькими функциями, например, сложением или вычитанием.
+    }
+
+    scaled(factor: float): Interval {
+      responsibility Масштабирует интервал на `factor`.
+      note Может быть реализовано несколькими функциями, например, умножением на `factor` или делением на `1/factor`.
+
+      arg factor: float Целое или дробное число.
+    }
+
+    ratio(unit: Interval): Interval.Ratio {
+      responsibility Определяет во сколько раз интервал длиннее интервала `unit`.
+
+      arg unit: Interval {
+        invariant #nonZero Отличен от нуля.
+      }
+    }
+  }
+}

@@ -16,11 +16,12 @@
 | `cmake --preset default` | Подготовить сборку. Нужно один раз в свежем клоне и после правок в `CMakeLists.txt`. |
 | `cmake --build --preset default` | Собрать плагин и тесты. |
 | `ctest --preset quick` | Проверить правку на ходу — без долгих линтеров и сборки под санитайзерами. |
+| `ctest --preset tidy` | Прогнать только clang-tidy — после правок под его замечания. Нужна сборка: `cmake --build --preset default`. |
 | `cmake --workflow --preset push-check` | Полная проверка перед push. |
 | `cmake --build build --target format` | Привести форматирование в порядок, когда упал `clang_format`. |
 | `cmake --workflow --preset sanitize` | Прогнать тесты под ASan и UBSan, если есть подозрение на порчу памяти. |
 | `cmake --install build` | Поставить плагин в REAPER и попробовать вживую. |
-| `cmake --preset debug && cmake --build --preset debug && cmake --install build/debug` | Поставить отладочную сборку: отладочные действия `reaper-training (debug): …` и функции `TrainingDebug_*` для скриптов проверок. |
+| `cmake --preset debug && cmake --build --preset debug && cmake --install build/debug` | Поставить отладочную сборку — без оптимизации и с отладочной информацией, для отладчика. |
 | `cmake --workflow --preset release` | Собрать модуль так, как его собирает CI для Releases, и прогнать тесты. Файл — в `build/release`. |
 | `cmake --build --preset installer` | После `release` — собрать установщик для своей системы. Файл — в `build/release/installer`. Нужен инструмент установщика: Inno Setup на Windows, Xcode Command Line Tools на macOS, makeself на Linux; без него сборка цели падает с подсказкой, что поставить. |
 
@@ -44,10 +45,49 @@ console_log=1
 ```
 
 Тогда при запуске в консоли появляется строка `reaper-training <версия>
-loaded (сборка <время>)`, а отладочные действия пишут туда свои результаты.
-Из скрипта то же — `reaper.SetExtState("reaper_training", "console_log", "1",
+loaded (сборка <время>)`. Из скрипта то же — `reaper.SetExtState("reaper_training", "console_log", "1",
 true)`, выключить — `reaper.DeleteExtState("reaper_training", "console_log",
 true)`; действует со следующего запуска.
+
+## Проверка вживую
+
+Решения тренажёра проверяют юнит-тесты. Связку с REAPER проверяет
+`tools/live/live.py` — чёрным ящиком, на виртуальном дисплее Xvfb, без
+участия пользователя: публичный API REAPER из скриптов Lua, виртуальная
+MIDI-клавиатура, щелчки мышью и снимки окна тренажёра, журнал тренажёра.
+
+REAPER работает с отдельной папкой ресурсов `build/live`: свои настройки
+тренажёра и журнал `build/live/reaper-training.log`, папка ресурсов REAPER
+пользователя не меняется. Звуковую систему и лицензию инструмент берёт из
+`~/.config/REAPER`, REAPER — `~/opt/REAPER/reaper` или путь из переменной
+`TRAINING_REAPER`. Нужен Xvfb (`sudo apt install xvfb`). Пока работает другой
+REAPER, проверка не запускается: звуковая карта одна.
+
+```sh
+python3 tools/live/live.py start                            # Xvfb и REAPER с build/reaper_training.so
+python3 tools/live/live.py run tools/live/window.lua        # открыть окно тренажёра
+python3 tools/live/live.py click IDC_CALIBRATE              # щелчок в контрол из src/views/forms.rc
+python3 tools/live/live.py click IDC_CHANNEL --item 1 --of 20  # второй из 20 пунктов списка Input
+python3 tools/live/live.py type IDC_SILENCE -40             # набрать -40 в поле вместо прежнего
+python3 tools/live/live.py key BackSpace                    # клавиши: BackSpace, Tab, End, ctrl+a
+python3 tools/live/live.py hover IDC_TOLERANCE              # навести мышь на контрол без щелчка
+python3 tools/live/live.py run tools/live/transport.lua play   # play, record, pause, stop или restart
+python3 tools/live/live.py run tools/live/midi.lua 60 100      # нота виртуальной MIDI-клавиатуры
+python3 tools/live/live.py shot window.png                  # снимок окна тренажёра
+python3 tools/live/live.py shot tip.png --untitled          # снимок подсказки у курсора
+python3 tools/live/live.py quit                             # выход без вопросов о сохранении
+```
+
+`run` печатает, что вернул скрипт; строки после имени скрипта он видит в
+таблице `arg`. Скрипт `run` передаёт REAPER командой `reaper -nonewinst`, и
+REAPER поднимает своё главное окно: поле окна тренажёра теряет фокус, и в нём
+встаёт действующее значение. Поэтому отклонённое поле снимают до `run`.
+`type` передаёт фокус ввода окну тренажёра — без оконного менеджера Xvfb
+клавиши ушли бы в главное окно REAPER, — щёлкает в поле, выделяет его текст
+сочетанием Ctrl+A и набирает новый: поле не проходит через значения, которые
+давало бы стирание по знаку. Пункты списка Input по порядку — в строке журнала
+`input list:`. Другой модуль задаёт `start --module`, настройки и журнал
+прошлого запуска сохраняет `start --keep`.
 
 ## Граница шкалы окна попадания
 
@@ -61,10 +101,12 @@ true)`; действует со следующего запуска.
 window_scale_ms=100
 ```
 
-Целое число миллисекунд от 10 до 200; вне этих границ прижимается к ним, без
-настройки — 50. Сохранённое окно попадания, которое в шкалу не помещается,
-при запуске сужается и сдвигается к нулю. Расширение эту настройку только
-читает.
+Целое число миллисекунд от 10 до 200, без настройки — 50. Граница вне 10–200
+не принимается: действует 50. Сохранённое окно попадания, которое не ложится
+в шкалу, тоже не принимается: действует 0 ± 10 мс. Не принятые строки
+тренажёр пишет в журнал и называет в строке состояния при открытии окна.
+Строку `window_scale_ms` расширение только читает и не переписывает: неверную
+границу правят вручную.
 
 ## Сборки и релизы
 

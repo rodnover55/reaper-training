@@ -52,3 +52,10 @@ WarningsAsErrors: '*'
 # в build/_deps попадаются каталоги src/, которые он бы принял за свои.
 HeaderFilterRegex: '.*/(libs|src|tests)/.*'
 ExcludeHeaderFilterRegex: '.*/_deps/.*'
+
+# Явный (void) — сознательный отказ от результата: так код отбрасывает ошибку
+# std::expected там, где её не бывает, например запуск юнита сразу после
+# остановки всех юнитов. Результат, отброшенный молча, без (void), чек
+# по-прежнему ловит.
+CheckOptions:
+  bugprone-unused-return-value.AllowCastToVoid: true

@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.29)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Наименьшая версия macOS")
 
 project(reaper-training
-  VERSION 0.7.0
+  VERSION 0.8.0
   DESCRIPTION "REAPER extension: timing trainer"
   LANGUAGES CXX C)
 
@@ -96,8 +96,8 @@ FetchContent_Declare(wdl
   URL_HASH SHA256=ca87bdfdeddf8c5590ed75d64a980c3bbaf6dcb96f1be170461e7c90c19f0490)
 
 # {fmt} вместо std::format: на macOS 12 системная библиотека C++ дробные числа
-# не форматирует, а {fmt} делает это своим кодом (design.md D9). Ставить и
-# проверять его нечего, файловые API ОС и модуль C++20 не нужны.
+# не форматирует, а {fmt} делает это своим кодом. Ставить и проверять его
+# нечего, файловые API ОС и модуль C++20 не нужны.
 #
 # EXCLUDE_FROM_ALL: {fmt} объявляет ещё и обёртку для C, без условия. Так
 # собирается только то, с чем линкуются свои цели.
@@ -141,11 +141,19 @@ if(NOT EXISTS "${reaper_sdk_SOURCE_DIR}/WDL")
 endif()
 
 # --- Библиотеки ---------------------------------------------------------------
-# Всё, что решает точность, собирается и проверяется без REAPER и без
-# заголовков ОС (design.md D9). Модуль расширения собирает их вместе.
-add_subdirectory(libs/concurrency)
-add_subdirectory(libs/onset)
-add_subdirectory(libs/grid)
+# Всё, что решает точность, и отрисовка собираются и проверяются без REAPER и
+# без заголовков ОС; libs/reaper — связка с REAPER. Модуль расширения собирает
+# их вместе.
+add_subdirectory(libs/core)
+add_subdirectory(libs/core/input)
+add_subdirectory(libs/core/detector)
+add_subdirectory(libs/core/state)
+add_subdirectory(libs/core/training/state)
+add_subdirectory(libs/core/calibration)
+add_subdirectory(libs/core/training)
+add_subdirectory(libs/core/transport)
+add_subdirectory(libs/render)
+add_subdirectory(libs/reaper)
 
 # --- Ресурсы форм -------------------------------------------------------------
 # Формы описаны в src/views/forms.rc — одним исходником на все платформы. Под
@@ -184,11 +192,13 @@ add_library(reaper_training MODULE
   src/main.cpp
   src/actions.cpp
   src/audio_input.cpp
-  src/debug_actions.cpp
+  src/input_settings.cpp
   src/journal.cpp
   src/midi_inputs.cpp
   src/project_timeline.cpp
+  src/reaper_notification_relay.cpp
   src/settings.cpp
+  src/settings_read.cpp
   src/trainer.cpp
   src/window.cpp)
 
@@ -208,11 +218,6 @@ endif()
 # Свои заголовки включаются от корня src/.
 target_include_directories(reaper_training PRIVATE src)
 
-# Журнал и отладочные действия есть только в отладочной сборке (design.md D10):
-# пользователю они не показываются.
-target_compile_definitions(reaper_training PRIVATE
-  $<$<CONFIG:Debug>:TRAINING_DEBUG_BUILD>)
-
 # Версия и отметка времени сборки, которые расширение печатает при загрузке.
 # По ним видно, тот ли модуль в REAPER: не поставленный вовремя плагин выглядит
 # как «поведение не изменилось», и отличить это от настоящей ошибки иначе нечем.
@@ -231,7 +236,9 @@ add_dependencies(reaper_training reaper_training_stamp)
 target_include_directories(reaper_training PRIVATE "${CMAKE_BINARY_DIR}")
 
 target_link_libraries(reaper_training PRIVATE
-  training_concurrency training_onset training_grid fmt::fmt)
+  training_core training_core_input training_core_detector training_core_state
+  training_core_training_state training_core_calibration training_core_training
+  training_core_transport training_render training_reaper fmt::fmt)
 
 # SYSTEM: SDK и WDL чужие, их предупреждения не наши.
 target_include_directories(reaper_training SYSTEM PRIVATE
@@ -291,14 +298,9 @@ if(NOT WIN32)
   # предупреждений достаётся и ей. Снимаем: исправить её мы всё равно не можем.
   set_source_files_properties("${swell_stub}" PROPERTIES
     COMPILE_OPTIONS "${training_no_warnings}")
-else()
-  # Обёртки WDL, через которые окно передаёт Win32 текст в UTF-8
-  # (src/window.cpp). Отдельной библиотекой: так до чужого кода не доходит
-  # набор предупреждений модуля, а снять /W4 у одного файла MSVC молча не даёт.
-  add_library(training_win32_utf8 STATIC "${wdl_SOURCE_DIR}/WDL/win32_utf8.c")
-  target_compile_options(training_win32_utf8 PRIVATE ${training_no_warnings})
-  target_link_libraries(reaper_training PRIVATE training_win32_utf8)
 endif()
+# На Windows обёртки WDL, через которые окно передаёт Win32 текст в UTF-8
+# (src/window.cpp), приходят вместе с training_reaper.
 
 # --- Установка ----------------------------------------------------------------
 # Путь из переменной окружения Windows — с обратными косыми чертами, а CMake

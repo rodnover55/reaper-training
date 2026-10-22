@@ -1,0 +1,362 @@
+@startuml bars-in-core-diff
+title Такты в ядре: изменения типов (только дифф)
+
+' Показаны только новые, изменённые, удалённые и перенесённые типы и только их
+' изменённые члены. Остальные типы и члены не меняются.
+
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam nodesep 40
+skinparam ranksep 50
+
+skinparam class {
+  BackgroundColor<<новый>> #E8F5E9
+  BorderColor<<новый>> #2E7D32
+  BackgroundColor<<изменён>> #FFF8E1
+  BorderColor<<изменён>> #F9A825
+  BackgroundColor<<удалён>> #FFEBEE
+  BorderColor<<удалён>> #C62828
+  BackgroundColor<<перенесён>> #E3F2FD
+  BorderColor<<перенесён>> #1565C0
+}
+
+legend top left
+  |= Блок |= Что значит |
+  |<back:#E8F5E9>   новый   </back>| новый тип |
+  |<back:#FFF8E1>  изменён  </back>| тип остаётся, меняются показанные члены |
+  |<back:#FFEBEE>  удалён   </back>| тип убирается |
+  |<back:#E3F2FD> перенесён </back>| тип переезжает в этот слой без изменений |
+  | <color:#2E7D32>+ член</color> | добавляется |
+  | <color:#C62828><s>член</s></color> | убирается |
+endlegend
+
+package "libs/core — training::core" as core #F5F6FC {
+
+  class "training::core::Timeline" as CoreTimeline <<новый>> <<struct>> {
+    <color:#2E7D32>+ std::vector<training::core::Bar> bars</color>
+    <color:#2E7D32>+ std::vector<training::core::Moment> add(training::core::Bar bar)</color>
+    <color:#2E7D32>+ std::optional<std::pair<training::core::Position, training::core::Moment>> nearest(training::core::Moment time) const</color>
+  }
+  note right of CoreTimeline
+    Список тактов запуска; заменяет интерфейс
+    training::core::Timeline (он переезжает в связку
+    как training::reaper::TempoMap).
+    add — такт в любой момент: с времени своего start
+    он заменяет прошлые такты; доли прошлых тактов
+    после этого времени не действуют. Возвращает время
+    нот, снятых с этих долей: транспорт ставит их заново.
+    nearest — ближайшая действующая доля среди всех
+    тактов и её время; при равенстве — доля такта,
+    пришедшего позже; пусто — после time нет ни одной
+    доли: нота ждёт.
+  end note
+
+  class "training::core::Position" as CorePosition <<новый>> <<struct>> {
+    <color:#2E7D32>+ std::size_t bar</color>
+    <color:#2E7D32>+ training::core::Division division</color>
+  }
+  note right of CorePosition
+    Позиция в списке тактов запуска: bar — индекс
+    такта в Timeline::bars, division — доля в нём.
+    Прежняя training::core::Position (такт проекта
+    и доля) переезжает в связку.
+  end note
+
+  class "training::core::Division" as CoreDivision <<новый>> {
+    <color:#2E7D32>+ explicit Division(double beats)</color>
+    <color:#2E7D32>+ double beats() const</color>
+    <color:#2E7D32>+ auto operator<=>(const Division &) const</color>
+    <color:#2E7D32>- double beats_</color>
+  }
+  note right of CoreDivision
+    Доля такта: место в такте в ударах от его начала,
+    дробное (0 — первый удар, 1.5 — середина второго).
+    Сравнения — для ключа std::map.
+  end note
+
+  class "training::core::Bar" as CoreBar <<изменён>> <<struct>> {
+    <color:#C62828><s>+ std::int64_t index</s></color>
+    <color:#2E7D32>+ std::string name</color>
+    <color:#2E7D32>+ training::core::Moment start</color>
+    <color:#2E7D32>+ std::map<training::core::Division, training::core::Moment> divisions</color>
+    <color:#2E7D32>+ std::map<training::core::Division, std::vector<training::core::Note>> notes</color>
+    <color:#2E7D32>+ std::optional<std::pair<training::core::Division, training::core::Moment>> nearest(training::core::Moment time) const</color>
+  }
+  note right of CoreBar
+    name — подпись на экране: «57», «−1»; задаёт связка.
+    start — время, с которого такт действует.
+    divisions — доли (узлы сетки): место в такте
+    в ударах → время; строит связка по своему режиму
+    сетки и карте темпа REAPER; все не раньше start.
+    notes — ноты долей по месту доли, в порядке постановки.
+    nearest — ближайшая доля такта: место и время;
+    при равенстве — ранняя.
+    meter и tempo — как есть.
+  end note
+
+  class "training::core::Note" as CoreNote <<изменён>> <<struct>> {
+    <color:#2E7D32>+ training::core::Hit hit</color>
+  }
+
+  enum "training::core::Hit" as CoreHit <<новый>> {
+    <color:#2E7D32>Target</color>
+    <color:#2E7D32>Good</color>
+    <color:#2E7D32>Bad</color>
+  }
+  note right of CoreHit
+    Оценка ноты в момент постановки по окну попадания:
+    Target — не дальше 0.5 мс от центра окна,
+    Good — внутри окна, Bad — вне окна.
+  end note
+
+  interface "training::core::BarReceiver" as BarReceiver <<новый>> {
+    <color:#2E7D32>+ void addBar(training::core::Bar bar)</color>
+  }
+  note right of BarReceiver
+    Поставка тактов в ядро. Момент передачи
+    выбирает связка, в том числе заранее.
+  end note
+
+  class "training::core::Settings" as CoreSettings <<изменён>> {
+    <color:#C62828><s>+ training::core::Mode mode() const</s></color>
+    <color:#C62828><s>+ bool setMode(training::core::Mode mode)</s></color>
+    <color:#C62828><s>- training::core::Mode mode_</s></color>
+  }
+}
+
+package "libs/trainer — training::trainer" as trainer #FAF5FB {
+
+  class "training::trainer::Transport" as Transport <<изменён>> {
+    <color:#C62828><s>+ std::optional<training::core::Moment> start()</s></color>
+    <color:#2E7D32>+ bool start()</color>
+    <color:#C62828><s>+ bool play(training::core::Moment time)</s></color>
+    <color:#C62828><s>+ void setTimeline(const training::core::Timeline &timeline)</s></color>
+    <color:#C62828><s>+ const training::grid::Bars &bars() const</s></color>
+    <color:#2E7D32>+ void addBar(training::core::Bar bar) override</color>
+    <color:#2E7D32>+ training::core::Timeline timeline() const</color>
+    <color:#C62828><s>- training::grid::Bars bars_</s></color>
+    <color:#C62828><s>- const training::core::Timeline *timeline_</s></color>
+    <color:#C62828><s>- training::core::Moment start_</s></color>
+    <color:#2E7D32>- training::core::Timeline timeline_</color>
+    <color:#2E7D32>- mutable std::mutex mutex_</color>
+  }
+  note bottom of Transport
+    receive для звука сам превращает найденные атаки
+    в ноты; receive для MIDI — ноты после мёртвого
+    времени. Нота ложится в ближайшую долю
+    (Timeline::nearest) с оценкой Hit по окну попадания
+    на этот момент, иначе ждёт в waiting_, пока после
+    неё не появится доля. addBar добавляет такт, ставит
+    ноты, снятые с заменённых долей, и ждущие ноты.
+    timeline — копия списка тактов для render.
+    mutex_ защищает timeline_, waiting_ и placed_ от
+    потока звука и главного потока.
+    start очищает список тактов; stop молча выбрасывает
+    ждущие ноты. start возвращает ложь, если запуск
+    уже шёл; точки отсчёта запуска у ядра нет.
+  end note
+}
+
+package "libs/grid — training::grid" as grid #F2F8FD {
+  class "training::grid::Bars" as Bars <<удалён>> {
+  }
+  class "training::grid::BarRow" as GridBarRow <<удалён>> <<struct>> {
+  }
+  class "training::grid::RowBeat" as RowBeat <<удалён>> <<struct>> {
+  }
+  class "training::grid::RowSlot" as RowSlot <<удалён>> <<struct>> {
+  }
+  class "training::grid::NodeHit" as NodeHit <<удалён>> <<struct>> {
+  }
+  class "training::grid (функции nodes.hpp)" as GridNodes <<удалён>> {
+    <color:#C62828><s>+ NodeHit nearestNode(training::core::Moment time, training::core::Mode mode,</s></color>
+    <color:#C62828><s>    const training::core::Timeline &timeline)</s></color>
+  }
+  note bottom of GridNodes
+    Ноты держит training::core::Timeline,
+    ближайшую долю ищет training::core::Bar::nearest;
+    показ строк — training::render::BarRows.
+  end note
+}
+
+package "libs/render — training::render" as render #FDF7EE {
+
+  class "training::render::BarLabels" as BarLabels <<удалён>> {
+    <color:#C62828><s>+ BarLabel labelOf(std::int64_t bar) const</s></color>
+  }
+  class "training::render::BarLabel" as BarLabel <<удалён>> <<struct>> {
+    <color:#C62828><s>+ std::int64_t number</s></color>
+    <color:#C62828><s>+ bool leadIn</s></color>
+    <color:#C62828><s>+ training::core::Bar previous</s></color>
+  }
+
+  class "training::render::BarRows" as BarRows <<изменён>> {
+    <color:#C62828><s>+ void setBars(const training::grid::Bars &bars, training::core::Mode mode,</s></color>
+    <color:#C62828><s>    const BarLabels &labels)</s></color>
+    <color:#2E7D32>+ void setBars(const training::core::Timeline &timeline,</color>
+    <color:#2E7D32>    std::optional<training::core::Moment> heard, const training::core::HitWindow &window)</color>
+  }
+  note right of BarRows
+    Решения показа — здесь, а не в ядре:
+    строки — такты, чей start не позже слышимой
+    позиции heard; первый такт списка (предтакт)
+    не рисуется; верхняя — такт, который звучит;
+    текущий удар — последняя доля на ударе не позже
+    heard; пустые такты паузы сворачиваются;
+    видно 8 строк. heard пусто — запуска нет,
+    текущего удара нет.
+  end note
+
+  class "training::render::BarRow" as RenderBarRow <<изменён>> {
+    <color:#C62828><s>+ void setRow(const training::grid::BarRow &row, bool top,</s></color>
+    <color:#C62828><s>    const training::grid::Bars &bars, training::core::Mode mode, const BarLabels &labels)</s></color>
+    <color:#2E7D32>+ void setRow(const training::core::Bar &bar, const training::core::Bar &previous,</color>
+    <color:#2E7D32>    std::optional<int> currentBeat, const training::core::HitWindow &window)</color>
+  }
+  note right of RenderBarRow
+    Подпись — name; имя с «−» (U+2212) — фон затакта.
+    Значение доли — нота, ближайшая к доле; звёздочка —
+    у доли больше одной ноты; цвет — Hit ноты.
+    Среднее и разброс — по нотам такта, цвет среднего —
+    по текущему окну window. Маркер смены в начале
+    такта — против размера и последнего темпа previous —
+    прошлого такта списка.
+  end note
+}
+
+package "libs/reaper — training::reaper" as reaper #FDF3F0 {
+
+  interface "training::reaper::TempoMap" as TempoMap <<перенесён>> {
+    + Position positionAt(training::core::Moment time) const
+    + training::core::Moment timeAt(Position position) const
+    + MapBar barOf(std::int64_t index) const
+  }
+  note right of TempoMap : из интерфейса training::core::Timeline
+
+  class "training::reaper::Position" as ReaperPosition <<перенесён>> <<struct>> {
+    + std::int64_t bar
+    + double beat
+  }
+  note right of ReaperPosition : из прежней training::core::Position
+
+  class "training::reaper::MapBar" as MapBar <<перенесён>> <<struct>> {
+    + std::int64_t index
+    + training::core::Meter meter
+    + std::map<double, double> tempo
+  }
+  note right of MapBar : прежний training::core::Bar
+
+  enum "training::reaper::Mode" as Mode <<перенесён>> {
+    Quarters
+    Eighths
+    EighthTriplets
+    Sixteenths
+    SixteenthTriplets
+  }
+  note right of Mode : из training::core::Mode вместе с divisions(mode)
+
+  class "training::reaper::RunTimeline" as RunTimeline <<изменён>> {
+    <color:#C62828><s>+ render::BarLabel labelOf(std::int64_t bar) const override</s></color>
+    <color:#2E7D32>+ training::core::Bar barAt(std::int64_t index, Mode mode) const</color>
+  }
+  note right of RunTimeline
+    Реализует training::reaper::TempoMap вместо
+    training::core::Timeline и training::render::BarLabels.
+    barAt — такт запуска для ядра: name — номер такта
+    проекта, у тактов затакта «−1», «−2»; start — время
+    первого удара, у такта, начатого после петли или
+    перемотки, — время начала отрезка; доли режима mode
+    не раньше start — время через карту темпа
+    (TimeMap2_beatsToTime) и скорость отрезка.
+  end note
+
+  class "training::reaper::CountInTimeline" as CountInTimeline <<изменён>> {
+  }
+  note right of CountInTimeline : реализует training::reaper::TempoMap
+}
+
+package "src — training::reaper" as src #FFF8EE {
+
+  class "training::reaper::Trainer" as Trainer <<изменён>> {
+    <color:#C62828><s>+ const grid::Bars &bars() const</s></color>
+    <color:#C62828><s>+ const render::BarLabels &barLabels() const</s></color>
+    <color:#2E7D32>+ training::core::Timeline timeline() const</color>
+    <color:#2E7D32>+ std::optional<training::core::Moment> heard() const</color>
+    <color:#C62828><s>- void followPlayback()</s></color>
+    <color:#2E7D32>- void sendBars()</color>
+    <color:#2E7D32>- std::optional<std::int64_t> nextBar_</color>
+    <color:#2E7D32>- std::optional<training::core::Moment> heard_</color>
+  }
+  note right of Trainer
+    sendBars — на каждом опросе: при старте сначала
+    предтакт и такт начала отсчёта или запуска, дальше —
+    такты с запасом до слышимой позиции плюс такт;
+    после петли или перемотки — такт отрезка с его начала.
+    heard_ — слышимая позиция во времени ядра для render
+    (RunTimeline::heard); ядру она не передаётся.
+  end note
+
+  class "training::reaper::ProjectTimeline" as ProjectTimeline <<изменён>> {
+  }
+  note right of ProjectTimeline : реализует training::reaper::TempoMap
+
+  class "training::reaper::InputSettings" as InputSettings <<изменён>> {
+    <color:#2E7D32>+ Mode mode() const</color>
+    <color:#2E7D32>+ bool setMode(Mode mode)</color>
+    <color:#2E7D32>- Mode mode_</color>
+  }
+  note right of InputSettings
+    Режим сетки — настройка связки:
+    по нему она строит доли тактов.
+  end note
+}
+
+' --- раскладка: слои сверху вниз ---------------------------------------------------
+
+src -[hidden]down-> reaper
+reaper -[hidden]down-> render
+render -[hidden]down-> trainer
+trainer -[hidden]down-> core
+render -[hidden]right-> grid
+CoreTimeline -[hidden]down-> CorePosition
+CorePosition -[hidden]down-> CoreDivision
+CoreBar -[hidden]down-> CoreNote
+CoreNote -[hidden]down-> CoreHit
+BarReceiver -[hidden]down-> CoreSettings
+TempoMap -[hidden]down-> ReaperPosition
+ReaperPosition -[hidden]down-> MapBar
+Mode -[hidden]down-> RunTimeline
+BarLabels -[hidden]down-> BarLabel
+Bars -[hidden]down-> GridBarRow
+GridBarRow -[hidden]down-> RowBeat
+RowBeat -[hidden]down-> RowSlot
+RowSlot -[hidden]down-> NodeHit
+NodeHit -[hidden]down-> GridNodes
+
+' --- связи ---------------------------------------------------------------------
+
+CoreTimeline *-- CoreBar
+CoreTimeline ..> CorePosition
+CorePosition --> CoreDivision
+CoreBar ..> CoreDivision
+CoreBar *-- CoreNote
+CoreNote --> CoreHit
+Transport ..|> BarReceiver
+Transport *-- CoreTimeline
+
+BarRows ..> CoreTimeline
+RenderBarRow ..> CoreBar
+
+RunTimeline ..|> TempoMap
+CountInTimeline ..|> TempoMap
+ProjectTimeline ..|> TempoMap
+TempoMap ..> ReaperPosition
+TempoMap ..> MapBar
+RunTimeline ..> CoreBar : строит
+RunTimeline ..> Mode
+Trainer --> BarReceiver : addBar
+Trainer ..> BarRows : timeline, heard
+InputSettings --> Mode
+
+@enduml

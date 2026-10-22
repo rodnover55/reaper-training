@@ -1,0 +1,10 @@
+import training.core.input
+import training.core.training.state
+
+interface Callback: (training.core.input.MidiReceiver|training.core.input.SoundReceiver) {
+  action {
+    addBar(bar: state.Bar) {
+      responsibility Добавляет новый такт в тренажер.
+    }
+  }
+}

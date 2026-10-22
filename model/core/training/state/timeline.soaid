@@ -1,0 +1,73 @@
+import training.core
+
+use training.core
+
+entity Timeline {
+  responsibility Такты тренировки
+
+  field bars: Bar[] {
+    responsibility Такты в порядке прихода.
+    invariant #time-ordered такты должны быть упорядочены по времени прихода (не времени [Bar.start]).
+
+    invariant #bar-overlapping {
+      Более новый такт заменяет предыдущий в своих границах [Bar.start] и [Bar.end].
+      Это значит, что для вызывающей стороны доли старого такта не действуют
+      при вызове всех функций работающих со [Timeline] как единым целым.
+      Вызывающая сторона может получить полное содержание [Timeline.bars] 
+      по индексу или списком отдельным методом
+    }
+  }
+
+  action {
+    add(bar: Bar) {
+      responsibility Добавляет такт `bar`.
+      invariant #exsiting-notes Ноты уже добавленные в старый такт - остаются в старом такте.
+
+      note {
+        Такты добавляются до того, как в такт добавляется нота [Timeline.addNote]
+      }
+      note ai {
+        Границы такта определяются через [Bar.start], [Bar.end].
+      }
+
+      outside {
+        Ядро не заботится об отрисовке, отрисовка сама решает как правильно отрисовывать данные ядра.
+        Например в случае пересечения тактов.
+      }
+    }
+
+    addNote(position: Position, note: Note) throws UnknownPosition {
+      responsibility Добавляет ноту `note` по указанной позиции `position`.
+
+      note ai {
+        Для определения границ такта в который добавляется нота используются [Bar.start], [Bar.end].
+        Пересечение тактов учитывается.
+      }
+
+      error UnknownPosition {
+        responsibility Если `position` не попадает ни в один такт.
+      }
+    }
+
+    nearest(time: Moment): Position throws UnknownTime {
+      responsibility Возвращает позицию доли в [Timeline], ближайшей по времени к `time`.
+      invariant #equal-beats При равенстве расстояния между двумя ближайшем долями берется предыдущая.
+
+      error UnknownTime {
+        responsibility Если `time` не попадает ни в один такт или нет ни одной действующей доли.
+
+        note ai {
+          Из этого следует, что нота пришедшая очень близко к первой доле первого такта, 
+          но раньше неё вернет ошибку. Добавлять нужно количество тактов до и после - 
+          задача вызывающей стороны используя [Timeline.add]. 
+        }
+      }
+    }
+
+    time(position: Position): Moment throws UnknownPosition {
+      responsibility Возвращает момент времени, соответствующий позиции `position`.
+
+      error UnknownPosition Если `position` не попадает ни в один такт.
+    }
+  }
+}

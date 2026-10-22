@@ -21,8 +21,8 @@
     {
       "name": "debug",
       "inherits": "default",
-      "displayName": "Отладочная сборка для живых проверок",
-      "description": "Журнал и отладочные действия (design.md D10). Пользователю эта сборка не ставится.",
+      "displayName": "Отладочная сборка",
+      "description": "Без оптимизации и с отладочной информацией — для отладчика. Пользователю эта сборка не ставится.",
       "binaryDir": "${sourceDir}/build/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
@@ -104,6 +104,28 @@
       "filter": {
         "exclude": {
           "label": "slow"
+        }
+      }
+    },
+    {
+      "name": "unit",
+      "inherits": "default",
+      "displayName": "Только тесты",
+      "description": "Юнит-тесты обычной сборки без линтеров и анализаторов: для прогона после правок кода.",
+      "filter": {
+        "exclude": {
+          "label": "lint|slow"
+        }
+      }
+    },
+    {
+      "name": "tidy",
+      "inherits": "default",
+      "displayName": "Только clang-tidy",
+      "description": "clang-tidy по всем файлам параллельно и с кешем, без остальных тестов: для проверки правок под замечания анализатора.",
+      "filter": {
+        "include": {
+          "name": "^clang_tidy$"
         }
       }
     },

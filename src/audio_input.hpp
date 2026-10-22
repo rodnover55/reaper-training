@@ -1,10 +1,15 @@
 #pragma once
 
-// Звук гитары со входа звуковой карты (design.md D1, D3): аудиохук копирует
-// блоки выбранного канала, рабочий поток ищет в них атаки и отдаёт главному.
+// Звук гитары со входа звуковой карты: аудиохук копирует блоки выбранного
+// канала и считает их время ядра, на запуске — от связки запуска, рабочий поток
+// подаёт их ядру (`core::input::SoundReceiver`), а звук калибровки и места блоков на
+// шкале отдаёт главному потоку.
 
-#include "training/concurrency/spsc_ring.hpp"
-#include "training/onset/detector.hpp"
+#include "input_settings.hpp"
+#include "spsc_ring.hpp"
+#include "training/core/clock.hpp"
+#include "training/core/input/sound_receiver.hpp"
+#include "training/reaper/project_time.hpp"
 
 // SWELL объявляет max и min макросами, и они ломают стандартную библиотеку.
 #define WDL_NO_DEFINE_MINMAX
@@ -16,36 +21,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <thread>
 #include <vector>
 
 namespace training::reaper {
-
-/// Атака, найденная во входном звуке, вместе с блоком, в котором она началась.
-struct HookOnset {
-  /// Позиция обработки блока на шкале проекта, с (`GetPlayPosition2Ex`).
-  double blockPosition = 0.0;
-
-  /// Начало атаки — дробный номер сэмпла от начала блока; не меньше 0 и
-  /// меньше длины блока.
-  double offset = 0.0;
-
-  /// Частота дискретизации звуковой карты, Гц.
-  double sampleRate = 0.0;
-
-  /// Уровень атаки, dBFS (`onset::Onset::levelDb`).
-  double levelDb = 0.0;
-
-  /// Момент, когда хук получил блок, — секунды монотонных часов
-  /// (`std::chrono::steady_clock`). Только для замера задержки показа.
-  double monotonic = 0.0;
-
-  /// Номер запуска транспорта: растёт на 1 с каждым запуском воспроизведения
-  /// или записи и с каждым продолжением после паузы. Атаки одного запуска
-  /// идут подряд.
-  std::uint32_t run = 0;
-};
 
 /// Кусок звука для калибровки входа: подряд идущие сэмплы выбранного канала,
 /// снятые при остановленном транспорте.
@@ -56,205 +37,360 @@ struct CalibrationChunk {
   /// Сколько сэмплов в куске; больше нуля.
   int length = 0;
 
-  /// Правда, если кусок не продолжает прошлый: между ними звук пропал, шло
-  /// воспроизведение или калибровка выключалась. У первого куска — правда.
-  bool gap = false;
+  /// Время первого сэмпла во времени ядра, с компенсацией задержки звука.
+  core::Moment start;
 };
 
-/// Вход звуковой карты: аудиохук и рабочий поток поиска атак.
+/// Блок звука REAPER на шкале проекта — для карты темпа запуска.
+struct BlockPlace {
+  /// Время ядра первого сэмпла блока, без компенсации задержки звука.
+  core::Moment time;
+
+  /// Позиция обработки блока REAPER на шкале проекта.
+  core::Moment position;
+
+  /// Номер запуска, к связке которого хук привязал время блока (`onStart`);
+  /// 0 — блок взят до первого запуска.
+  std::uint64_t run = 0;
+};
+
+/// Часы звука хоста на конец последнего блока, который обработал хост: от
+/// этого конца хост отсчитывает возраст событий истории MIDI-входа.
+struct HostClock {
+  /// Конец последнего блока во времени ядра.
+  core::Moment end;
+
+  /// Длина последнего блока, сэмплов.
+  int blockLength = 0;
+
+  /// Частота дискретизации звуковой карты, Гц.
+  double sampleRate = 0.0;
+
+  /// Правда, если у часов совпадают все поля.
+  friend bool operator==(const HostClock &, const HostClock &) = default;
+};
+
+/// Вход звуковой карты: аудиохук и рабочий поток, который подаёт звук ядру.
+///
+/// - **Время.** Время ядра блока — время его первого сэмпла: блок начинается
+///   там, где кончился прошлый, — по длине блока и его частоте. Время блока
+///   для ядра — это время минус компенсация задержки звука
+///   (`setCompensation`).
+/// - **Запуск.** Время блоков запуска хук привязывает к связке (`onStart`):
+///   - первый блок после `onStart`, на котором REAPER играет, — начало
+///     отсчёта: его время — T0 минус длина отсчёта;
+///   - когда отсчёт кончился, блок, позиция которого стоит на P0, хук держит
+///     у себя, а прежний удержанный выбрасывает;
+///   - когда позиция пошла дальше P0, удержанный блок уходит со временем T0, а
+///     за ним — текущий. Если позиция пошла раньше конца отсчёта, текущий
+///     блок идёт со временем T0 плюс длина прошлого блока.
+/// - **Звук.** Выбранный вход и канал хук читает сам из выбранного входа
+///   владельца под своим замком (`lockSettings`). Звук выбранного канала хук
+///   направляет по маршруту звука: между `toCalibration` и `toTraining` — в
+///   очередь калибровки, в остальное время рабочий поток подаёт его
+///   приёмнику звука ядра (`setReceiver`). Блок без звука канала — вход MIDI,
+///   нет канала, переполнена очередь — приёмник получает пустым, со временем.
+/// - **Частота и запуск.** Приёмник получает только блоки своей частоты
+///   (`core::input::SoundReceiver::sampleRate`) и своего запуска
+///   (`setReceiver`); остальные блоки идут мимо ядра.
+/// - **Места блоков.** Время обработки каждого блока и позицию REAPER рабочий
+///   поток отдаёт главному потоку (`popPlace`) для карты темпа запуска.
 ///
 /// Существует от создания до уничтожения; хук зарегистрирован всё это время.
-/// Сэмплы берутся при воспроизведении и записи — для поиска атак — и при
-/// остановленном транспорте, если включён звук калибровки. Атаки из блоков, где
-/// позиция транспорта не сдвинулась с прошлого блока (запуск, count-in), не
-/// отдаются: на шкале им места нет (findings.md, R4).
 ///
 /// Многопоточность: все методы, кроме деструктора, можно звать из любого
-/// потока, но `popOnset` — только из одного и `popCalibration` — только из
-/// одного.
+/// потока, но `popCalibration` и `popPlace` — каждый только из одного.
 class AudioInput {
 public:
-  /// Регистрирует аудиохук и запускает рабочий поток. Выбранный канал — 0.
-  AudioInput();
+  /// Регистрирует аудиохук и запускает рабочий поток. Приёмника звука ядра
+  /// нет, пока его не поставит `setReceiver`.
+  ///
+  /// @param input выбранный вход у REAPER: вид входа и канал звуковой карты;
+  ///   живёт дольше входа.
+  explicit AudioInput(const InputSettings &input);
 
-  /// Снимает аудиохук и останавливает рабочий поток. Атаки, не забранные
-  /// `popOnset`, пропадают.
+  /// Снимает аудиохук и останавливает рабочий поток.
   ~AudioInput();
 
+  /// Копии нет: REAPER держит адрес этого входа в аудиохуке.
   AudioInput(const AudioInput &) = delete;
+
+  /// Присваивания копией нет: REAPER держит адрес этого входа в аудиохуке.
   AudioInput &operator=(const AudioInput &) = delete;
+
+  /// Перемещения нет: REAPER держит адрес этого входа в аудиохуке.
   AudioInput(AudioInput &&) = delete;
+
+  /// Присваивания перемещением нет: REAPER держит адрес этого входа в
+  /// аудиохуке.
   AudioInput &operator=(AudioInput &&) = delete;
 
-  /// Ложь, если REAPER не принял аудиохук: тогда атак не будет никогда.
+  /// Направляет звук выбранного канала в очередь калибровки (`popCalibration`):
+  /// туда идут блоки, которые хук возьмёт после вызова. Можно звать из любого
+  /// потока.
+  void toCalibration() { calibration_.store(true); }
+
+  /// Направляет звук выбранного канала приёмнику звука ядра (`setReceiver`):
+  /// туда идут блоки, которые хук возьмёт после вызова. Можно звать из любого
+  /// потока.
+  void toTraining() { calibration_.store(false); }
+
+  /// Ставит приёмник звука ядра, которому рабочий поток подаёт блоки запуска
+  /// `run`. Ждёт, пока рабочий поток отдаст прежнему приёмнику текущий блок:
+  /// после вызова прежний приёмник блоков больше не получает.
+  ///
+  /// @param receiver приёмник; nullptr — блоки идут мимо ядра. Приёмник живёт
+  ///   до следующего вызова.
+  /// @param run номер запуска (`onStart`): приёмник получает только блоки,
+  ///   время которых хук привязал к связке этого запуска (`BlockPlace::run`).
+  void setReceiver(core::input::SoundReceiver *receiver, std::uint64_t run);
+
+  /// Ложь, если REAPER не принял аудиохук: тогда звука не будет никогда.
   bool registered() const { return registered_; }
 
-  /// Выбирает входной канал звуковой карты, 0 — первый. Действует со
-  /// следующего блока.
-  void setChannel(int channel) { channel_.store(channel, std::memory_order_relaxed); }
+  /// Берёт замок настроек: владелец пишет под ним выбранный вход, который
+  /// читает этот вход. Только главный поток; хук читает его только под этим
+  /// замком. Под замком только копирование и перемещение полей.
+  std::unique_lock<std::mutex> lockSettings() { return std::unique_lock(settingsMutex_); }
 
-  /// Выбранный входной канал, 0 — первый.
-  int channel() const { return channel_.load(std::memory_order_relaxed); }
-
-  /// Сообщает хуку число входных каналов звуковой карты (`GetNumAudioInputs`):
-  /// сам хук его не узнаёт (findings.md, R1). Каналы с номером не меньше этого
-  /// числа сэмплов не дают. Действует со следующего блока.
-  void setInputChannels(int channels) {
-    inputChannels_.store(channels, std::memory_order_relaxed);
+  /// Ставит компенсацию задержки звука: время блока для ядра — время его
+  /// обработки минус она. Действует с блоков, которые хук возьмёт после
+  /// вызова.
+  void setCompensation(core::Interval compensation) {
+    compensation_.store(static_cast<std::int64_t>(compensation / core::Interval::kNanosecond));
   }
 
-  /// Число входных каналов, сообщённое `setInputChannels`; 0 — ещё не
-  /// сообщалось.
-  int inputChannels() const { return inputChannels_.load(std::memory_order_relaxed); }
+  /// Записывает для хука связку запуска и длину отсчёта и ставит отметку
+  /// начала запуска (`runPending_`): первый блок, который хук возьмёт после
+  /// вызова в воспроизведении или записи без паузы (`GetPlayStateEx`), —
+  /// начало отсчёта. Блоки, которые REAPER ещё обрабатывает остановленным,
+  /// началом отсчёта не становятся. Только главный поток.
+  ///
+  /// @param start связка запуска: время проекта начала (P0, скорость) и время
+  ///   ядра T0, с которого звучит P0.
+  /// @param countInSamples длина отсчёта, сэмплов, округлённая до целого числа
+  ///   блоков; 0 — отсчёта нет.
+  /// @return номер запуска: его получают места блоков, время которых хук
+  ///   привязал к этой связке (`BlockPlace::run`). Места блоков, взятых до
+  ///   того, как хук увидел отметку, приходят с прежним номером.
+  std::uint64_t onStart(RunStart start, std::uint64_t countInSamples);
 
-  /// Меняет порог тишины поиска атак, dBFS (`onset::Settings::silenceDb`).
-  /// Действует со следующего блока; поиск атак не начинается заново.
-  void setSilenceDb(double silenceDb) {
-    silenceDb_.store(silenceDb, std::memory_order_relaxed);
-  }
+  /// Часы звука хоста на конец последнего блока — и при запуске, и на
+  /// остановке.
+  ///
+  /// @return часы; пусто — хост ещё не обработал ни одного блока.
+  std::optional<HostClock> clock() const;
 
-  /// Порог тишины поиска атак, dBFS; по умолчанию −50.
-  double silenceDb() const { return silenceDb_.load(std::memory_order_relaxed); }
-
-  /// Меняет порог энергии удара по звучащей струне
-  /// (`onset::Settings::energyRatio`). Пользователю не показывается — для
-  /// проверок в отладочной сборке. Действует со следующего блока; поиск атак не
-  /// начинается заново.
-  void setEnergyRatio(double energyRatio) {
-    energyRatio_.store(energyRatio, std::memory_order_relaxed);
-  }
-
-  /// Порог энергии удара по звучащей струне; по умолчанию — как в
-  /// `onset::Settings`.
-  double energyRatio() const { return energyRatio_.load(std::memory_order_relaxed); }
-
-  /// Включает и выключает звук для калибровки входа. Пока он включён и
-  /// транспорт стоит, сэмплы выбранного канала идут в очередь калибровки
-  /// (`popCalibration`); при воспроизведении и записи — как всегда, в поиск
-  /// атак. Действует со следующего блока.
-  void setCalibrating(bool calibrating) {
-    calibrating_.store(calibrating, std::memory_order_relaxed);
+  /// Есть ли у звуковой карты входной канал `channel` — по последнему блоку,
+  /// в котором хук его проверял. Хук проверяет канал звуковой карты из
+  /// настроек на каждом блоке, в том числе при остановленном транспорте.
+  ///
+  /// @return пусто — канал `channel` хук ещё не проверял: после выбора
+  ///   канала блоков не было или выбран другой канал.
+  std::optional<bool> channelPresent(int channel) const {
+    const int checked = checkedChannel_.load(std::memory_order_relaxed);
+    if (checked < 0 || checked / 2 != channel)
+      return std::nullopt;
+    return checked % 2 == 1;
   }
 
   /// Забирает следующий кусок звука калибровки. Если очередь калибровки
-  /// переполнена, куски пропадают, и следующий за ними помечен `gap`.
+  /// переполнена, куски пропадают.
   ///
   /// @param samples сюда пишутся сэмплы куска; прежнее содержимое
   ///   заменяется. Если кусков нет, не меняется.
   /// @return кусок; пусто — новых нет.
   std::optional<CalibrationChunk> popCalibration(std::vector<float> &samples);
 
+  /// Забирает место следующего блока на шкале; пусто — новых нет. Если
+  /// очередь мест переполнена, места пропадают.
+  std::optional<BlockPlace> popPlace() { return places_.pop(); }
+
   /// Частота дискретизации по последнему блоку, Гц; 0 — блоков ещё не было.
   double sampleRate() const { return sampleRate_.load(std::memory_order_relaxed); }
 
-  /// Забирает следующую найденную атаку; пусто — новых нет.
-  std::optional<HookOnset> popOnset() { return onsets_.pop(); }
-
   /// Сколько блоков пропало между хуком и рабочим потоком: рабочий поток не
-  /// успевал. На пропуске поиск атак начинается заново.
+  /// успевал. Пропавший звук ядро отсчитывает как время без звука.
   std::size_t droppedBlocks() const { return headers_.dropped(); }
 
 private:
   /// Заголовок блока аудиохука.
   struct BlockHeader {
-    std::uint64_t sequence = 0;
-    double position = 0.0;
+    // Время обработки блока по часам потока звука.
+    core::Moment time;
+    // Время блока для ядра: время обработки минус компенсация.
+    core::Moment start;
+    core::Moment position;
+    // Номер запуска, к связке которого привязано время блока.
+    std::uint64_t run = 0;
     double sampleRate = 0.0;
-    double monotonic = 0.0;
     int length = 0;
-    bool hasSamples = false;
+    // Правда, если хук взял блок при подаче звука в калибровку.
     bool calibration = false;
-  };
-
-  /// Блок, уже поданный детектору: где он начался в потоке сэмплов и сдвинулась
-  /// ли позиция транспорта с прошлого блока.
-  struct StreamBlock {
-    std::uint64_t streamStart = 0;
-    BlockHeader header;
-    bool moving = false;
+    bool hasSamples = false;
   };
 
   static constexpr std::size_t kMaxBlock = 16384;
 
+  /// Аудиохук REAPER: отдаёт блок входа звука его входу (`onBlock`). Вызов
+  /// после обработки звука хостом (`isPost`) и хук без входа пропускает.
+  /// Зовётся в звуковом потоке.
   static void onAudioBuffer(bool isPost, int length, double sampleRate,
                             audio_hook_register_t *registration);
+
+  /// Берёт блок звукового потока: считает его время ядра (`alignRun`),
+  /// публикует часы звука хоста (`publishClock`), проверяет выбранный канал и
+  /// кладёт в очередь рабочего потока заголовок блока и сэмплы выбранного
+  /// канала, а удержанный до старта блок оставляет у себя. Блок длиннее
+  /// `kMaxBlock` сэмплов идёт без сэмплов. Если очередь заголовков полна,
+  /// блок пропадает целиком. Не блокирует и не выделяет память.
   void onBlock(int length, double sampleRate, audio_hook_register_t *registration);
 
+  /// Привязывает время ядра блока к связке запуска (см. «Запуск»): ставит
+  /// начало счёта времени хука так, чтобы время следующего блока было
+  /// временем этого блока. Когда позиция пошла дальше P0, отправляет
+  /// удержанный блок (`pushHeld`). Только звуковой поток.
+  ///
+  /// @param playing REAPER воспроизводит или записывает без паузы.
+  /// @param position позиция обработки блока на шкале проекта.
+  /// @param length длина блока, сэмплов.
+  /// @param sampleRate частота блока, Гц.
+  /// @return правда, если блок надо удержать до старта, а не отправлять.
+  bool alignRun(bool playing, core::Moment position, int length, double sampleRate);
+
+  /// Связка запуска, длина отсчёта и номер запуска, записанные `onStart`.
+  /// Только звуковой поток.
+  ///
+  /// @param countInSamples сюда пишется длина отсчёта, сэмплов.
+  /// @param run сюда пишется номер запуска.
+  RunStart pendingStart(std::uint64_t &countInSamples, std::uint64_t &run) const;
+
+  /// Кладёт в очередь рабочего потока удержанный до старта блок с заголовком
+  /// `header` (`held_`). Только звуковой поток.
+  void pushHeld(BlockHeader header);
+
+  /// Публикует часы звука хоста `clock` для `clock()`. Только звуковой поток.
+  void publishClock(const HostClock &clock);
+
+  /// Тело рабочего потока: каждые 2 мс разбирает блоки из очереди
+  /// заголовков (`feed`), пока вход не остановлен.
   void work();
+
+  /// Разбирает блок в рабочем потоке: отдаёт место блока главному потоку,
+  /// блок калибровки кладёт в очередь калибровки (`forwardCalibration`),
+  /// остальные подаёт приёмнику звука ядра — только блоки его запуска и его
+  /// частоты.
   void feed(const BlockHeader &header);
-  void forwardCalibration(const BlockHeader &header, bool gap);
+
+  /// Кладёт сэмплы блока `header` в очередь калибровки одним куском. Если
+  /// места нет, кусок пропадает.
+  void forwardCalibration(const BlockHeader &header);
 
   // Поля стоят в порядке, который не оставляет дыр выравнивания; кто их
   // пишет — в комментарии у каждого.
 
   // Звуковой поток пишет, рабочий читает. Сэмплы блока лежат в очереди
   // сэмплов раньше его заголовка.
-  concurrency::SpscRing<BlockHeader, 1024> headers_;
+  SpscRing<BlockHeader, 1024> headers_;
 
   // Рабочий поток пишет, главный читает.
-  concurrency::SpscRing<HookOnset, 1024> onsets_;
+  SpscRing<BlockPlace, 1024> places_;
 
   // Рабочий поток пишет, главный читает. Сэмплы куска лежат в очереди
   // сэмплов раньше его заголовка.
-  concurrency::SpscRing<CalibrationChunk, 1024> calibrationChunks_;
+  SpscRing<CalibrationChunk, 1024> calibrationChunks_;
 
   // Звуковой поток пишет, рабочий читает.
-  std::unique_ptr<concurrency::SpscRing<float, (1U << 18)>> samples_;
+  std::unique_ptr<SpscRing<float, (1U << 18)>> samples_;
 
   // Рабочий поток пишет, главный читает.
-  std::unique_ptr<concurrency::SpscRing<float, (1U << 18)>> calibrationSamples_;
+  std::unique_ptr<SpscRing<float, (1U << 18)>> calibrationSamples_;
 
   // Звуковой поток пишет, читают все.
   std::atomic<double> sampleRate_{0.0};
 
-  // Главный поток пишет, рабочий читает.
-  std::atomic<double> silenceDb_{-50.0};
-  std::atomic<double> energyRatio_{onset::Settings{}.energyRatio};
-
-  // Только звуковой поток.
-  std::uint64_t nextSequence_ = 0;
-
-  // Только рабочий поток.
-  double detectorRate_ = 0.0;
-  double appliedSilenceDb_ = 0.0;
-  double appliedEnergyRatio_ = 0.0;
-  std::uint64_t expectedSequence_ = 0;
-
   std::thread worker_;
 
   // Только рабочий поток.
-  std::optional<double> previousPosition_;
   std::vector<float> blockSamples_;
-  std::vector<StreamBlock> history_;
-  std::vector<onset::Onset> found_;
+
+  // Приёмник звука ядра и номер его запуска — под этим замком: главный поток
+  // ставит приёмник, рабочий подаёт ему блоки.
+  std::mutex receiverMutex_;
+  core::input::SoundReceiver *receiver_ = nullptr;
+  std::uint64_t receiverRun_ = 0;
 
   // Заполняет конструктор до регистрации хука, дальше его читает REAPER.
   audio_hook_register_t hook_{};
 
-  // Только рабочий поток.
-  std::optional<onset::Detector> detector_;
+  // Звуковой поток пишет, читают все: часы звука хоста. Счётчик нечётный,
+  // пока хук их пишет; читатель повторяет чтение, если счётчик сменился;
+  // ноль — блоков ещё не было.
+  std::atomic<std::uint64_t> clockSequence_{0};
+  std::atomic<std::int64_t> clockEnd_{0};
+  std::atomic<int> clockLength_{0};
 
-  // Главный поток пишет, звуковой читает.
-  std::atomic<int> channel_{0};
-  std::atomic<int> inputChannels_{0};
+  // Главный поток пишет, звуковой читает: компенсация задержки звука, нс.
+  std::atomic<std::int64_t> compensation_{0};
 
-  // Только рабочий поток.
-  std::uint32_t run_ = 0;
+  // Главный поток пишет (`onStart`), звуковой читает: связка запуска — P0 и
+  // T0 в нс — и длина отсчёта. Счётчик нечётный, пока главный поток их
+  // пишет; читатель повторяет чтение, если счётчик сменился.
+  std::atomic<std::uint64_t> startSequence_{0};
+  std::atomic<std::int64_t> startPosition_{0};
+  std::atomic<std::int64_t> startTime_{0};
+  std::atomic<double> startRate_{1.0};
+  std::atomic<std::uint64_t> startCountIn_{0};
+  std::atomic<std::uint64_t> startRun_{0};
+
+  // Только главный поток: сколько запусков отмечено (`onStart`).
+  std::uint64_t runs_ = 0;
+
+  // Только звуковой поток: время ядра. Время начала отрезка с одной частотой
+  // и сэмплов от него.
+  core::Moment rateStart_;
+  std::uint64_t rateSamples_ = 0;
+  double hookRate_ = 0.0;
+  int lastLength_ = 0;
+
+  // Только звуковой поток: связка запуска, к которой привязано время, и
+  // сколько сэмплов отсчёта ещё впереди; пусто — старт запуска уже наступил
+  // или запусков не было.
+  RunStart run_;
+  std::uint64_t runNumber_ = 0;
+  std::optional<std::uint64_t> countInLeft_;
+
+  // Только звуковой поток: блок, удержанный до старта, и его сэмплы.
+  std::optional<BlockHeader> held_;
+  std::array<float, kMaxBlock> heldSamples_{};
+
+  // Выбранный вход владельца: звуковой поток читает его под замком.
+  const InputSettings &input_;
+  mutable std::mutex settingsMutex_;
+
+  // Только звуковой поток: вид входа и канал последнего блока, на котором
+  // настройки прочитались без ожидания.
+  Input choiceInput_ = Input::Audio;
+  int choiceChannel_ = 0;
+
+  // Звуковой поток пишет, читают все: последний проверенный канал, умноженный
+  // на 2, плюс 1, если у карты он есть; −1 — не проверялся. Канал и ответ — в
+  // одном числе, чтобы читатель не взял ответ для другого канала.
+  std::atomic<int> checkedChannel_{-1};
 
   // Только звуковой поток: блок, переведённый в float перед отправкой.
   std::array<float, kMaxBlock> scratch_{};
 
-  // Только рабочий поток: идёт ли поток сэмплов детектору и поток кусков
-  // калибровки, пропадали ли куски калибровки.
-  bool streaming_ = false;
-  bool calibrationStreaming_ = false;
-  bool calibrationLost_ = false;
-
-  // Главный поток пишет, звуковой читает.
-  std::atomic<bool> calibrating_{false};
-
   bool registered_ = false;
   std::atomic<bool> stop_{false};
+
+  // Главный поток пишет (`toCalibration`, `toTraining`), звуковой читает:
+  // идёт ли подача звука в калибровку.
+  std::atomic<bool> calibration_{false};
+
+  // Главный поток ставит (`onStart`), звуковой снимает на блоке начала
+  // отсчёта.
+  std::atomic<bool> runPending_{false};
 };
 
 } // namespace training::reaper

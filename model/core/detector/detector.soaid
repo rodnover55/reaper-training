@@ -1,0 +1,95 @@
+import training.core
+
+use training.core
+
+entity Detector {
+  responsibility Ищет атаки (начальный момент удара по струне) в потоке сэмплов.
+
+  invariant #chunk-independent {
+    Поток подаётся кусками любой длины. Результат не зависит от того, как поток нарезан:
+    те же сэмплы дают те же атаки до последнего бита.
+  }
+
+  invariant #reported-when-noticed {
+    Атака попадает в буфер атак только после того, как точно определена
+    Даже если для этого придется ждать следующий вызов [Detector.process].
+  }
+
+  invariant #accuracy Время атаки должно определяться с точностью до 2мс для ноты B 62 Гц).
+  invariant #lantency Время когда атака определена может быть позже её возникновения до 0.5с.
+
+  outside {
+    Не работает с [Moment], т.к. не зависит от времени запука тренажер. 
+    Все секунды переводятся в количесто семплов.
+  }
+
+  note {
+    Детектор рассчитан на чистый сигнал гитары. У сильно сжатого звука — перегруза —
+    удар по струне почти не поднимает огибающую, и атаки пропускаются.
+  }
+
+  relation composition {
+    buffer: Buffer<Onset> Буфер найденных атак.
+    hpf: HighPass Фильтр высоких частот.
+    envelope: Envelope Детектор огибающей.
+  }
+
+  field {
+    settings: Settings Настройки детектора
+  }
+
+  action {
+    constructor create(settings: Settings) {
+      invariant #const-sample-rate {
+        [Settings.sampleRate] может быть обновлен только через конструктор.
+      }
+    }
+
+    reset() {
+      responsibility {
+        Начинает поток заново: забывает прошлые сэмплы и непрочитанные атаки, устанавливает позицию в 0
+      }
+    }
+
+    skip(count: int) {
+      responsibility Отмечает пропуск `count` сэмплов потока.
+
+      invariant #time-goes-on {
+        Время детектора идёт дальше — позиция растёт на `count` пропущенный блок считается тишиной.
+      }
+
+      invariant #zero Нулевой пропуск ничего не меняет.
+    }
+
+    process(samples: float[]) {
+      responsibility {
+        Обрабатывает следующий кусок потока и дописывает в буфер атак ([Detector.buffer])
+        атаки, определённые при этой обработке, в порядке возрастания позиции.
+      }
+      
+      invariant #empty Пустой кусок ничего не меняет.
+
+      note ai {
+        Текущий алгоритм и его зависимости не описываются в этой модели и реализованы сами по себе.
+      }
+    }
+
+    takeOnset(): Onset throws training.core.detector.Buffer.Empty {
+      responsibility Читает самую старую непрочитанную атаку из  [Detector.buffer].
+
+      error training.core.detector.Buffer.Empty {
+        responsibility Возникает, когда нет атак для возврата
+        note ai Можно вернуть пустой элемент для этой ошибки.
+      }
+    }
+
+    setSilenceDb(silenceDb: float) Изменяет порог тишины, без пересоздания детектора.
+
+    filter(): Filter {
+      responsibility {
+        Возвращает копию фильтра с такими же настройками как [Detector] в сброшенном состоянии:
+        [Serial]: [Detector.hpf] + [Detector.envelope]
+      }
+    }
+  }
+}

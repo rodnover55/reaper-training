@@ -1,0 +1,8 @@
+value Position {
+  responsibility Позиция в [Timeline].
+
+  field {
+    bar: int Номер такта.
+    division: Beat Доля такта.
+  }
+}

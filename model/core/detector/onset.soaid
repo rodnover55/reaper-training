@@ -1,0 +1,7 @@
+value Onset {
+  responsibility Найденная атака.
+
+  field {
+    position: int Начало атаки в сэмплах.
+  }
+}

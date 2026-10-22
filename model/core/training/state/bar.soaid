@@ -1,0 +1,91 @@
+import training.core.state
+import training.core
+
+use training.core
+
+value Bar {
+  responsibility Такт тренировки.
+
+  value {
+    TempoChange {
+      responsibility Описывает смену темпа.
+
+      field {
+        beat: Beat Доля от начала такта.
+        tempo: float Темп, которым темп становится на этой доле.
+      }
+    }
+
+    Division {
+      responsibility Доля такта в [Timeline].
+
+      field {
+        beat: Beat Доля от начала такта.
+        time: Moment Время, соответствующее этой доле.
+      }
+    }
+
+    NotePosition {
+      responsibility Позиция ноты в такте.
+
+      field {
+        beat: Beat Доля от начала такта.
+        note: Note Нота, которая находится на этой доле.
+      }
+    }
+  }
+
+  field {
+    name: string {
+      responsibility Название такта.
+
+      note {
+        Названием может быть любое название, которое удобно для пользователя. Н
+        Например "1.1", "2", "Куплет", "Припев", "Бридж" и т.д.
+      }
+    }
+
+    start: Moment {
+      responsibility Время с которого такте действует в [Timeline].
+      note Более поздние такты могут перекрывать более ранние.
+    }
+
+    end: Moment {
+      responsibility Время когда такт коначется
+      note При последовательном воспроизведении равен страту следующего такта
+    }
+
+    meter: Meter Размер такта.
+
+    tempo: TempoChange[1:] {
+      responsibility Смены темпа такта по долям.
+
+      invariant #unique-beat У каждой доли не больше одной смены темпа.
+      invariant #first-beat смена темпа в начале такта (доля 0) - обязательна.
+
+      note ai В языках где существуют словари/maps/hashes делать имплементацию через них
+    }
+
+    divisions: Division[] {
+      responsibility Доли такта.
+
+      invariant #unique-beat У каждой доли не больше одного времени.
+      invariant #first-beat Время долей не раньше [Bar.start] и растет вместе с местом доли в такте.
+
+      note ai В языках где существуют словари/maps/hashes делать имплементацию через них
+    }
+
+    notes: NotePosition[] {
+      responsibility Ноты, которые находятся в такте.
+
+      invariant #first-beat {
+        Доли нот располагаются в границах такта ([Bar.start], [Bar.end]) и растет вместе с местом доли в такте.
+      }
+
+      note ai {
+        В языках где существуют словари/maps/hashes делать имплементацию через них, 
+        группируя ноты из [NotePosition] по [NotePosition.beat] по времени в массив.
+      }
+    }
+  }
+}

@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Недопустимые значения настроек — макет</title>
+<style>
+  :root {
+    --bg: rgb(24, 24, 24);
+    --neutral: rgb(170, 170, 170);
+    --bad: rgb(235, 80, 70);
+    --band: rgb(45, 95, 45);
+    --out: rgb(80, 40, 37);
+    --good: rgb(90, 210, 90);
+    --new: rgb(230, 130, 20);
+  }
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 16px 20px; background: #ececec; color: #222; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 4px 0 10px; max-width: 1100px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 6px; }
+  .tabs button {
+    font: inherit; padding: 4px 12px; border: 1px solid #999; background: #fff;
+    border-radius: 4px; cursor: pointer;
+  }
+  .tabs button.active { background: #333; color: #fff; border-color: #333; }
+  #desc { min-height: 64px; }
+
+  .window {
+    width: 1100px; height: 330px; border: 1px solid #444;
+    display: flex; flex-direction: column; box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+  }
+  .controls { flex: none; position: relative; background: rgb(180, 180, 180); font: 13px Arial, sans-serif; padding: 3px 8px 5px; color: #111; }
+  .tip {
+    position: absolute; z-index: 2; display: none; white-space: nowrap;
+    font: 12px Arial, sans-serif; color: #000; background: rgb(255, 255, 225);
+    border: 1px solid #333; padding: 2px 5px; box-shadow: 1px 1px 3px rgba(0, 0, 0, .3);
+  }
+  .pointer { position: absolute; z-index: 3; display: none; width: 12px; height: 19px; pointer-events: none; }
+  .controls .line { display: flex; align-items: center; gap: 8px; height: 26px; white-space: nowrap; }
+  .controls .line.tall { height: 36px; }
+  .controls .gap { width: 14px; }
+  .edit { font: 13px Arial, sans-serif; background: #fff; border: 1px solid #777; padding: 1px 4px; width: 34px; display: inline-block; }
+  .edit.focus { box-shadow: 0 0 0 1px #2a62c9; }
+  .edit.invalid { box-shadow: 0 0 0 2px var(--bad); }
+  .edit.invalid.new { outline-offset: 5px; }
+  .check { display: flex; align-items: center; gap: 3px; }
+  .check input { margin: 0; }
+  .combo {
+    background: linear-gradient(#fafafa, #ddd); border: 1px solid #777; padding: 1px 6px;
+    width: 110px; display: flex; justify-content: space-between;
+  }
+  .btn {
+    font: 13px Arial, sans-serif; color: #111; background: linear-gradient(#fafafa, #ddd);
+    border: 1px solid #777; border-radius: 2px; padding: 2px 10px; white-space: nowrap;
+  }
+  #status.bad { color: rgb(170, 20, 10); font-weight: bold; }
+  .new { outline: 2px dashed var(--new); outline-offset: 3px; border-radius: 2px; }
+
+  .gauge { position: relative; flex: none; width: 400px; height: 32px; }
+  .gauge .track {
+    position: absolute; left: 14px; right: 14px; top: 4px; height: 16px;
+    background: var(--out); box-shadow: inset 0 0 0 1px rgb(60, 60, 60);
+  }
+  .gauge .band { position: absolute; top: 0; bottom: 0; background: var(--band); }
+  .gauge .zero { position: absolute; top: -4px; bottom: -4px; width: 0; margin-left: -1px; border-left: 2px solid #fff; }
+  .gauge .handle {
+    position: absolute; top: -4px; bottom: -4px; width: 8px; margin-left: -4px;
+    background: linear-gradient(90deg, #f4f4f4, #cfcfcf); border: 1px solid #222; border-radius: 2px;
+  }
+  .gauge .ticks { position: absolute; left: 14px; right: 14px; top: 22px; height: 10px; font: 10px Arial, sans-serif; color: #333; }
+  .gauge .ticks span { position: absolute; transform: translateX(-50%); line-height: 10px; }
+  #range { min-width: 92px; font-weight: bold; }
+
+  .rows { flex: 1; background: var(--bg); position: relative; overflow: hidden; }
+  .rows .bar { position: absolute; left: 30px; font: bold 26px Arial, sans-serif; color: var(--neutral); }
+  .rows .dot { position: absolute; width: 9px; height: 9px; border-radius: 50%; background: var(--neutral); }
+
+  #notes { max-width: 1100px; margin-top: 14px; }
+  #notes li { margin: 3px 0; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Недопустимые значения настроек — макет</h1>
+<p>Сейчас тренажёр молча прижимает недопустимое значение к ближайшей границе: Silence −5 становится
+−10, Offset +45 при допуске 10 — +40. В макете настройки недопустимое значение <b>не принимают</b>:
+действует прежнее значение, поле обведено красной рамкой, а <b>строка состояния</b> вместо обычного
+текста называет поле, вписанное значение и допустимый диапазон. Когда значение снова допустимо
+или фокус ушёл из поля, строка состояния возвращается к обычному тексту, а в поле стоит
+действующее значение. Значения из файла настроек REAPER <code>reaper-extstate.ini</code>, которые
+не приняты, называются в строке состояния при открытии окна. Наведение мыши на поле Offset,
+Tolerance или Silence показывает подсказку с допустимым диапазоном поля. Новое отмечено оранжевой
+пунктирной рамкой. Сценарии переключаются вкладками.</p>
+
+<div class="tabs" id="tabs"></div>
+<p id="desc"></p>
+
+<div class="window">
+  <div class="controls">
+    <div class="line">
+      <span class="btn">▾ Settings</span>
+      <span class="gap"></span>
+      <span id="status"></span>
+    </div>
+    <div class="line">
+      <span>Mode:</span><span class="combo"><span id="mode"></span><span>▾</span></span>
+      <span class="gap"></span>
+      <span>Input:</span><span class="combo"><span>Input 1</span><span>▾</span></span>
+      <span class="btn">Refresh</span>
+      <span class="gap"></span>
+      <label class="check"><input type="checkbox" checked disabled>Bar numbers</label>
+      <label class="check"><input type="checkbox" checked disabled>Mean/spread</label>
+    </div>
+    <div class="line tall">
+      <span>Offset, ms: <span class="edit" id="offset"></span></span>
+      <span class="gap"></span>
+      <span>Tolerance, ms: <span class="edit" id="tol"></span></span>
+      <span class="gap"></span>
+      <div class="gauge">
+        <div class="track">
+          <div class="band" id="band"></div>
+          <div class="zero" style="left: 50%"></div>
+          <div class="handle" id="lo"></div>
+          <div class="handle" id="hi"></div>
+        </div>
+        <div class="ticks" id="ticks"></div>
+      </div>
+      <span id="range"></span>
+    </div>
+    <div class="line">
+      <span>Silence, dBFS:</span><span class="edit" id="silence"></span>
+      <span class="btn">Calibrate...</span>
+    </div>
+    <div class="tip new" id="tip"></div>
+    <svg class="pointer" id="pointer" viewBox="0 0 12 19">
+      <path d="M1 1 L1 16 L4.5 12.5 L7 18 L9 17 L6.5 11.5 L11 11.5 Z" fill="#fff" stroke="#000" stroke-width="1"/>
+    </svg>
+  </div>
+  <div class="rows" id="rows"></div>
+</div>
+
+<ul id="notes">
+  <li><b>Где сообщение.</b> В строке состояния: она видна и в свёрнутой панели настроек. Пока
+    сообщение стоит, обычного текста строки состояния нет.</li>
+  <li><b>Подсказка у поля.</b> Курсор мыши над полем Offset, Tolerance или Silence — у курсора
+    всплывает подсказка с допустимым диапазоном поля при действующих значениях остальных
+    настроек; курсор ушёл с поля — подсказка пропала. Подсказка есть всегда, а не только при
+    недопустимом значении. В макете её показывает наведение мыши на поле в любом сценарии.</li>
+  <li><b>Число в поле.</b> Недописанное число, например одно «−», настроек не меняет, и поле не
+    подсвечено. Допустимое число сразу действует и сохраняется в <code>reaper-extstate.ini</code>,
+    недопустимое в файл не пишется. Смещение и допуск по-прежнему округляются до 0.5 мс: 12.3 —
+    это допустимое 12.5.</li>
+  <li><b>Какие строки файла не принимаются.</b> <code>mode</code> без режима сетки — действуют
+    «четверти»; <code>window_scale_ms</code> вне 10–200 — 50; <code>offset_ms</code> и
+    <code>tolerance_ms</code>, если окно попадания из них не ложится в шкалу, — 0 ± 10;
+    <code>silence_db</code> вне −90…−10 — −50. Остальные строки принимаются. Не принятые строки
+    остаются в файле до обычного сохранения настроек; <code>window_scale_ms</code> тренажёр не
+    сохраняет.</li>
+  <li><b>Сколько держится сообщение о файле.</b> Оно появляется при первом открытии окна, даже если
+    транспорт уже запускали, и держится до первой правки настроек в окне или до первого запуска
+    транспорта после этого открытия — что раньше. Те же строки пишутся в журнал тренажёра.</li>
+  <li><b>Ползунки шкалы и калибровка</b> недопустимого значения не дают: ползунок
+    останавливается на краю шкалы, порог калибровки лежит в −90…−10. Сообщений у них нет.</li>
+</ul>
+
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const SCALE = 50;
+
+const SCENARIOS = [
+  {
+    id: 'silence', name: 'Silence вне диапазона',
+    desc: 'В поле Silence набирают −50, на миг в поле стоит −5. Порог тишины остаётся прежним, −40: ' +
+      'поиск атак работает с ним. Поле обведено красной рамкой, строка состояния называет допустимый диапазон. ' +
+      'Следующая цифра даёт −50 — значение принято, подсветка и сообщение пропадают.',
+    mode: 'Eighths', offset: '0', tol: '10', window: [0, 10], silence: '-5',
+    invalid: 'silence', focus: 'silence',
+    status: 'Silence −5 dBFS is out of range −90…−10 — not applied, −40 in use',
+  },
+  {
+    id: 'offset', name: 'Offset вне шкалы',
+    desc: 'В поле Offset вписано +45 при допуске 10: окно попадания легло бы на +35…+55 и вышло за ' +
+      'шкалу ±50. Действует прежнее окно 0 ± 10 — полоса на шкале его и показывает.',
+    mode: 'Eighths', offset: '45', tol: '10', window: [0, 10], silence: '-40',
+    invalid: 'offset', focus: 'offset',
+    status: 'Offset +45 ms is out of range −40…+40 at tolerance 10 — not applied, 0 in use',
+  },
+  {
+    id: 'tolerance', name: 'Tolerance вне диапазона',
+    desc: 'В поле Tolerance вписано 0.4: допуск меньше 1 мс не бывает. Действует прежний допуск 10.',
+    mode: 'Eighths', offset: '0', tol: '0.4', window: [0, 10], silence: '-40',
+    invalid: 'tol', focus: 'tol',
+    status: 'Tolerance 0.4 ms is out of range 1…50 at offset 0 — not applied, 10 in use',
+  },
+  {
+    id: 'left', name: 'Фокус ушёл из поля',
+    desc: 'Из поля Offset с +45 ушли щелчком в другое место. В поле снова действующее значение 0, ' +
+      'строка состояния — обычная.',
+    mode: 'Eighths', offset: '0', tol: '10', window: [0, 10], silence: '-40', normal: true,
+    status: 'Eighths, window -10…+10 ms, latency 12.3 ms — waiting for playback',
+  },
+  {
+    id: 'file', name: 'Ошибки в reaper-extstate.ini',
+    desc: 'В файле настроек REAPER режим 5 — такого режима нет — и граница шкалы 500. Они не приняты: ' +
+      'режим — по умолчанию, «четверти», граница шкалы — 50. Строка состояния называет не принятые ' +
+      'строки файла при открытии окна.',
+    mode: 'Quarters', offset: '0', tol: '10', window: [0, 10], silence: '-50',
+    status: 'reaper-extstate.ini: mode=5 is not a grid mode — Quarters in use; ' +
+      'window_scale_ms=500 is out of range 10…200 — 50 in use',
+  },
+  {
+    id: 'hover', name: 'Курсор над полем',
+    desc: 'Курсор мыши стоит над полем Tolerance: у курсора подсказка с допустимым диапазоном допуска ' +
+      'при действующем смещении 0. Наведите мышь на поле Offset, Tolerance или Silence — подсказка ' +
+      'покажет диапазон этого поля, в любом сценарии.',
+    mode: 'Eighths', offset: '0', tol: '10', window: [0, 10], silence: '-40', normal: true,
+    hover: 'tol',
+    status: 'Eighths, window -10…+10 ms, latency 12.3 ms — waiting for playback',
+  },
+];
+
+const FIELDS = ['offset', 'tol', 'silence'];
+let current = SCENARIOS[0];
+let hovered = null;
+
+function signed(ms) { return ms > 0 ? `+${ms}` : ms < 0 ? `−${-ms}` : '0'; }
+
+function tipText(field, [center, tol]) {
+  if (field === 'offset') return `${signed(-(SCALE - tol))}…${signed(SCALE - tol)} ms at tolerance ${tol}`;
+  if (field === 'tol') return `1…${SCALE - Math.abs(center)} ms at offset ${signed(center)}`;
+  return '−90…−10 dBFS';
+}
+
+function showTip() {
+  const field = hovered || current.hover;
+  $('tip').style.display = field ? 'block' : 'none';
+  $('pointer').style.display = !hovered && current.hover ? 'block' : 'none';
+  if (!field) return;
+  const box = $('tip').parentElement.getBoundingClientRect();
+  const rect = $(field).getBoundingClientRect();
+  const left = rect.left - box.left + 16;
+  const top = rect.top - box.top + 8;
+  $('pointer').style.left = left + 'px';
+  $('pointer').style.top = top + 'px';
+  $('tip').textContent = tipText(field, current.window);
+  $('tip').style.left = (left + 6) + 'px';
+  $('tip').style.top = (top + 21) + 'px';
+}
+
+function x(ms) { return (ms + SCALE) / (2 * SCALE) * 100; }
+
+function ticks() {
+  let html = '';
+  for (let ms = -SCALE; ms <= SCALE; ms += 10)
+    html += `<span style="left:${x(ms)}%">${ms > 0 ? '+' + ms : ms}</span>`;
+  $('ticks').innerHTML = html;
+}
+
+function rows() {
+  let html = '';
+  [[2, 30], [1, 110]].forEach(([bar, top]) => {
+    html += `<div class="bar" style="top:${top}px">${bar}</div>`;
+    for (let i = 0; i < 8; ++i)
+      html += `<div class="dot" style="left:${110 + i * 120}px;top:${top + 12}px"></div>`;
+  });
+  $('rows').innerHTML = html;
+}
+
+function show(id) {
+  const sc = SCENARIOS.find((s) => s.id === id) || SCENARIOS[0];
+  current = sc;
+  document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.id === sc.id));
+  $('desc').textContent = sc.desc;
+  $('mode').textContent = sc.mode;
+  for (const field of FIELDS) {
+    const el = $(field);
+    el.textContent = sc[field];
+    el.classList.toggle('invalid', sc.invalid === field);
+    el.classList.toggle('new', sc.invalid === field);
+    el.classList.toggle('focus', sc.focus === field);
+  }
+  const [center, tol] = sc.window;
+  $('band').style.left = x(center - tol) + '%';
+  $('band').style.width = (x(center + tol) - x(center - tol)) + '%';
+  $('lo').style.left = x(center - tol) + '%';
+  $('hi').style.left = x(center + tol) + '%';
+  $('range').textContent = `${center - tol}…+${center + tol} ms`;
+  const bad = !sc.normal;
+  $('status').textContent = sc.status;
+  $('status').classList.toggle('bad', bad);
+  $('status').classList.toggle('new', bad);
+  showTip();
+}
+
+SCENARIOS.forEach((sc) => {
+  const button = document.createElement('button');
+  button.textContent = sc.name;
+  button.dataset.id = sc.id;
+  button.onclick = () => { location.hash = sc.id; };
+  $('tabs').appendChild(button);
+});
+FIELDS.forEach((field) => {
+  $(field).addEventListener('mouseenter', () => { hovered = field; showTip(); });
+  $(field).addEventListener('mouseleave', () => { hovered = null; showTip(); });
+});
+window.addEventListener('hashchange', () => show(location.hash.slice(1)));
+ticks();
+rows();
+show(location.hash.slice(1));
+</script>
+
+<script src="http://127.0.0.1:8765/embed.js" data-session="ce526336-1643-4fb2-afc4-12ec7bbb2f50"></script>
+</body>
+</html>

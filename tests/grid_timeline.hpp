@@ -1,58 +1,119 @@
 #pragma once
 
-// Карты темпа для тестов сетки: постоянный темп, плавная смена темпа и такты
-// с заданными размерами и сменами темпа.
+// Карты темпа для тестов: постоянный темп, плавная смена темпа и такты с
+// заданными размерами и сменами темпа; такты ядра по этим картам.
 
-#include "training/grid/timeline.hpp"
+#include "training/core/clock.hpp"
+#include "training/core/training/state/timeline.hpp"
+#include "training/reaper/tempo_map.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace training::test {
 
-/// Номер такта, в котором удар `beat`, при одинаковых тактах по `beatsPerBar`
-/// ударов; для отрицательных ударов такты тоже отрицательные.
-inline std::int64_t barIndexOf(std::int64_t beat, int beatsPerBar) {
-  const std::int64_t length = beatsPerBar;
-  return beat >= 0 ? beat / length : -((-beat + length - 1) / length);
+/// Время шкалы через `seconds` секунд от начала проекта, с округлением до
+/// наносекунды.
+inline core::Moment timeOf(double seconds) {
+  return core::Moment() + seconds * core::Interval::kSecond;
 }
 
+/// Секунды от начала проекта до времени шкалы `time`.
+inline double secondsOf(core::Moment time) {
+  return (time - core::Moment()) / core::Interval::kSecond;
+}
+
+/// Интервал в `seconds` секунд, с округлением до наносекунды.
+inline core::Interval spanOf(double seconds) { return seconds * core::Interval::kSecond; }
+
+/// Интервал в `ms` миллисекунд, с округлением до наносекунды.
+inline core::Interval msOf(double ms) { return ms * core::Interval::kMillisecond; }
+
+/// Карта темпа тестов, заданная ударами от начала проекта: удар 0 — начало
+/// проекта, такты идут подряд.
+///
+/// Реализация задаёт перевод между секундами и ударами от начала проекта и
+/// начала тактов в этих ударах.
+class BeatTimeline : public reaper::TempoMap {
+public:
+  reaper::Position positionAt(core::Moment time) const override {
+    const double beats = beatsAt(secondsOf(time));
+    const std::int64_t bar = barAt(beats);
+    return {.bar = bar, .beat = beats - static_cast<double>(firstBeat(bar))};
+  }
+
+  core::Moment timeAt(reaper::Position position) const override {
+    return timeOf(secondsAt(static_cast<double>(firstBeat(position.bar)) + position.beat));
+  }
+
+  /// Время удара `beats` от начала проекта, дробного: так тесты задают места
+  /// нот и позиций.
+  core::Moment beatTime(double beats) const { return timeOf(secondsAt(beats)); }
+
+protected:
+  /// Удары от начала проекта, дробные, через `seconds` секунд от него.
+  virtual double beatsAt(double seconds) const = 0;
+
+  /// Секунды от начала проекта до удара `beats` от него.
+  virtual double secondsAt(double beats) const = 0;
+
+  /// Такт, в котором лежит удар `beats` от начала проекта.
+  virtual std::int64_t barAt(double beats) const = 0;
+
+  /// Первый удар такта `bar` от начала проекта.
+  virtual std::int64_t firstBeat(std::int64_t bar) const = 0;
+};
+
 /// Карта темпа с постоянным темпом и числом ударов в такте; удар 0 — на 0 с.
-class SteadyTimeline : public grid::Timeline {
+class SteadyTimeline : public BeatTimeline {
 public:
   /// @param bpm темп, ударов в минуту; больше нуля.
   /// @param beatsPerBar ударов в такте; больше нуля.
   explicit SteadyTimeline(double bpm, int beatsPerBar = 4)
-      : secondsPerBeat_(60.0 / bpm), beatsPerBar_(beatsPerBar) {}
+      : bpm_(bpm), secondsPerBeat_(60.0 / bpm), beatsPerBar_(beatsPerBar) {}
 
-  double beatsAt(double time) const override { return time / secondsPerBeat_; }
-  double timeAt(double beats) const override { return beats * secondsPerBeat_; }
-
-  grid::Bar barOf(std::int64_t beat) const override {
-    const std::int64_t index = barIndexOf(beat, beatsPerBar_);
+  reaper::MapBar barOf(std::int64_t index) const override {
     return {.index = index,
-            .firstBeat = index * beatsPerBar_,
             .meter = {.beats = beatsPerBar_, .unit = 4},
-            .changes = {}};
+            .tempo = {{core::training::state::Beat(), bpm_}}};
   }
 
+protected:
+  double beatsAt(double seconds) const override { return seconds / secondsPerBeat_; }
+  double secondsAt(double beats) const override { return beats * secondsPerBeat_; }
+
+  std::int64_t barAt(double beats) const override {
+    return static_cast<std::int64_t>(std::floor(beats / beatsPerBar_));
+  }
+
+  std::int64_t firstBeat(std::int64_t bar) const override { return bar * beatsPerBar_; }
+
 private:
+  double bpm_;
   double secondsPerBeat_;
   int beatsPerBar_;
 };
 
 /// Карта темпа, где темп растёт линейно по ударам от `from` до `to` за
 /// `rampBeats` ударов, а дальше держится `to`. Размер — 4/4.
-class RampTimeline : public grid::Timeline {
+class RampTimeline : public BeatTimeline {
 public:
   RampTimeline(double from, double to, double rampBeats)
       : from_(from), to_(to), rampBeats_(rampBeats) {}
 
-  double timeAt(double beats) const override {
+  /// Темп такта — `to`: у плавного перехода с начала проекта темп становится
+  /// темпом конца перехода.
+  reaper::MapBar barOf(std::int64_t index) const override {
+    return {.index = index, .meter = {}, .tempo = {{core::training::state::Beat(), to_}}};
+  }
+
+protected:
+  double secondsAt(double beats) const override {
     // dt/db = 60 / bpm(b), bpm(b) = from + slope · b: интеграл — логарифм.
     const double slope = (to_ - from_) / rampBeats_;
     const double inside = std::min(beats, rampBeats_);
@@ -62,18 +123,19 @@ public:
     return time;
   }
 
-  double beatsAt(double time) const override {
+  double beatsAt(double seconds) const override {
     const double slope = (to_ - from_) / rampBeats_;
-    const double rampEnd = timeAt(rampBeats_);
-    if (time > rampEnd)
-      return rampBeats_ + (time - rampEnd) * to_ / 60.0;
-    return (from_ * std::exp(time * slope / 60.0) - from_) / slope;
+    const double rampEnd = secondsAt(rampBeats_);
+    if (seconds > rampEnd)
+      return rampBeats_ + (seconds - rampEnd) * to_ / 60.0;
+    return (from_ * std::exp(seconds * slope / 60.0) - from_) / slope;
   }
 
-  grid::Bar barOf(std::int64_t beat) const override {
-    const std::int64_t index = barIndexOf(beat, 4);
-    return {.index = index, .firstBeat = index * 4, .meter = {}, .changes = {}};
+  std::int64_t barAt(double beats) const override {
+    return static_cast<std::int64_t>(std::floor(beats / 4.0));
   }
+
+  std::int64_t firstBeat(std::int64_t bar) const override { return bar * 4; }
 
 private:
   double from_;
@@ -84,7 +146,7 @@ private:
 /// Такт карты `MapTimeline`.
 struct BarPlan {
   /// Размер такта.
-  grid::Meter meter;
+  core::training::state::Meter meter;
 
   /// Темп в начале такта, четвертей в минуту, как в REAPER.
   double bpm = 120.0;
@@ -96,8 +158,9 @@ struct BarPlan {
 
 /// Карта темпа из тактов с заданными размерами и ступенчатыми сменами темпа;
 /// удар 0 — на 0 с. После последнего заданного такта такты повторяют его
-/// размер и темп, на котором он кончился.
-class MapTimeline : public grid::Timeline {
+/// размер и темп, на котором он кончился; до начала проекта — размер и темп
+/// первого такта.
+class MapTimeline : public BeatTimeline {
 public:
   /// @param plan такты по порядку с начала проекта; не пустой.
   explicit MapTimeline(std::vector<BarPlan> plan) : plan_(std::move(plan)) {
@@ -126,63 +189,60 @@ public:
     endBeat_ = static_cast<std::int64_t>(beat);
   }
 
-  double timeAt(double beats) const override {
+  reaper::MapBar barOf(std::int64_t index) const override {
+    if (index < 0)
+      return {.index = index,
+              .meter = plan_.front().meter,
+              .tempo = {{core::training::state::Beat(), plan_.front().bpm}}};
+    if (index >= static_cast<std::int64_t>(plan_.size())) {
+      const BarPlan &last = plan_.back();
+      const double end = last.inside.empty() ? last.bpm : last.inside.back().second;
+      return {.index = index,
+              .meter = last.meter,
+              .tempo = {{core::training::state::Beat(), end}}};
+    }
+
+    const BarPlan &bar = plan_[static_cast<std::size_t>(index)];
+    reaper::MapBar result{.index = index,
+                          .meter = bar.meter,
+                          .tempo = {{core::training::state::Beat(), bar.bpm}}};
+    for (const auto &[at, tempo] : bar.inside)
+      result.tempo.emplace(core::training::state::Beat(at), tempo);
+    return result;
+  }
+
+protected:
+  double secondsAt(double beats) const override {
     const Piece &piece = pieceBy([beats](const Piece &p) { return p.beat <= beats; });
     return piece.time + (beats - piece.beat) * piece.secondsPerBeat;
   }
 
-  double beatsAt(double time) const override {
-    const Piece &piece = pieceBy([time](const Piece &p) { return p.time <= time; });
-    return piece.beat + (time - piece.time) / piece.secondsPerBeat;
+  double beatsAt(double seconds) const override {
+    const Piece &piece = pieceBy([seconds](const Piece &p) { return p.time <= seconds; });
+    return piece.beat + (seconds - piece.time) / piece.secondsPerBeat;
   }
 
-  grid::Bar barOf(std::int64_t beat) const override {
-    const BarPlan &last = plan_.back();
-    if (beat >= endBeat_) {
-      // За последним заданным тактом — его повторения без смен.
-      const std::int64_t extra = (beat - endBeat_) / last.meter.beats;
-      return {.index = static_cast<std::int64_t>(plan_.size()) + extra,
-              .firstBeat = endBeat_ + extra * last.meter.beats,
-              .meter = last.meter,
-              .changes = {}};
-    }
+  std::int64_t barAt(double beats) const override {
+    if (beats < 0.0)
+      return static_cast<std::int64_t>(std::floor(beats / plan_.front().meter.beats));
+    const auto end = static_cast<double>(endBeat_);
+    if (beats >= end)
+      return static_cast<std::int64_t>(plan_.size()) +
+             static_cast<std::int64_t>(std::floor((beats - end) / plan_.back().meter.beats));
 
     std::size_t index = 0;
-    while (index + 1 < plan_.size() && firstBeats_[index + 1] <= beat)
+    while (index + 1 < plan_.size() && static_cast<double>(firstBeats_[index + 1]) <= beats)
       ++index;
-    const BarPlan &bar = plan_[index];
+    return static_cast<std::int64_t>(index);
+  }
 
-    grid::Bar result{.index = static_cast<std::int64_t>(index),
-                     .firstBeat = firstBeats_[index],
-                     .meter = bar.meter,
-                     .changes = {}};
-    if (index > 0) {
-      const BarPlan &previous = plan_[index - 1];
-      const double previousEnd =
-          previous.inside.empty() ? previous.bpm : previous.inside.back().second;
-      grid::Change change;
-      if (previous.meter != bar.meter) {
-        change.meterFrom = previous.meter;
-        change.meterTo = bar.meter;
-      }
-      if (previousEnd != bar.bpm) {
-        change.tempoFrom = previousEnd;
-        change.tempoTo = bar.bpm;
-      }
-      if (change.meterFrom || change.tempoFrom)
-        result.changes.push_back(change);
-    }
-
-    double tempo = bar.bpm;
-    for (const auto &[at, next] : bar.inside) {
-      grid::Change change;
-      change.beat = at;
-      change.tempoFrom = tempo;
-      change.tempoTo = next;
-      result.changes.push_back(change);
-      tempo = next;
-    }
-    return result;
+  std::int64_t firstBeat(std::int64_t bar) const override {
+    if (bar < 0)
+      return bar * plan_.front().meter.beats;
+    const auto count = static_cast<std::int64_t>(plan_.size());
+    if (bar >= count)
+      return endBeat_ + (bar - count) * plan_.back().meter.beats;
+    return firstBeats_[static_cast<std::size_t>(bar)];
   }
 
 private:
@@ -208,5 +268,35 @@ private:
   std::vector<Piece> pieces_;
   std::int64_t endBeat_ = 0;
 };
+
+/// Такт ядра — такт `bar` карты `timeline` с `perBeat` долями на удар: имя —
+/// номер такта с 1, начало — первый удар такта, конец — первый удар
+/// следующего.
+inline core::training::state::Bar coreBar(const reaper::TempoMap &timeline, std::int64_t bar,
+                                          int perBeat) {
+  const reaper::MapBar map = timeline.barOf(bar);
+  core::training::state::Bar result(std::to_string(bar + 1),
+                                    timeline.timeAt({.bar = bar, .beat = 0.0}),
+                                    timeline.timeAt({.bar = bar + 1, .beat = 0.0}), map.meter,
+                                    map.tempo.at(core::training::state::Beat()));
+  for (const auto &[beat, tempo] : map.tempo)
+    result.changeTempo(beat, tempo);
+  for (int node = 0; node < map.meter.beats * perBeat; ++node) {
+    const double place = static_cast<double>(node) / perBeat;
+    result.addDivision(core::training::state::Beat(place),
+                       timeline.timeAt({.bar = bar, .beat = place}));
+  }
+  return result;
+}
+
+/// Такты ядра `from`…`to` включительно карты `timeline` с `perBeat` долями на
+/// удар (`coreBar`), по порядку.
+inline core::training::state::Timeline
+coreBars(const reaper::TempoMap &timeline, std::int64_t from, std::int64_t to, int perBeat) {
+  core::training::state::Timeline result;
+  for (std::int64_t bar = from; bar <= to; ++bar)
+    result.add(coreBar(timeline, bar, perBeat));
+  return result;
+}
 
 } // namespace training::test

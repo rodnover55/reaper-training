@@ -1,0 +1,43 @@
+import training.core
+
+use training.core
+
+entity Envelope: Filter {
+  responsibility {
+    Вычисляет огибающую звукового потока
+  }
+
+  link https://web.archive.org/web/20210817215022/https://www.eecs.qmul.ac.uk/~josh/documents/2012/GiannoulisMassbergReiss-dynamicrangecompression-JAES2012.pdf {
+    Giannoulis, Massberg, Reiss, «Digital Dynamic Range Compressor Design — A Tutorial and Analysis» (JAES, 2012),
+    раздел 2.3.2 «Peak Detector»: развязанный пиковый детектор, формула (14), и коэффициент спада α = e^(−1/(τ·fs)), формула (7).
+
+    - Реализована только первая строка формулы (14)
+  }
+
+  field {
+    sampleRate: SampleRate Частота дискретизации потока.
+
+    release: Interval {
+      responsibility За сколько огибающая спадает в e раз.
+      invariant #default по умолчанию 10ms.
+      note ai #optional Не требует обязательной инициализации вызывающей стороной.
+    }
+
+    attack: Interval {
+      responsibility Время подъёма огибающей до модуля сэмпла.
+      invariant #default по умолчанию 0ms — огибающая поднимается мгновенно.
+      invariant #dont-change Не меняется снаружи, т.к. реализовано только для [Envelope.attack]=0
+    }
+  }
+
+  action {
+    reset() Сбрасывает детектор огибающей и запускает вычисления сначала.
+
+    process(samples: float[]): float[] {
+      responsibility Вычисляет огибающую пачки семплов потока и возвращает значение огибающей.
+      invariant #same-index Каждый выходящий семпл соответствует огибающей каждого входящего по их порядку.
+
+      note Состояние детектора меняется после каждого вызова этой функции и учитываются предыдущие значения.
+    }
+  }
+}

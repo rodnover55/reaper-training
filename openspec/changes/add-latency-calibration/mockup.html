@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Калибровка задержки звука и MIDI — макет</title>
+<style>
+  :root {
+    --bg: rgb(24, 24, 24);
+    --row: rgb(36, 36, 36);
+    --line: rgb(56, 56, 56);
+    --neutral: rgb(170, 170, 170);
+    --dim: rgb(125, 125, 125);
+    --good: rgb(90, 210, 90);
+    --bad: rgb(235, 80, 70);
+    --beat: rgb(255, 190, 60);
+    --band: rgb(45, 95, 45);
+    --out: rgb(80, 40, 37);
+    --new: rgb(230, 130, 20);
+  }
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 16px 20px; background: #ececec; color: #222; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 4px 0 10px; max-width: 1100px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 6px; max-width: 1100px; }
+  .tabs .group { width: 100%; font-size: 12px; color: #666; margin-top: 4px; }
+  .tabs button {
+    font: inherit; padding: 4px 12px; border: 1px solid #999; background: #fff;
+    border-radius: 4px; cursor: pointer;
+  }
+  .tabs button.active { background: #333; color: #fff; border-color: #333; }
+  #desc { min-height: 64px; }
+
+  .window {
+    width: 1100px; height: 520px; border: 1px solid #444;
+    display: flex; flex-direction: column; box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+  }
+  .controls { flex: none; position: relative; background: rgb(180, 180, 180); font: 13px Arial, sans-serif; padding: 3px 8px 5px; color: #111; }
+  .controls .line { display: flex; align-items: center; gap: 8px; height: 26px; white-space: nowrap; }
+  .controls .line.tall { height: 36px; }
+  .controls .gap { width: 14px; }
+  .edit { font: 13px Arial, sans-serif; background: #fff; border: 1px solid #777; padding: 1px 4px; width: 34px; display: inline-block; }
+  .check { display: flex; align-items: center; gap: 3px; }
+  .check input { margin: 0; }
+  .combo {
+    background: linear-gradient(#fafafa, #ddd); border: 1px solid #777; padding: 1px 6px;
+    width: 150px; display: inline-flex; justify-content: space-between;
+  }
+  .btn {
+    font: 13px Arial, sans-serif; color: #111; background: linear-gradient(#fafafa, #ddd);
+    border: 1px solid #777; border-radius: 2px; padding: 2px 10px; white-space: nowrap;
+  }
+  .btn.off { color: #999; }
+  .btn.main { font-weight: bold; }
+  .new { outline: 2px dashed var(--new); outline-offset: 3px; border-radius: 2px; }
+
+  .gauge { position: relative; flex: none; width: 400px; height: 32px; }
+  .gauge .track { position: absolute; left: 14px; right: 14px; top: 4px; height: 16px; background: var(--out); border: 1px solid #555; }
+  .gauge .band { position: absolute; top: 0; bottom: 0; background: var(--band); }
+  .gauge .zero { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: #fff; }
+  .gauge .ticks { position: absolute; left: 14px; right: 14px; top: 22px; font-size: 9px; color: #222; }
+  .gauge .ticks span { position: absolute; transform: translateX(-50%); }
+
+  .rows {
+    flex: 1; position: relative; background: var(--bg); overflow: hidden; container-type: size;
+    font-family: Arial, Helvetica, sans-serif; font-weight: bold;
+  }
+  .bar { position: absolute; left: 0; right: 0; display: flex; align-items: center; border-top: 1px solid var(--line); }
+  .bar.top { background: var(--row); border-top: none; }
+  .bar .no { width: 6%; text-align: center; color: var(--neutral); font-size: 3.6cqh; }
+  .bar .cells { flex: 1; display: flex; }
+  .bar .cells span { flex: 1; padding-left: 3%; }
+  .bar .stats { width: 12%; display: flex; justify-content: space-around; border-left: 1px solid var(--line); align-self: stretch; align-items: center; font-size: 3.6cqh; }
+
+  /* Панель калибровки — как у калибровки уровней. */
+  .cal { position: absolute; inset: 0; padding: 3cqh 2.2cqw; display: flex; flex-direction: column; color: #ddd; }
+  .cal .head { display: flex; align-items: center; gap: 1.2cqw; font-size: max(12px, 4.2cqh); color: var(--dim); }
+  .cal .head .on { color: var(--beat); }
+  .cal .head .done { color: var(--good); }
+  .cal .head .sep { flex: none; width: 3cqw; height: 1px; background: var(--line); }
+  .cal .head .grow { flex: 1; }
+  .cal .head .btn { font-size: max(12px, 3.2cqh); font-weight: normal; }
+  .cal .say { margin-top: 3.5cqh; font-size: max(17px, 8.5cqh); line-height: 1.1; color: #fff; }
+  .cal .say.bad { color: var(--bad); }
+  .cal .say.good { color: var(--good); }
+  .cal .hint { margin-top: 1.6cqh; font-size: max(12px, 4.2cqh); line-height: 1.3; color: var(--neutral); font-weight: normal; max-width: 94cqw; }
+  .cal .hint b { color: #ddd; }
+  .cal .alert { color: var(--beat); }
+  .cal .pick { margin-top: 3cqh; display: flex; align-items: center; gap: 10px; font-size: max(12px, 4.2cqh); font-weight: normal; color: #ddd; }
+  .cal .pick .combo { font: 13px Arial, sans-serif; color: #111; width: 120px; }
+  .cal .wire { margin-top: 3.5cqh; display: flex; align-items: center; gap: 1.2cqw; font-size: max(12px, 4cqh); font-weight: normal; }
+  .cal .wire .box { border: 1px solid var(--neutral); border-radius: 4px; padding: .8cqh 1.2cqw; color: #eee; }
+  .cal .wire .cable { flex: none; width: 14cqw; height: 0; border-top: 3px solid var(--beat); position: relative; }
+  .cal .wire .cable::after { content: ''; position: absolute; right: -2px; top: -7px; border: 5px solid transparent; border-left: 8px solid var(--beat); }
+  .cal .wire .cross { color: var(--dim); }
+  .cal .slots { margin-top: 3cqh; display: flex; gap: .6cqw; align-items: center; }
+  .cal .slots span {
+    width: 6cqw; height: 9cqh; display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line); border-radius: 4px; font-size: max(12px, 4.4cqh); color: var(--neutral);
+  }
+  .cal .slots.small span { width: 4.4cqw; height: 8cqh; font-size: max(10px, 3.4cqh); }
+  .cal .slots span.got { color: var(--good); border-color: rgb(60, 110, 60); }
+  .cal .slots span.skip { color: var(--dim); border-style: dashed; font-size: max(10px, 3cqh); }
+  .cal .slots span.miss { color: var(--bad); border-color: rgb(120, 50, 45); }
+  .cal .slots span.far { color: var(--beat); border-color: rgb(130, 100, 40); }
+  .cal .count { margin-top: 1.2cqh; font-size: max(11px, 3.6cqh); color: var(--neutral); }
+  .cal .fill { flex: 1; }
+  .cal .table { margin-top: 2.5cqh; display: grid; grid-template-columns: max-content max-content; column-gap: 3cqw; row-gap: .5cqh; font-size: max(12px, 4.2cqh); font-weight: normal; color: var(--neutral); }
+  .cal .table b { color: #eee; }
+  .cal .actions { display: flex; gap: 10px; justify-content: flex-end; align-items: center; margin-bottom: 1cqh; }
+  .cal .actions .note { font-size: max(11px, 3.4cqh); font-weight: normal; color: var(--neutral); margin-right: auto; }
+  .cal .choice { margin-top: 4cqh; display: flex; gap: 2cqw; }
+  .cal .choice .opt { flex: 1; border: 1px solid var(--neutral); border-radius: 6px; padding: 2.5cqh 1.6cqw; background: rgb(32, 32, 32); }
+  .cal .choice .opt b { display: block; font-size: max(15px, 6.5cqh); color: #fff; margin-bottom: 1.2cqh; }
+  .cal .choice .opt span { font-size: max(12px, 4cqh); font-weight: normal; color: var(--neutral); line-height: 1.3; }
+  .cal .steps { margin: 2cqh 0 0; padding-left: 3cqw; font-size: max(12px, 4.2cqh); font-weight: normal; color: #ddd; line-height: 1.35; }
+  .cal .steps b { color: var(--beat); }
+  .cal .warn { margin-top: 2cqh; font-size: max(12px, 4cqh); font-weight: normal; color: var(--beat); }
+
+  /* Шкала отклонений, мс. */
+  .scale { position: relative; height: max(64px, 20cqh); margin: 0 2.5cqw 1cqh; font-weight: normal; }
+  .scale .track { position: absolute; left: 0; right: 0; top: 42%; height: 16%; background: rgb(40, 40, 40); border: 1px solid var(--line); }
+  .scale .band { position: absolute; top: 0; bottom: 0; background: rgba(90, 210, 90, .35); border-left: 2px solid var(--good); border-right: 2px solid var(--good); }
+  .scale .band.wide { background: rgba(235, 80, 70, .3); border-color: var(--bad); }
+  .scale .tick { position: absolute; top: 34%; height: 32%; width: 2px; margin-left: -1px; background: var(--good); }
+  .scale .tick.bad { background: var(--bad); }
+  .scale .zero { position: absolute; top: 28%; height: 44%; width: 0; margin-left: -1px; border-left: 2px solid #fff; }
+  .scale .ticklabel { position: absolute; bottom: 0; transform: translateX(-50%); font-size: max(10px, 2.8cqh); color: var(--dim); }
+  .scale .mark { position: absolute; transform: translateX(-50%); white-space: nowrap; font-size: max(11px, 3.4cqh); line-height: 1; }
+  .scale .mark.above { top: 0; }
+  .scale .mark.below { top: 64%; }
+
+  details, #notes { max-width: 1100px; }
+  #notes li { margin: 4px 0; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 12px 0 6px; align-items: center; max-width: 1100px; }
+  .sw { display: inline-block; width: 14px; height: 12px; vertical-align: -1px; margin-right: 5px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Калибровка задержки звука и MIDI — макет</h1>
+<p>Задержка калибруется внутри калибровки: <b>Calibrate…</b> открывает панель калибровки, и у
+входа звука первый экран спрашивает, что калибровать, — уровни (нынешняя калибровка порога тишины) или
+задержку. Калибровка задержки звука — петлёй: кабель с выхода метронома во вход гитары, тренажёр
+слушает клики метронома. У входа MIDI кнопка Calibrate… появляется и сразу открывает калибровку
+задержки MIDI: нота MIDI против того же удара, услышанного звуковым входом. Итог — инструкция, какие
+ручные поправки REAPER (<b>Preferences → Audio → Recording</b>) поставить и на какие значения; кнопка
+<b>Apply to REAPER</b> делает то же автоматически. Тренажёр по-прежнему считает задержку по правилу
+записи REAPER. Панель калибровки занимает место строк тактов, как у калибровки уровней. Новое в окне
+обведено оранжевым пунктиром. Числа — пример.</p>
+
+<div class="tabs" id="tabs"></div>
+<p id="desc"></p>
+
+<div class="window">
+  <div class="controls">
+    <div class="line">
+      <span class="btn">▾ Settings</span>
+      <span class="gap"></span>
+      <span id="status"></span>
+    </div>
+    <div class="line">
+      <span>Mode:</span><span class="combo" style="width: 110px"><span>Quarters</span><span>▾</span></span>
+      <span class="gap"></span>
+      <span>Input:</span><span class="combo"><span id="input"></span><span>▾</span></span>
+      <span class="btn">Refresh</span>
+      <span class="gap"></span>
+      <label class="check"><input type="checkbox" checked disabled>Bar numbers</label>
+      <label class="check"><input type="checkbox" checked disabled>Mean/spread</label>
+    </div>
+    <div class="line tall">
+      <span>Offset, ms: <span class="edit">0</span></span>
+      <span class="gap"></span>
+      <span>Tolerance, ms: <span class="edit">10</span></span>
+      <span class="gap"></span>
+      <div class="gauge">
+        <div class="track"><div class="band" style="left: 40%; width: 20%"></div><div class="zero" style="left: 50%"></div></div>
+        <div class="ticks" id="ticks"></div>
+      </div>
+      <span>−10…+10 ms</span>
+    </div>
+    <div class="line" id="calline">
+      <span id="silence-label">Silence, dBFS:</span><span class="edit" id="silence">-76</span>
+      <span class="btn" id="calibrate">Calibrate...</span>
+    </div>
+  </div>
+  <div class="rows" id="rows"></div>
+</div>
+
+<div class="legend">
+  <span><span class="sw" style="background: #fff; width: 3px"></span>где клик ждёт REAPER сейчас (звук) или где удар (MIDI)</span>
+  <span><span class="sw" style="background: var(--good)"></span>замеры: клики или удары</span>
+  <span><span class="sw" style="background: rgba(90, 210, 90, .35); border: 1px solid var(--good)"></span>разброс замеров</span>
+  <span><span class="sw" style="outline: 2px dashed var(--new); background: transparent"></span>новое в окне</span>
+</div>
+
+<details open>
+  <summary>Допущения макета — уточнить</summary>
+  <ul id="notes">
+    <li><b>Где запуск.</b> Отдельной кнопки нет: калибровка задержки — внутри калибровки. У входа звука
+      Calibrate… открывает экран выбора Levels / Latency; у входа MIDI Calibrate… стоит одна в строке,
+      где у звука Silence, и сразу открывает калибровку задержки MIDI — порога тишины и калибровки
+      уровней у MIDI нет. Пока идёт калибровка, Calibrate… недоступна, пока показан итог — называется
+      Finish и закрывает панель, как сейчас. В свёрнутых настройках скрыта.</li>
+    <li><b>Петля — во вход гитары</b>, выбранный в Input: калибровка мерит именно его. Гитару на время
+      калибровки вынимают; в конце — по итогу, Cancel или обрыву — панель говорит «Connect the guitar
+      to Input 1».</li>
+    <li><b>Дорожки глушатся.</b> Экран «Connect» предупреждает: Start заглушит все дорожки проекта, кроме
+      мастер-дорожки — через неё может идти метроном. После итога, Cancel или обрыва каждой дорожке
+      возвращается её прежнее состояние глушения.</li>
+    <li><b>Калибровка звука запускает воспроизведение сама.</b> Start запускает проект с места курсора
+      правки с метрономом — на время калибровки метроном включается, если был выключен, — и
+      останавливает транспорт после 12 кликов. Первый клик после запуска выходит на блок позже своей
+      доли и в замер не идёт.</li>
+    <li><b>Калибровка MIDI — при остановленном транспорте</b>, как калибровка уровней: клик ей не нужен,
+      удары — в любом темпе.</li>
+    <li><b>Что ставится.</b> Поправка — медиана замеров, в сэмплах; знак любой. Звук: к Input manual offset
+      прибавляется, на сколько клики приходят позже, чем ждёт REAPER. MIDI: к Output manual offset
+      прибавляется задержка MIDI X, из Input manual offset вычитается тот же X — звук не сдвигается.
+      Поправка MIDI одна на все устройства MIDI; итог это говорит.</li>
+    <li><b>Итог — инструкция.</b> Итог по шагам говорит, какую поправку в Preferences → Audio → Recording
+      поставить и на какое значение, с нынешним значением в скобках. Внизу — Apply to REAPER с пометкой,
+      что он делает то же автоматически: записывает поправки (<code>set_config_var_string</code> с
+      сохранением в reaper.ini), закрывает панель, и строка состояния сразу показывает новую задержку.
+      Close и Cancel настройки REAPER не трогают.</li>
+    <li><b>Неровные клики.</b> Если разброс кликов больше 1 мс, задержка карты плавает, и поправка не
+      предлагается; «Apply … anyway» всё же ставит её — как у калибровки уровней.</li>
+    <li><b>Обрывы.</b> Звук: 5 с после Start без клика во входе — обрыв с подсказкой проверить кабель.
+      MIDI: 15 с без ноты — обрыв; нота без атаки во входе в пределах 100 мс в замер не идёт, а после
+      четырёх таких нот подряд панель подсказывает поднести микрофон.</li>
+    <li><b>Вход удара.</b> По умолчанию — последний канал звуковой карты, выбранный в Input. Подсказка
+      напоминает сначала откалибровать задержку звука этого входа, но не требует.</li>
+    <li><b>Тексты в окне — по-английски</b>, как остальные контролы.</li>
+  </ul>
+</details>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// Пример: 48 кГц, блок 512; драйвер сообщает вход 512, выход 1024 — REAPER вычитает 32.0 мс.
+const AUDIO_CLICKS = [1.10, 1.15, 1.08, 1.13, 1.12, 1.06, 1.14, 1.11, 1.09, 1.12, 1.10];
+const SPREAD_CLICKS = [1.2, 3.9, -0.8, 2.6, 0.4, 4.1, -1.3, 2.2, 0.9, 3.4, -0.2];
+const MIDI_HITS = [6.2, 5.4, 6.8, 5.9, 6.0, 7.1, 5.6, 6.0, 6.4, 5.2, 6.9, 5.8, 6.3, 5.7, 6.0, 6.6];
+
+const AUDIO_STEPS = ['Connect', 'Clicks', 'Result'];
+const MIDI_SCALE = { zero: 'strike', step: 5 };
+const MIDI_STEPS = ['Setup', 'Strikes', 'Result'];
+
+const IDLE = 'Quarters, window -10…+10 ms, latency 32.0 ms — waiting for playback';
+
+const SCENARIOS = [
+  { group: 'Где запуск' },
+  {
+    id: 'button-audio', name: 'Вход звука',
+    desc: 'В Input выбран канал звуковой карты. Строка калибровки прежняя: Silence и Calibrate…. ' +
+      'Отдельной кнопки для задержки нет — её выбирают внутри калибровки.',
+    input: 'Input 1', calline: 'audio', view: 'rows', status: IDLE,
+  },
+  {
+    id: 'button-midi', name: 'Вход MIDI',
+    desc: 'В Input выбран вход MIDI. Раньше строки калибровки у MIDI не было совсем; теперь в ней одна ' +
+      'кнопка Calibrate… — она сразу открывает калибровку задержки MIDI.',
+    input: 'MIDI: TD-17', calline: 'midi', view: 'rows', status: IDLE,
+  },
+  {
+    id: 'choose', name: 'Что калибровать',
+    desc: 'Calibrate… при входе звука. Первый экран панели калибровки — выбор: Levels — нынешняя ' +
+      'калибровка порога тишины, Latency — калибровка задержки петлёй.',
+    input: 'Input 1', calline: 'audio', busy: true, view: 'choose',
+    status: 'Calibrating Input 1: choose levels or latency',
+  },
+  { group: 'Калибровка звука' },
+  {
+    id: 'audio-connect', name: '1. Петля',
+    desc: 'Latency на экране выбора. Панель просит воткнуть кабель с выхода, где звучит метроном, во вход ' +
+      'гитары вместо неё и выключить прямой мониторинг на карте, и предупреждает, что Start заглушит ' +
+      'дорожки проекта и запустит воспроизведение с метрономом.',
+    input: 'Input 1', calline: 'audio', busy: true, view: 'audio-connect',
+    status: 'Calibrating latency of Input 1: step 1 of 2 — connect',
+  },
+  {
+    id: 'audio-clicks', name: '2. Клики',
+    desc: 'Транспорт идёт, метроном звучит в петлю. Каждый клик встаёт в ячейку отклонением от того ' +
+      'места, куда его ставит REAPER сейчас: +1.1 мс — клики приходят на 1.1 мс позже, чем REAPER ждёт. ' +
+      'Первый клик после запуска пропущен.',
+    input: 'Input 1', calline: 'audio', busy: true, view: 'audio-clicks', got: 7,
+    status: 'Calibrating latency of Input 1: step 2 of 2 — clicks',
+  },
+  {
+    id: 'audio-result', name: '3. Итог',
+    desc: 'Транспорт остановлен, глушение дорожек снято. Итог — инструкция: что поставить в настройках ' +
+      'REAPER и на какое значение. Настройки ещё не тронуты: их меняет пользователь сам или кнопка ' +
+      'Apply to REAPER. Calibrate… на это время — Finish.',
+    input: 'Input 1', calline: 'audio', finish: true, view: 'audio-result', status: 'Calibration finished',
+  },
+  {
+    id: 'audio-applied', name: '4. После Apply',
+    desc: 'Apply to REAPER записал Input manual offset +54 в настройки REAPER и закрыл панель. Строка ' +
+      'состояния сразу показывает новую задержку 33.1 мс; запись в REAPER сдвигается так же.',
+    input: 'Input 1', calline: 'audio', view: 'rows', statusNew: true,
+    status: 'Quarters, window -10…+10 ms, latency 33.1 ms — waiting for playback',
+  },
+  {
+    id: 'audio-silent', name: 'Кликов нет',
+    desc: 'Кабель не в том выходе: 5 с после Start во входе ни одного клика. Транспорт остановлен, ' +
+      'поправка не предлагается.',
+    input: 'Input 1', calline: 'audio', finish: true, view: 'audio-silent', status: 'Calibration finished',
+  },
+  {
+    id: 'audio-spread', name: 'Клики гуляют',
+    desc: 'Клики приходят то раньше, то позже: разброс 5.4 мс. Задержка карты плавает от клика к клику, ' +
+      'и одна поправка её не исправит — поправка не предлагается, «Apply +58 anyway» всё же ставит её.',
+    input: 'Input 1', calline: 'audio', finish: true, view: 'audio-spread', status: 'Calibration finished',
+  },
+  { group: 'Калибровка MIDI' },
+  {
+    id: 'midi-setup', name: '1. Вход удара',
+    desc: 'Calibrate… при входе MIDI. Панель просит выбрать канал звуковой карты, который слышит сам удар, — ' +
+      'список прямо в панели — и объясняет, чем этот удар услышать.',
+    input: 'MIDI: TD-17', calline: 'midi', busy: true, view: 'midi-setup',
+    status: 'Calibrating latency of MIDI: TD-17: step 1 of 2 — setup',
+  },
+  {
+    id: 'midi-strikes', name: '2. Удары',
+    desc: 'Транспорт стоит. Каждый удар встаёт в ячейку: на сколько нота MIDI пришла позже того же удара ' +
+      'во входе 2 — с поправками, которые REAPER применяет сейчас.',
+    input: 'MIDI: TD-17', calline: 'midi', busy: true, view: 'midi-strikes', got: 9,
+    status: 'Calibrating latency of MIDI: TD-17: step 2 of 2 — strikes',
+  },
+  {
+    id: 'midi-result', name: '3. Итог',
+    desc: 'Задержка MIDI +6.0 мс (288 сэмплов). Инструкция: Output manual offset +288, Input manual offset ' +
+      '−234 (было +54) — ноты MIDI встанут на 6 мс раньше, звук останется на месте. Apply to REAPER делает ' +
+      'то же автоматически.',
+    input: 'MIDI: TD-17', calline: 'midi', finish: true, view: 'midi-result', status: 'Calibration finished',
+  },
+  {
+    id: 'midi-unheard', name: 'Удар не слышен',
+    desc: 'Ноты MIDI приходят, а во входе 2 атаки рядом нет: микрофон далеко или выбран не тот вход. ' +
+      'После четырёх нот без пары подряд панель подсказывает поправить; такие ноты в замер не идут.',
+    input: 'MIDI: TD-17', calline: 'midi', busy: true, view: 'midi-unheard', got: 2,
+    status: 'Calibrating latency of MIDI: TD-17: step 2 of 2 — strikes',
+  },
+];
+
+function signed(ms, digits = 1) {
+  const text = Math.abs(ms).toFixed(digits);
+  return ms > 0 ? '+' + text : ms < 0 ? '−' + text : text;
+}
+
+function median(values) {
+  const s = [...values].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+function ticks() {
+  let html = '';
+  for (let ms = -50; ms <= 50; ms += 10) html += `<span style="left:${(ms + 50)}%">${ms > 0 ? '+' + ms : ms}</span>`;
+  $('ticks').innerHTML = html;
+}
+
+function rowsView() {
+  const rows = [[null, null, null, null], [3, -2, 5, -4], [-1, 4, 0, 2]];
+  const h = 100 / 8;
+  return rows.map((vals, i) => {
+    const cells = vals.map((x) => x === null
+      ? '<span style="color: var(--neutral); font-size: 3cqh">●</span>'
+      : `<span style="color: var(--good); font-size: 6cqh">${x > 0 ? '+' + x : x < 0 ? '−' + -x : '0'}</span>`).join('');
+    return `<div class="bar${i === 0 ? ' top' : ''}" style="top: ${i * h}cqh; height: ${h}cqh">
+      <span class="no">${3 - i}</span><span class="cells">${cells}</span>
+      <span class="stats">${i === 0 ? '' : '<span style="color: var(--good)">+0.5</span><span style="color: var(--neutral)">3.4</span>'}</span></div>`;
+  }).join('');
+}
+
+function head(steps, step, button = '<span class="btn">Cancel</span>') {
+  const cls = (n) => n < step ? 'done' : n === step ? 'on' : '';
+  const mark = (n) => n < step ? '✓' : ['①', '②', ''][n - 1];
+  return `<div class="head">
+    <span class="${cls(1)}">${mark(1)} ${steps[0]}</span><span class="sep"></span>
+    <span class="${cls(2)}">${mark(2)} ${steps[1]}</span><span class="sep"></span>
+    <span class="${cls(3)}">${steps[2]}</span>
+    <span class="grow"></span>${button}</div>`;
+}
+
+/// Шкала отклонений [lo, hi] мс: белая черта — где по правилу REAPER сейчас, штрихи — замеры.
+function scale(values, lo, hi, label, { wide = false, zero = 'REAPER now', step = 2 } = {}) {
+  const pos = (ms) => (ms - lo) / (hi - lo) * 100;
+  let html = '<div class="scale"><div class="track">';
+  if (values.length > 1) {
+    const a = Math.min(...values), b = Math.max(...values);
+    html += `<div class="band${wide ? ' wide' : ''}" style="left: ${pos(a)}%; width: ${pos(b) - pos(a)}%"></div>`;
+  }
+  html += '</div>';
+  values.forEach((v) => { html += `<div class="tick${wide ? ' bad' : ''}" style="left: ${pos(v)}%"></div>`; });
+  html += `<div class="zero" style="left: ${pos(0)}%"></div>`;
+  html += `<div class="mark above" style="left: ${pos(0)}%; color: #fff">${zero}</div>`;
+  if (values.length) {
+    const m = median(values);
+    html += `<div class="mark below" style="left: ${Math.max(6, Math.min(94, pos(m)))}%; color: ${wide ? 'var(--bad)' : 'var(--good)'}">${label} ${signed(m)} ms</div>`;
+  }
+  for (let ms = lo; ms <= hi; ms += step)
+    html += `<div class="ticklabel" style="left: ${pos(ms)}%">${ms > 0 ? '+' + ms : ms < 0 ? '−' + -ms : '0'}</div>`;
+  return html + '</div>';
+}
+
+function slots(values, total, got, opts = {}) {
+  const out = [];
+  if (opts.skip) out.push('<span class="skip">skipped</span>');
+  for (let i = 0; i < total; ++i) {
+    if (i < got) {
+      const v = values[i];
+      out.push(`<span class="${opts.far && Math.abs(v - median(values)) > 1 ? 'far' : 'got'}">${signed(v, opts.digits || 1)}</span>`);
+    } else out.push('<span>·</span>');
+  }
+  const missed = opts.missed || 0;
+  return `<div class="slots${opts.small ? ' small' : ''}">${out.join('')}</div>` +
+    `<div class="count">${got} of ${total}${missed ? ` · ${missed} not heard` : ''}</div>`;
+}
+
+const PANELS = {
+  choose: () => `<div class="cal"><div class="head"><span class="on">What to calibrate on Input 1</span>
+    <span class="grow"></span><span class="btn">Cancel</span></div>
+    <div class="choice">
+      <div class="opt new"><b>Levels</b><span>Noise and pick attack — sets the silence threshold. Guitar plugged in.</span></div>
+      <div class="opt new"><b>Latency</b><span>Metronome through a cable loop — sets REAPER's input offset. Guitar unplugged for a minute.</span></div>
+    </div></div>`,
+
+  'audio-connect': () => `<div class="cal">${head(AUDIO_STEPS, 1)}
+    <div class="say">Plug the metronome output into Input 1</div>
+    <div class="hint">Unplug the guitar from <b>Input 1</b> and plug in a cable from the output where you hear the metronome.
+      Turn off direct monitoring on the audio interface and turn the input gain down.</div>
+    <div class="wire"><span class="box">Output with the metronome</span><span class="cable"></span><span class="box">Input 1</span>
+      <span class="cross">instead of the guitar</span></div>
+    <div class="warn">Start mutes all tracks except the master and plays the project with the metronome for about 6 s.
+      The tracks are unmuted afterwards.</div>
+    <div class="fill"></div>
+    <div class="actions"><span class="btn main">Start</span></div></div>`,
+
+  'audio-clicks': (s) => `<div class="cal">${head(AUDIO_STEPS, 2)}
+    <div class="say">Listening to the metronome</div>
+    <div class="hint">Each click: how much later than REAPER expects it. The first click after start is skipped.</div>
+    ${slots(AUDIO_CLICKS, 11, s.got, { skip: true, digits: 2 })}
+    <div class="fill"></div>
+    ${scale(AUDIO_CLICKS.slice(0, s.got), -10, 10, 'clicks')}</div>`,
+
+  'audio-result': () => `<div class="cal">${head(AUDIO_STEPS, 3, '')}
+    <div class="say good">Metronome clicks come back 1.1 ms late</div>
+    <div class="hint">+1.1 ms (+54 samples at 48 kHz) after the time REAPER expects, spread 0.09 ms over 11 clicks.
+      To fix it in REAPER:</div>
+    <ol class="steps new">
+      <li>Open Options → Preferences → Audio → Recording.</li>
+      <li>Set <b>Input manual offset</b> to <b>+54 samples</b> (now 0).</li>
+      <li>Leave Output manual offset and “Use audio driver reported latency” as they are.</li>
+    </ol>
+    <div class="hint">REAPER will compensate 33.1 ms instead of 32.0; recordings move by the same 1.1 ms.
+      <b>Connect the guitar to Input 1.</b></div>
+    <div class="fill"></div>
+    ${scale(AUDIO_CLICKS, -10, 10, 'clicks')}
+    <div class="actions new"><span class="note">Apply to REAPER sets the same automatically.</span>
+      <span class="btn main">Apply to REAPER</span><span class="btn">Calibrate again</span><span class="btn">Close</span></div></div>`,
+
+  'audio-silent': () => `<div class="cal">${head(AUDIO_STEPS, 2, '')}
+    <div class="say bad">No metronome clicks on Input 1</div>
+    <div class="hint">Nothing came back for 5 s. Is the cable in the output where the metronome plays and in Input 1?
+      Is direct monitoring off and the metronome volume up? The tracks are unmuted again.</div>
+    <div class="hint"><b>Connect the guitar to Input 1</b> when you are done.</div>
+    ${slots([], 11, 0, { skip: true })}
+    <div class="fill"></div>
+    ${scale([], -10, 10, 'clicks')}
+    <div class="actions"><span class="btn">Calibrate again</span><span class="btn">Close</span></div></div>`,
+
+  'audio-spread': () => `<div class="cal">${head(AUDIO_STEPS, 3, '')}
+    <div class="say bad">Clicks come back unevenly: spread 5.4 ms</div>
+    <div class="hint">The audio device latency changes from click to click, and one offset cannot fix it. Use the interface's own
+      driver (ASIO, CoreAudio or ALSA) instead of a system mixer and calibrate again. <b>Connect the guitar to Input 1.</b></div>
+    ${slots(SPREAD_CLICKS, 11, 11, { skip: true, far: true })}
+    <div class="fill"></div>
+    ${scale(SPREAD_CLICKS, -10, 10, 'clicks', { wide: true })}
+    <div class="actions"><span class="btn">Apply +58 anyway</span><span class="btn">Calibrate again</span><span class="btn">Close</span></div></div>`,
+
+  'midi-setup': () => `<div class="cal">${head(MIDI_STEPS, 1)}
+    <div class="say">Choose the input that hears your strikes</div>
+    <div class="pick">Strikes heard on: <span class="combo"><span>Input 2</span><span>▾</span></span></div>
+    <div class="hint">A microphone a few centimetres from the pad or keys, the pad's trigger cable split into the audio interface,
+      or the regular output of a MIDI guitar. Not the instrument's own sound: it comes late.
+      Calibrate the audio latency of this input first.</div>
+    <div class="fill"></div>
+    <div class="actions"><span class="btn main">Start</span></div></div>`,
+
+  'midi-strikes': (s) => `<div class="cal">${head(MIDI_STEPS, 2)}
+    <div class="say">Hit the pad 16 times, one at a time</div>
+    <div class="hint">Each strike: how much later the MIDI note comes than the same strike on Input 2.</div>
+    ${slots(MIDI_HITS, 16, s.got, { small: true })}
+    <div class="fill"></div>
+    ${scale(MIDI_HITS.slice(0, s.got), -5, 15, 'MIDI', MIDI_SCALE)}</div>`,
+
+  'midi-result': () => `<div class="cal">${head(MIDI_STEPS, 3, '')}
+    <div class="say good">MIDI latency: +6.0 ms</div>
+    <div class="hint">Notes from TD-17 come 6.0 ms (+288 samples) after the strike heard on Input 2: median of 16,
+      1.9 ms from the earliest to the latest. To fix it in REAPER:</div>
+    <ol class="steps new">
+      <li>Open Options → Preferences → Audio → Recording.</li>
+      <li>Set <b>Output manual offset</b> to <b>+288 samples</b> (now 0) — it moves MIDI and audio.</li>
+      <li>Set <b>Input manual offset</b> to <b>−234 samples</b> (now +54) — it moves audio back.</li>
+    </ol>
+    <div class="hint">MIDI moves by 6.0 ms, audio stays in place. The MIDI offset is one for all MIDI devices.</div>
+    <div class="fill"></div>
+    ${scale(MIDI_HITS, -5, 15, 'MIDI', MIDI_SCALE)}
+    <div class="actions new"><span class="note">Apply to REAPER sets the same automatically.</span>
+      <span class="btn main">Apply to REAPER</span><span class="btn">Calibrate again</span><span class="btn">Close</span></div></div>`,
+
+  'midi-unheard': (s) => `<div class="cal">${head(MIDI_STEPS, 2)}
+    <div class="say">Hit the pad 16 times, one at a time</div>
+    <div class="hint"><span class="alert">Strikes not heard on Input 2.</span> MIDI notes come, but Input 2 hears no strike within
+      100 ms. Move the microphone closer to the pad or check the input.</div>
+    ${slots([6.2, 5.4], 16, 2, { small: true, missed: 4 })}
+    <div class="fill"></div>
+    ${scale([6.2, 5.4], -5, 15, 'MIDI', MIDI_SCALE)}</div>`,
+};
+
+function show(id) {
+  const list = SCENARIOS.filter((s) => s.id);
+  const sc = list.find((s) => s.id === id) || list[0];
+  document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.id === sc.id));
+  $('desc').textContent = sc.desc;
+  $('input').textContent = sc.input;
+  $('status').textContent = sc.status;
+  $('status').classList.toggle('new', !!sc.statusNew);
+  const audio = sc.calline === 'audio';
+  for (const el of ['silence-label', 'silence']) $(el).style.display = audio ? '' : 'none';
+  $('calibrate').classList.toggle('off', !!sc.busy);
+  $('calibrate').textContent = sc.finish ? 'Finish' : 'Calibrate...';
+  $('calibrate').classList.toggle('new', !audio);
+  $('rows').innerHTML = sc.view === 'rows' ? rowsView() : PANELS[sc.view](sc);
+}
+
+SCENARIOS.forEach((sc) => {
+  if (sc.group) {
+    const g = document.createElement('div');
+    g.className = 'group';
+    g.textContent = sc.group;
+    $('tabs').appendChild(g);
+    return;
+  }
+  const button = document.createElement('button');
+  button.textContent = sc.name;
+  button.dataset.id = sc.id;
+  button.onclick = () => { location.hash = sc.id; };
+  $('tabs').appendChild(button);
+});
+window.addEventListener('hashchange', () => show(location.hash.slice(1)));
+ticks();
+show(location.hash.slice(1));
+</script>
+
+<script src="http://127.0.0.1:8765/embed.js" data-session="e42efddb-6903-46f3-9b0a-b1b25982d692"></script>
+</body>
+</html>

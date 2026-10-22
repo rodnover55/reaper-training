@@ -1,0 +1,9 @@
+add_library(training_core_transport STATIC
+  src/transport.cpp)
+
+target_include_directories(training_core_transport PUBLIC include)
+
+target_link_libraries(training_core_transport PUBLIC
+  training_core training_core_calibration training_core_training)
+
+training_enable_warnings(training_core_transport)

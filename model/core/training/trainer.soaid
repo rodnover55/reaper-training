@@ -1,0 +1,105 @@
+import training.core.input
+import training.core
+import training.core.training.state
+
+use training.core.input
+
+entity Trainer {
+  enum Step {
+    responsibility Определяет в каком состоянии тренировка.
+
+    invariant #transisions {
+      Разрешены следующие перемещения:
+      [Step.Off] -> [Step.Working] -> [Step.Off]
+    }
+
+    value Off Тренировка не запущена.
+    value Working Тренировка идет.
+  }
+
+  value State {
+    field {
+      step: Step
+      timeline: state.Timeline Хранит разницу нот во время тренировки.
+    }
+  }
+
+  value Note {
+    field {
+      time: training.core.Moment Время ноты.
+    }
+  }
+
+  enum Type {
+    value Audio Входящий поток аудио.
+    value Midi Входящий поток MIDI.
+  }
+
+  field {
+    state: State Состояние тренировки.
+    hitWindow: training.core.HitWindow 
+  }
+
+  action {
+    start() throws training.core.InvalidStep {
+      responsibility Запускает тренировку
+
+      body {
+        Сбрасывает [Trainer.state].
+        Меняет [State.step] с [Step.Off] -> [Step.Working]
+      }
+
+      note ai Список обработанных нот содержится в [state.Timeline].
+
+      error training.core.InvalidStep Возникает когда [State.step] не соответствует [Step.Off]
+    }
+
+    stop() {
+      responsibility Останавливает тренировку.
+
+      body {
+        Меняет [State.step] на [Step.Off].
+        Расположение нот в [Trainer.state] остается.
+        Ждущие ноты - удаляются.
+      }
+    }
+
+    process(note: Note) {
+      responsibility { 
+        Вызывается [Type.Audio] и [Type.Midi] для добавления нот в [State.timeline].
+      }
+
+      outside {
+        Этот метод разрешено вызывать только [Type.Audio] и [Type.Midi].
+        Другие части системы что в ядре, что вне его не должны вызывать этот метод напрямую.
+      }
+
+      body {
+        - Нота ждет, пока не придет такт, который начинается позже её времени, 
+          чтобы определить доле какого такта нота ближе 
+        - По [note] вычисляется отклонение до ближайшей доли в [State.timeline].
+        - Вычисляется оценка по текущему [Trainer.hitWindow]. 
+        - [note] ложится в ближайшую долю [State.timeline]
+      }
+    }
+
+    result(): State {
+      responsibility Возвращает результат.
+    }
+
+    setSettings(settings: training.core.Settings) {
+      responsibility {
+        Устанавливает настройки.
+        Для уже установленных нот оценка по новому окну не пересчитывается.
+      }
+    }
+
+    addBar(bar: state.Bar) {
+      responsibility Добавляет новый такт в тренажер.
+
+      invariant #place-waiting-notes {
+        Ждущие ноты устанавливаются по прибытию такта необходимого для расчета оценки каждой.
+      }
+    }
+  }
+}

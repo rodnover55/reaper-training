@@ -1,0 +1,177 @@
+@startuml core-input-sequence
+title Поставка тактов, сэмплов и нот MIDI в ядро
+
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+
+' Подпись сообщения: первая строка — что делает действие, серая — вызов.
+
+box "REAPER" #F2F2F2
+  participant "REAPER" as Reaper
+end box
+
+box "Связка: src, libs/reaper" #EAF2FB
+  participant "training::reaper::ReaperNotificationRelay" as Relay
+  participant "training::reaper::Trainer\n(главный поток)" as Trainer
+  participant "training::reaper::AudioInput::onBlock\n(звуковой поток)" as Hook
+  participant "training::reaper::AudioInput\n(рабочий поток и очереди)" as Input
+  participant "training::reaper::Run" as Run
+  participant "training::reaper::MidiPlaces" as Places
+  participant "training::reaper::CountInTimeline\n(training::core::Timeline)" as CountIn
+  participant "training::reaper::ProjectTimeline\n(training::core::Timeline)" as Project
+end box
+
+box "Ядро: libs/core, libs/trainer, libs/grid, libs/onset" #EAF7EA
+  participant "training::trainer::Transport" as Transport
+  participant "training::trainer::OnsetSearch" as Search
+  participant "training::onset::Detector" as Detector
+  participant "training::trainer::MidiNotes" as Midi
+  participant "training::trainer::Calibrator" as Calibrator
+  participant "training::grid::Bars" as Bars
+end box
+
+== Начало запуска ==
+
+Reaper -> Relay : Сообщает, что транспорт пошёл, встал на паузу или остановился\n<color:#666666>""SetPlayState(play, pause, rec)""</color>
+Relay -> Trainer : Передаёт перемену транспорта тренажёру\n<color:#666666>""onPlayState(play, pause, record)""</color>
+Trainer -> Reaper : Спрашивает позицию, с которой начался запуск\n<color:#666666>""GetPlayPosition2Ex()""</color>
+Reaper --> Trainer : Позиция начала в секундах проекта
+note right of Trainer
+  Переводит позицию во время ядра (training::reaper::projectTime).
+  По настройкам проекта считает отсчёт перед запуском
+  (training::reaper::countInAt) и такт, которым кончается
+  затакт — пре-ролл или отсчёт.
+end note
+Trainer -> Run : Запоминает запуск: позиция начала, отсчёт и скорость\n<color:#666666>""Run(position, countIn, rate)""</color>
+Trainer -> Run : Узнаёт начало запуска на шкале — место первого клика отсчёта\n<color:#666666>""begin()""</color>
+Run --> Trainer : Позиция начала минус длина отсчёта по шкале
+Trainer -> Transport : Начинает запуск: с этого момента атаки и ноты идут в него;\nраньше начала запуска узлы не берут ноты до Play\n<color:#666666>""start(now, run.begin(), leadInEnd)""</color>
+Transport -> Bars : Стирает строки тактов прошлого запуска и задаёт затакт\n<color:#666666>""clear(); setLeadIn(leadInEnd)""</color>
+Transport -> Midi : Начинает отбор нот MIDI без мёртвого времени прошлого запуска\n<color:#666666>""start()""</color>
+Transport -> Search : Начинает отдавать атаки этому запуску;\nатаки, сыгранные до Play, отдаст с первым блоком запуска\n<color:#666666>""start(now)""</color>
+Transport --> Trainer : Запуск начался\n<color:#666666>""true""</color>
+Trainer -> Places : Начинает ставить места нотам MIDI этого запуска\n<color:#666666>""start(position, run.countInLength())""</color>
+Trainer -> CountIn : Заводит карту темпа запуска: до позиции начала — сетка отсчёта,\nс неё — карта темпа проекта\n<color:#666666>""CountInTimeline(ProjectTimeline, position, sampleRate)""</color>
+
+== Сэмплы: каждый блок звука, звуковой поток ==
+
+Reaper -> Hook : Отдаёт очередной блок звука входов\n<color:#666666>""OnAudioBuffer(isPost = false, length, sampleRate)""</color>
+Hook -> Reaper : Спрашивает позицию проекта, на которой обрабатывается блок\n<color:#666666>""GetPlayPosition2Ex()""</color>
+Reaper --> Hook : Позиция обработки блока
+Hook -> Search : Узнаёт, идёт ли запуск и когда он начался\n<color:#666666>""running(); run()""</color>
+note right of Hook
+  Отмечает первый блок запуска и публикует
+  часы звука хоста (training::reaper::HostClock):
+  по ним главный поток ставит места нот MIDI
+  (publishClock).
+end note
+Hook -> Reaper : Берёт звук выбранного канала\n<color:#666666>""GetBuffer(false, channel)""</color>
+Reaper --> Hook : Сэмплы канала
+Hook -> Input : Кладёт копию сэмплов и сведения о блоке в очередь рабочего потока\n<color:#666666>""training::reaper::SpscRing::push(сэмплы, BlockHeader)""</color>
+
+== Сэмплы: каждые 2 мс, рабочий поток ==
+
+Input -> Input : Берёт из очереди следующий блок\n<color:#666666>""feed(header)""</color>
+alt блок взят во время калибровки
+  Input -> Input : Перекладывает звук блока в очередь калибровки для главного потока\n<color:#666666>""forwardCalibration(header, gap)""</color>
+else блок для поиска атак
+  Input -> Search : Подаёт блок в поиск атак вместе с порогом тишины\n<color:#666666>""process(training::trainer::AudioBlock, samples, silenceDb, onsets)""</color>
+  opt между блоками пропал звук
+    Search -> Detector : Отсчитывает пропавший звук как тишину\n<color:#666666>""skip(пропавшие сэмплы)""</color>
+  end
+  Search -> Detector : Ищет начала нот в звуке блока\n<color:#666666>""process(samples, found)""</color>
+  Detector --> Search : Найденные атаки: место в потоке звука и уровень\n<color:#666666>""training::onset::Onset""</color>
+  Search --> Input : Атаки идущего запуска с блоком, каким его дал хост,\nи первым сэмплом первого блока запуска;\nс первым блоком запуска — и атаки, сыгранные до Play\n<color:#666666>""training::trainer::AudioOnset""</color>
+  Input -> Input : Кладёт атаки в очередь для главного потока\n<color:#666666>""training::reaper::SpscRing::push(атака)""</color>
+end
+
+== Тик таймера главного потока ==
+
+Reaper -> Trainer : Будит тренажёр по таймеру главного потока\n<color:#666666>""onMainTimer() → poll()""</color>
+
+group Сэмплы калибровки: pollCalibration
+  loop пока в очереди калибровки есть звук
+    Trainer -> Input : Забирает следующий кусок звука\n<color:#666666>""popCalibration(samples)""</color>
+    Input --> Trainer : Кусок: частота, длина, разрыв с прошлым куском, сэмплы\n<color:#666666>""training::reaper::CalibrationChunk""</color>
+    Trainer -> Calibrator : Отдаёт звук калибровке, которая подбирает порог тишины\n<color:#666666>""feed(samples, sampleRate, gap)""</color>
+  end
+end
+
+group Такты: followPlayback, пока идёт запуск
+  Trainer -> Reaper : Спрашивает позицию, которую сейчас слышно\n<color:#666666>""GetPlayPositionEx()""</color>
+  Reaper --> Trainer : Слышимая позиция heard
+  Trainer -> Run : Придерживает слышимую позицию в начале отсчёта по тактам:\nREAPER начинает отсчёт раньше на остаток до целого блока\n<color:#666666>""heard(heard)""</color>
+  Run --> Trainer : Слышимая позиция для строк тактов
+  note right of Trainer
+    Выбирает карту темпа: во время отсчёта — CountInTimeline,
+    после него — ProjectTimeline. Берёт длину петли, если позиция
+    в петле с повтором (training::reaper::loopLength).
+  end note
+  Trainer -> Transport : Сообщает слышимую позицию, режим сетки и окно попадания\n<color:#666666>""play(time, loopLength, mode, window, timeline)""</color>
+  Transport -> Bars : Двигает текущий удар; при входе в новый такт заводит его строку\n<color:#666666>""play(time, loopLength, mode, window, timeline)""</color>
+  alt во время отсчёта: время раньше позиции начала
+    Bars -> CountIn : Спрашивает такт и долю по времени, такт по номеру, время доли\n<color:#666666>""positionAt(time); barOf(index); timeAt(position)""</color>
+    CountIn --> Bars : Такт отсчёта с размером и темпом позиции начала
+  else после отсчёта
+    Bars -> Project : Спрашивает такт и долю по времени, такт по номеру, время доли\n<color:#666666>""positionAt(time); barOf(index); timeAt(position)""</color>
+    Project -> Reaper : Переводит время в такт и долю и обратно, читает метки темпа и размера\n<color:#666666>""TimeMap2_timeToBeats, TimeMap2_beatsToTime,""</color>\n<color:#666666>""GetTempoTimeSigMarker, GetProjectTimeSignature2""</color>
+    Reaper --> Project : Такт, доля, размер, метки темпа
+    Project --> Bars : Позиция, такт с размером и темпом по долям, время доли\n<color:#666666>""training::core::Position, training::core::Bar, training::core::Moment""</color>
+  end
+  Bars -> Bars : Ставит сверху строку такта, в который вошло воспроизведение\n<color:#666666>""enter(bar, window) → training::grid::BarRow""</color>
+end
+
+group Атаки из сэмплов: takeOnsets
+  loop пока в очереди атак есть атаки
+    Trainer -> Input : Забирает следующую атаку\n<color:#666666>""popOnset()""</color>
+    Input --> Trainer : Атака: блок, место в блоке, уровень, запуск\n<color:#666666>""training::trainer::AudioOnset""</color>
+    Trainer -> Transport : Проверяет, что атака отдана идущему запуску\n<color:#666666>""takesOnset(hit.run)""</color>
+    Transport --> Trainer : Атака этого запуска\n<color:#666666>""true""</color>
+    Trainer -> Run : Ставит на шкалу блок отсчёта или блок до Play:\nпозиция начала минус путь до конца отсчёта\n<color:#666666>""blockPlace(hit)""</color>
+    Run --> Trainer : Место блока; пусто — место дал REAPER\n<color:#666666>""optional<training::core::Moment>""</color>
+    note right of Trainer
+      Время ноты на шкале проекта: место блока плюс место
+      в блоке минус компенсация задержки входа
+      (training::grid::noteTime). Атаки, кроме атак отсчёта
+      и до Play, заворачивает в петлю проекта
+      (training::reaper::loopWrapped).
+    end note
+    Trainer -> Transport : Ставит ноту в строки тактов\n<color:#666666>""addNote(time, rate, mode, window, timeline, beforeStart)""</color>
+    Transport -> Bars : Кладёт ноту в ближайший узел сетки;\nноту до Play берёт только узел с начала запуска\n<color:#666666>""addNote(time, rate, mode, window, timeline, firstNode)""</color>
+    Bars -> Bars : Находит такт и узел ноты по карте темпа, как у тактов\n<color:#666666>""positionAt, barOf, timeAt""</color>
+    Bars --> Trainer : Нота легла в узел: отклонение записано\n<color:#666666>""true""</color>
+  end
+end
+
+group Ноты MIDI: takeMidiNotes
+  Trainer -> Input : Берёт часы звука хоста до чтения истории\n<color:#666666>""clock(run)""</color>
+  Input --> Trainer : Часы: конец последнего блока и время от начала запуска\n<color:#666666>""training::reaper::HostClock""</color>
+  loop от свежего события до прочитанного на прошлом тике
+    Trainer -> Reaper : Читает событие истории MIDI-входа\n<color:#666666>""MIDI_GetRecentInputEvent(index, …)""</color>
+    Reaper --> Trainer : Байты, возраст в сэмплах, устройство, позиция, проход петли
+  end
+  Trainer -> Input : Берёт часы звука хоста после чтения\n<color:#666666>""clock(run)""</color>
+  Input --> Trainer : Часы после чтения\n<color:#666666>""training::reaper::HostClock""</color>
+  note right of Trainer
+    Если за чтение начался новый блок звука, читает
+    историю заново — до трёх попыток. События становятся
+    training::trainer::MidiEvent от старых к новым,
+    часы — training::reaper::MidiClock во времени проекта.
+  end note
+  Trainer -> Places : Ставит нотам места на шкале: ноты отсчёта — от позиции начала,\nноты до Play ждут запуска и встают перед ней\n<color:#666666>""place(events, read, midiClock)""</color>
+  Places --> Trainer : Ноты с местами: сначала сыгранные до Play, потом остальные\n<color:#666666>""std::vector<training::trainer::MidiNote>""</color>
+  Trainer -> Midi : Отбирает ноты для измерения: устройство, вход, мёртвое время\n<color:#666666>""take(notes, read)""</color>
+  Midi --> Trainer : Ноты, которые надо измерить, по порядку\n<color:#666666>""std::vector<training::trainer::MidiNote>""</color>
+  loop каждая нота
+    note right of Trainer
+      Время ноты — её место минус компенсация задержки MIDI.
+      Ноты, кроме нот отсчёта и до Play, заворачивает
+      в петлю проекта (training::reaper::loopWrapped).
+    end note
+    Trainer -> Transport : Ставит ноту в строки тактов\n<color:#666666>""addNote(time, rate, mode, window, timeline, beforeStart)""</color>
+    Transport -> Bars : Кладёт ноту в ближайший узел сетки\n<color:#666666>""addNote(time, rate, mode, window, timeline, firstNode)""</color>
+    Bars --> Trainer : Нота легла в узел: отклонение записано\n<color:#666666>""true""</color>
+  end
+end
+
+@enduml

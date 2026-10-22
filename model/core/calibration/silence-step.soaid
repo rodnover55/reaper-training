@@ -1,0 +1,121 @@
+import training.core.input
+import training.core.detector
+import training.core
+
+use training.core.input
+
+entity SilenceStep: SoundReceiver {
+  responsibility Измеряет тишину на шаге [training.core.calibration.Step.Silence].
+
+  note Измерение осуществляется на обработанном сигнале после фильтра высоких частот.
+
+  relation {
+    detector: training.core.detector.Detector
+  }
+
+  enum Step {
+    responsibility Определяет состояние текущего запуска шага.
+
+    invariant #transisions {
+      [Step.Off] -> [Step.Loading] -> [Step.Working] -> [Step.Done]
+      [Step.Loading] -> [Step.Off]
+      [Step.Working] -> [Step.Off]
+      [Step.Done] -> [Step.Off]
+    }
+
+    value {
+      Off Выключен, не работает
+      Loading Запускается. например в тот момент, когда проходит прогрев фильтров
+      Working Выполняет вычисление
+      Done Вычисление завершено.
+    }
+  }
+
+  value State {
+    field {
+      step: Step Текущее состояние шага
+
+      noiseDb: float {
+        responsibility {
+          Возвращает уровень шума входящего сигнала готовый для использования в тренажере.
+          во время [Step.Working] текущее значение,
+          во время [Step.Done] финальное значение.
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+
+      levelDb: float {
+        responsibility {
+          Возвращает уровень текущего сигнала во время [Step.Working].
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+
+      sinceSound: training.core.Interval {
+        responsibility {
+          Время которое прошло начиная с момента последнего звука во время [Step.Working].
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+
+      silenceLeft: training.core.Interval {
+        responsibility {
+          Время которое осталось до получения результата в [State.noiseDb] во время [Step.Working].
+          Для остальных статусов значение не актуально.
+        }
+
+        invariant #read-only Только для чтения, снаружи не меняется
+      }
+    }
+  }
+
+  field {
+    state: State Состояние работы [SilenceStep].
+    sampleRate: training.core.SampleRate Частота дискретизации
+  }
+
+  action {
+    constructor create(sampleRate: training.core.SampleRate)
+    
+    receive(block: AudioBlock) {
+      invariant #reuse-filter {
+        Считает тишину на основе фильров полученных из [training.core.detector.Detector.filter]
+      }
+
+      invariant #working {
+        Обновляет [State.noiseDb], [State.levelDb], [State.sinceSound], 
+        [State.silenceLeft] при [Step.Working]
+      }
+
+      invariant #result {
+        Обновляет [State.noiseDb] при [Step.Done]
+      }
+
+      note ai {
+        Текущий алгоритм и его зависимости не описываются в этой модели и реализованы сами по себе,
+        кроме [SilenceStep.receive#reuse-filter]
+      }
+    }
+
+    start() throws training.core.InvalidStep {
+      responsibility Запускает шаг
+
+      invariant #loading {
+        Переводит [Step.Off] -> [Step.Loading], ждет необходимое время для прогрева фильтров и
+        переводит [Step.Loading] -> [Step.Working]
+      }
+
+      error training.core.InvalidStep Возникает, когда [State.step] != [Step.Off]
+    }
+
+    stop() Останавливает шаг и сбрасывает внутреннее состояние [SilenceStep.state].
+
+    result(): State Возвращает результат [SilenceStep.state] на текущий момент.
+  }
+}

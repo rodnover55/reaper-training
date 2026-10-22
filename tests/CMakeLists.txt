@@ -3,33 +3,63 @@
 # зависимостей и изоляцией.
 add_executable(training_tests
   main.cpp
-  concurrency_spsc_ring_test.cpp
-  onset_sliding_max_test.cpp
-  onset_dead_time_test.cpp
-  onset_calibration_test.cpp
-  onset_detector_test.cpp
+  core_clock_test.cpp
+  core_settings_test.cpp
+  core_timeline_test.cpp
+  core_detector_sliding_max_test.cpp
+  core_detector_test.cpp
+  core_detector_filter_test.cpp
+  core_calibration_test.cpp
+  core_detector_buffer_test.cpp
   synth.cpp
   synth_test.cpp
-  onset_synth_test.cpp
+  core_detector_synth_test.cpp
   wav.cpp
-  onset_recordings_test.cpp
-  grid_bar_display_test.cpp
-  grid_bars_test.cpp
-  grid_hit_window_test.cpp
-  grid_nodes_test.cpp
-  grid_note_time_test.cpp
+  core_detector_recordings_test.cpp
   grid_timeline_test.cpp
+  input_settings_test.cpp
   journal_test.cpp
-  # Журнал расширения от REAPER не зависит, и его замена файла проверяется
-  # здесь же.
-  ${CMAKE_SOURCE_DIR}/src/journal.cpp)
+  midi_device_remap_test.cpp
+  settings_read_test.cpp
+  spsc_ring_test.cpp
+  render_bar_rows_test.cpp
+  render_field_texts_test.cpp
+  render_file_notice_test.cpp
+  render_fit_text_test.cpp
+  render_ms_text_test.cpp
+  render_status_line_test.cpp
+  render_view_settings_test.cpp
+  reaper_calibration_test.cpp
+  reaper_compensation_test.cpp
+  reaper_half_ms_test.cpp
+  reaper_input_state_test.cpp
+  reaper_count_in_test.cpp
+  reaper_midi_event_test.cpp
+  reaper_midi_places_test.cpp
+  reaper_run_timeline_test.cpp
+  core_training_trainer_test.cpp
+  core_training_audio_test.cpp
+  core_training_midi_test.cpp
+  core_transport_test.cpp
+  # Журнал расширения, выбранный вход и чтение файла настроек обходятся без
+  # REAPER: замена файла журнала и разбор строк настроек проверяются здесь же.
+  ${CMAKE_SOURCE_DIR}/src/input_settings.cpp
+  ${CMAKE_SOURCE_DIR}/src/journal.cpp
+  ${CMAKE_SOURCE_DIR}/src/settings_read.cpp)
 
 target_link_libraries(training_tests PRIVATE
   doctest::doctest
   fmt::fmt
-  training_concurrency
-  training_onset
-  training_grid)
+  training_core
+  training_core_input
+  training_core_detector
+  training_core_state
+  training_core_training_state
+  training_core_calibration
+  training_core_training
+  training_core_transport
+  training_render
+  training_reaper)
 
 target_include_directories(training_tests PRIVATE . ${CMAKE_SOURCE_DIR}/src)
 
@@ -74,9 +104,10 @@ endif()
 
 # Изоляция проверяется отдельно и текстом: заголовки ОС и SDK REAPER находятся
 # в системных путях без всякой зависимости, и направление зависимостей их не
-# ловит (design.md D9). Механика общая, списки — у каждой библиотеки свои и
-# лежат в её isolation.cmake.
-foreach(isolated concurrency onset grid)
+# ловит. Механика общая, списки — у каждой библиотеки свои и лежат в её
+# isolation.cmake.
+foreach(isolated core core/input core/detector core/state core/training/state core/calibration
+    core/training core/transport render reaper)
   add_test(NAME ${isolated}_isolation
     COMMAND "${CMAKE_COMMAND}"
       -D "LIBRARY_DIR=${CMAKE_SOURCE_DIR}/libs/${isolated}"
