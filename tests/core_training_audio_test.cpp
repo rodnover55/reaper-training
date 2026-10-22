@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <map>
 #include <memory>
 #include <numbers>
 #include <span>
@@ -121,9 +122,12 @@ struct Bench {
   std::vector<double> onsets() const {
     std::vector<double> times;
     const std::vector<Bar> bars = trainer->result().timeline.bars();
-    if (bars.empty() || !bars.front().notes().contains(Beat(0.0)))
+    if (bars.empty())
       return times;
-    for (const Note &note : bars.front().notes().at(Beat(0.0)))
+    const std::map<Beat, std::vector<Note>> notes = bars.front().notes();
+    if (!notes.contains(Beat(0.0)))
+      return times;
+    for (const Note &note : notes.at(Beat(0.0)))
       times.push_back(kOrigin + note.deviation / Interval::kSecond);
     return times;
   }

@@ -138,7 +138,9 @@ TEST_CASE("Детектор: filter — ВЧ-фильтр и огибающая 
 
   // Детектор, разобравший звук, отдаёт фильтр в сброшенном состоянии и свой
   // ход не меняет.
-  const std::vector<float> stream(signal.begin(), signal.end());
+  std::vector<float> stream(signal.size());
+  std::ranges::transform(signal, stream.begin(),
+                         [](double sample) { return static_cast<float>(sample); });
   detector.process(stream);
   Serial second = detector.filter();
   std::vector<double> again = signal;

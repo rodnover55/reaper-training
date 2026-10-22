@@ -2,6 +2,7 @@
 
 #include "training/render/main/file_notice.hpp"
 
+#include <ostream>
 #include <string>
 #include <vector>
 
