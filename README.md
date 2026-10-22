@@ -16,6 +16,7 @@
 | `cmake --preset default` | Подготовить сборку. Нужно один раз в свежем клоне и после правок в `CMakeLists.txt`. |
 | `cmake --build --preset default` | Собрать плагин и тесты. |
 | `ctest --preset quick` | Проверить правку на ходу — без долгих линтеров и сборки под санитайзерами. |
+| `ctest --preset tidy` | Прогнать только clang-tidy — после правок под его замечания. Нужна сборка: `cmake --build --preset default`. |
 | `cmake --workflow --preset push-check` | Полная проверка перед push. |
 | `cmake --build build --target format` | Привести форматирование в порядок, когда упал `clang_format`. |
 | `cmake --workflow --preset sanitize` | Прогнать тесты под ASan и UBSan, если есть подозрение на порчу памяти. |

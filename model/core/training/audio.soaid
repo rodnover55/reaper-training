@@ -1,0 +1,31 @@
+import training.core.input
+import training.core.detector
+import training.core.training.state
+import training.core
+
+entity Audio: Trainer&training.core.input.SoundReceiver&training.core.Unit<Trainer.State> {
+  responsibility Читает входной аудио поток и преобразует его в [state.Note].
+
+  relation {
+    detector: training.core.detector.Detector
+  }
+
+  field {
+    sampleRate: training.core.SampleRate Частота дискретизации
+    silenceDb: float Порог тишины, dBFS
+  }
+
+  action {
+    constructor create(sampleRate: training.core.SampleRate, settings: training.core.Settings)
+
+    receive(block: training.core.input.AudioBlock) {
+      responsibility Принимает звуковой поток и конвертирует его в [state.Note]
+
+      body {
+        Для каждого [block] запускает [Audio.detector] преобразует
+        входящий сигнал в ноты [Trainer.Note] по вычисленным атакам и добавляет их
+        используя вызов родительского класса [Trainer.process].
+      }
+    }
+  }
+}

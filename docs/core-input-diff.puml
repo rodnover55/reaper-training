@@ -1,0 +1,439 @@
+@startuml core-input-diff
+title Поставка данных в ядро: изменения типов (только дифф)
+
+' Показаны только новые, изменённые, удалённые и перенесённые типы и только их
+' изменённые члены. Остальные типы и члены не меняются.
+
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam nodesep 40
+skinparam ranksep 50
+
+skinparam class {
+  BackgroundColor<<новый>> #E8F5E9
+  BorderColor<<новый>> #2E7D32
+  BackgroundColor<<изменён>> #FFF8E1
+  BorderColor<<изменён>> #F9A825
+  BackgroundColor<<удалён>> #FFEBEE
+  BorderColor<<удалён>> #C62828
+  BackgroundColor<<перенесён>> #E3F2FD
+  BorderColor<<перенесён>> #1565C0
+}
+
+legend top left
+  |= Блок |= Что значит |
+  |<back:#E8F5E9>   новый   </back>| новый тип |
+  |<back:#FFF8E1>  изменён  </back>| тип остаётся, меняются показанные члены |
+  |<back:#FFEBEE>  удалён   </back>| тип убирается |
+  |<back:#E3F2FD> перенесён </back>| тип переезжает в этот слой без изменений |
+  | <color:#2E7D32>+ член</color> | добавляется |
+  | <color:#C62828><s>член</s></color> | убирается |
+endlegend
+
+package "libs/core — training::core" as core #F5F6FC {
+
+  class "training::core::AudioBlock" as CoreAudioBlock <<новый>> <<struct>> {
+    <color:#2E7D32>+ std::span<const float> samples</color>
+    <color:#2E7D32>+ training::core::Moment start</color>
+  }
+  note right of CoreAudioBlock
+    Блок звука выбранного канала.
+    samples — доли полной шкалы, их число — длина блока.
+    start — время первого сэмпла.
+  end note
+
+  interface "training::core::SoundReceiver" as SoundReceiver <<новый>> {
+    <color:#2E7D32>+ void setSampleRate(double sampleRate)</color>
+    <color:#2E7D32>+ void receive(const training::core::AudioBlock &block)</color>
+  }
+  note right of SoundReceiver
+    Один интерфейс поставки звука
+    для поиска атак и калибровки.
+    Блоки принимаются в любом состоянии.
+    Начало блока раньше конца разобранного
+    звука — уже разобранная часть отрезается.
+  end note
+
+  interface "training::core::SoundEvents" as SoundEvents <<новый>> {
+    <color:#2E7D32>+ void overlap(training::core::Moment start,</color>
+    <color:#2E7D32>    training::core::Moment heardEnd, std::size_t cut)</color>
+  }
+  note right of SoundEvents
+    Обработчик событий звука.
+    Связка пишет в журнал
+    «warning: audio block overlaps …».
+  end note
+
+  class "training::core::Note" as PlacedNote <<новый>> <<struct>> {
+    <color:#2E7D32>+ training::core::Interval deviation</color>
+  }
+  note right of PlacedNote
+    Нота звука или MIDI, которая легла в узел:
+    разница — отклонение от узла в реальном
+    времени, минус — раньше узла.
+  end note
+
+  class "training::core::MidiNote" as CoreMidiNote <<новый>> <<struct>> {
+    <color:#2E7D32>+ training::core::Moment time</color>
+  }
+
+  interface "training::core::MidiReceiver" as MidiReceiver <<новый>> {
+    <color:#2E7D32>+ void receive(std::span<const training::core::MidiNote> notes)</color>
+  }
+
+  abstract class "training::core::Timeline" as CoreTimeline #FFFFFF {
+  }
+  note right of CoreTimeline : контракт не меняется
+
+  class "training::core::Bar" as CoreBar <<изменён>> <<struct>> {
+  }
+  note right of CoreBar
+    index — номер такта в запуске, а не в проекте:
+    проходы петли получают новые номера. Подпись
+    на экране ставит libs/render по сведениям связки.
+  end note
+
+  class "training::core::Settings" as CoreSettings <<изменён>> {
+    <color:#C62828><s>+ training::core::Input input() const</s></color>
+    <color:#C62828><s>+ void setInput(training::core::Input input)</s></color>
+    <color:#C62828><s>- training::core::Input input_</s></color>
+  }
+}
+
+package "libs/trainer — training::trainer" as trainer #FAF5FB {
+
+  class "training::trainer::AudioBlock" as TrainerAudioBlock <<удалён>> <<struct>> {
+    <color:#C62828><s>+ std::uint64_t firstSample</s></color>
+    <color:#C62828><s>+ training::core::Moment position</s></color>
+    <color:#C62828><s>+ double sampleRate</s></color>
+    <color:#C62828><s>+ training::core::Moment monotonic</s></color>
+  }
+
+  class "training::trainer::AudioOnset" as AudioOnset <<изменён>> <<struct>> {
+    <color:#C62828><s>+ training::core::Moment blockPosition</s></color>
+    <color:#C62828><s>+ std::uint64_t firstSample</s></color>
+    <color:#C62828><s>+ std::uint64_t runStartSample</s></color>
+    <color:#C62828><s>+ double offset</s></color>
+    <color:#C62828><s>+ double sampleRate</s></color>
+    <color:#C62828><s>+ training::core::Moment monotonic</s></color>
+    <color:#C62828><s>+ training::core::Moment run</s></color>
+    <color:#2E7D32>+ training::core::Moment time</color>
+  }
+  note bottom of AudioOnset
+    time — начало атаки во времени ядра.
+  end note
+
+  class "training::trainer::OnsetSearch" as OnsetSearch <<изменён>> {
+    <color:#2E7D32>+ OnsetSearch(training::core::SoundEvents *events)</color>
+    <color:#C62828><s>+ void start(training::core::Moment run)</s></color>
+    <color:#2E7D32>+ void start()</color>
+    <color:#C62828><s>+ training::core::Moment run() const</s></color>
+    <color:#C62828><s>+ void process(const AudioBlock &block, std::span<const float> samples,</s></color>
+    <color:#C62828><s>    double silenceDb, std::vector<AudioOnset> &onsets)</s></color>
+    <color:#2E7D32>+ void setSampleRate(double sampleRate) override</color>
+    <color:#2E7D32>+ void receive(const training::core::AudioBlock &block) override</color>
+    <color:#2E7D32>+ void setSilenceDb(double silenceDb)</color>
+    <color:#2E7D32>+ void takeOnsets(std::vector<AudioOnset> &onsets)</color>
+    <color:#C62828><s>- std::atomic<training::core::Moment> run_</s></color>
+    <color:#C62828><s>- training::core::Moment seenRun_</s></color>
+    <color:#C62828><s>- std::optional<std::uint64_t> runStartSample_, expectedSample_</s></color>
+    <color:#2E7D32>- std::optional<training::core::Moment> heardEnd_</color>
+    <color:#2E7D32>- std::atomic<double> silenceDb_</color>
+    <color:#2E7D32>- training::core::SoundEvents *events_</color>
+  }
+
+  note bottom of OnsetSearch
+    receive и takeOnsets зовёт транспорт
+    при приёме звука: атаки остаются в ядре.
+    start() выбрасывает незабранные атаки прошлого
+    запуска; поток детектора идёт через start()
+    без сброса, как при первом запуске.
+  end note
+
+  class "training::trainer::Calibrator" as Calibrator <<изменён>> {
+    <color:#C62828><s>+ void feed(std::span<const float> samples, double sampleRate, bool gap)</s></color>
+    <color:#2E7D32>+ void setSampleRate(double sampleRate) override</color>
+    <color:#2E7D32>+ void receive(const training::core::AudioBlock &block) override</color>
+    <color:#2E7D32>- std::optional<training::core::Moment> heardEnd_</color>
+  }
+
+  class "training::trainer::Transport" as Transport <<изменён>> {
+    <color:#C62828><s>+ bool takesOnset(training::core::Moment onsetRun) const</s></color>
+    <color:#C62828><s>+ bool addNote(training::core::Moment time, double rate, training::core::Mode mode,</s></color>
+    <color:#C62828><s>    const training::core::HitWindow &window, const training::core::Timeline &timeline,</s></color>
+    <color:#C62828><s>    bool beforeStart)</s></color>
+    <color:#C62828><s>+ Transport(MidiNotesEvents *events)</s></color>
+    <color:#2E7D32>+ Transport(MidiNotesEvents *events, NoteEvents *noteEvents)</color>
+    <color:#2E7D32>+ std::vector<training::core::Note> takePlaced()</color>
+    <color:#C62828><s>+ bool start(training::core::Moment now, training::core::Moment runStart,</s></color>
+    <color:#C62828><s>    std::optional<std::int64_t> leadInEnd)</s></color>
+    <color:#2E7D32>+ std::optional<training::core::Moment> start()</color>
+    <color:#C62828><s>+ bool play(training::core::Moment time, training::core::Interval loopLength,</s></color>
+    <color:#C62828><s>    training::core::Mode mode, const training::core::HitWindow &window,</s></color>
+    <color:#C62828><s>    const training::core::Timeline &timeline)</s></color>
+    <color:#2E7D32>+ bool play(training::core::Moment time)</color>
+    <color:#2E7D32>+ void setSettings(const training::core::Settings &settings)</color>
+    <color:#2E7D32>+ void setTimeline(const training::core::Timeline &timeline)</color>
+    <color:#2E7D32>+ void setSampleRate(double sampleRate) override</color>
+    <color:#2E7D32>+ void receive(const training::core::AudioBlock &block) override</color>
+    <color:#2E7D32>+ void receive(std::span<const training::core::MidiNote> notes) override</color>
+    <color:#C62828><s>+ training::core::Moment started() const</s></color>
+    <color:#2E7D32>- bool addNote(training::core::Moment time)</color>
+    <color:#2E7D32>- std::vector<training::core::Note> placed_</color>
+    <color:#C62828><s>- training::core::Moment run_</s></color>
+    <color:#C62828><s>- training::core::Moment runStart_</s></color>
+    <color:#2E7D32>- training::core::Settings settings_</color>
+    <color:#2E7D32>- const training::core::Timeline *timeline_</color>
+    <color:#2E7D32>- NoteEvents *noteEvents_</color>
+  }
+  note bottom of Transport
+    Принимает звук и ноты MIDI по интерфейсам ядра
+    и сам ставит ноты в строки тактов: атаки и ноты
+    MIDI после мёртвого времени. Время уже с учётом
+    компенсации — её вычитает связка. Связка для этого
+    ничего не зовёт. Настройки и карта темпа — его
+    состояние, связка задаёт их при смене. takePlaced — разницы нот, легших в
+    узел; не легшая — событие notPlaced, не хранится.
+    start возвращает точку отсчёта запуска (её выбирает
+    ядро); пусто — запуск уже шёл. Нота до Play — время
+    раньше точки запуска; узлы раньше неё её не берут.
+  end note
+
+  interface "training::trainer::NoteEvents" as NoteEvents <<новый>> {
+    <color:#2E7D32>+ void notPlaced(training::core::Moment time)</color>
+  }
+  note bottom of NoteEvents : нота не легла в узел и отброшена
+
+  class "training::trainer::MidiNote" as TrainerMidiNote <<удалён>> <<struct>> {
+    <color:#C62828><s>+ MidiEvent event</s></color>
+    <color:#C62828><s>+ training::core::Moment place</s></color>
+  }
+
+  interface "training::trainer::MidiNotesEvents" as MidiNotesEvents <<изменён>> {
+    <color:#C62828><s>+ void skippedInDeadTime(const MidiEvent &event, training::core::Moment place)</s></color>
+    <color:#2E7D32>+ void skippedInDeadTime(const training::core::MidiNote &note)</color>
+  }
+
+  class "training::trainer::MidiNotes" as MidiNotes <<изменён>> {
+    <color:#C62828><s>+ std::vector<MidiNote> take(std::span<const MidiNote> events, const MidiRead &read)</s></color>
+    <color:#C62828><s>+ static bool isNote(const MidiEvent &event, const MidiRead &read)</s></color>
+    <color:#2E7D32>+ void receive(std::span<const training::core::MidiNote> notes) override</color>
+    <color:#2E7D32>+ std::vector<training::core::MidiNote> takeMeasured()</color>
+    <color:#C62828><s>- void measure(const MidiEvent &event, training::core::Moment place,</s></color>
+    <color:#C62828><s>    std::vector<MidiNote> &notes)</s></color>
+    <color:#2E7D32>- void measure(const training::core::MidiNote &note)</color>
+    <color:#C62828><s>- std::optional<int> loop_</s></color>
+    <color:#2E7D32>- std::vector<training::core::MidiNote> measured_</color>
+  }
+  note bottom of MidiNotes
+    Мёртвое время на проходе петли
+    не сбрасывается: петля для ядра —
+    непрерывное воспроизведение.
+  end note
+}
+
+package "libs/onset — training::onset" as onset #F3FAF3 {
+  class "training::onset (функции dead_time.hpp)" as OnsetFunctions <<изменён>> {
+    <color:#C62828><s>+ bool isNoteStart(std::span<const std::uint8_t> message)</s></color>
+  }
+}
+
+package "libs/grid — training::grid" as grid #F2F8FD {
+  class "training::grid::Bars" as Bars <<изменён>> {
+    <color:#C62828><s>+ bool play(training::core::Moment time, training::core::Interval loopLength,</s></color>
+    <color:#C62828><s>    training::core::Mode mode, const training::core::HitWindow &window,</s></color>
+    <color:#C62828><s>    const training::core::Timeline &timeline)</s></color>
+    <color:#2E7D32>+ bool play(training::core::Moment time, training::core::Mode mode,</color>
+    <color:#2E7D32>    const training::core::HitWindow &window, const training::core::Timeline &timeline)</color>
+    <color:#C62828><s>+ bool addNote(training::core::Moment time, double rate, training::core::Mode mode,</s></color>
+    <color:#C62828><s>    const training::core::HitWindow &window, const training::core::Timeline &timeline,</s></color>
+    <color:#C62828><s>    std::optional<training::core::Moment> firstNode)</s></color>
+    <color:#2E7D32>+ bool addNote(training::core::Moment time, training::core::Mode mode,</color>
+    <color:#2E7D32>    const training::core::HitWindow &window, const training::core::Timeline &timeline,</color>
+    <color:#2E7D32>    std::optional<training::core::Moment> firstNode)</color>
+    <color:#C62828><s>+ void setLeadIn(std::optional<std::int64_t> end)</s></color>
+    <color:#C62828><s>- std::optional<std::int64_t> leadInEnd_</s></color>
+    <color:#C62828><s>- training::core::Interval loopLength_</s></color>
+  }
+  note bottom of Bars
+    Петли нет: новый проход — новые такты карты
+    темпа. Распознавание прохода по прыжку позиции
+    назад и поиск строки по кругу петли убраны.
+    Разница — во времени ядра, без rate.
+  end note
+  class "training::grid::BarRow" as BarRow <<изменён>> <<struct>> {
+    <color:#C62828><s>+ std::optional<std::int64_t> leadIn</s></color>
+  }
+  note right of BarRow
+    Подписи тактов затакта −1, −2 ставит
+    libs/render по сведениям связки о затакте.
+  end note
+}
+
+package "libs/reaper — training::reaper" as reaper #FDF3F0 {
+
+  enum "training::reaper::Input" as ReaperInput <<перенесён>> {
+    Audio
+    Midi
+  }
+  note right of ReaperInput : из training::core::Input
+
+  class "training::reaper::MidiEvent" as ReaperMidiEvent <<перенесён>> <<struct>> {
+    + std::optional<training::core::Moment> position
+    + training::core::Interval age
+    + int device
+    + int loop
+    + int size
+    + std::array<std::uint8_t, 3> bytes
+  }
+  note right of ReaperMidiEvent : из training::trainer::MidiEvent
+
+  class "training::reaper::MidiRead" as ReaperMidiRead <<перенесён>> <<struct>> {
+    + training::reaper::Input input
+    + int device
+  }
+  note right of ReaperMidiRead : из training::trainer::MidiRead
+
+  class "training::reaper (функции midi_notes.hpp)" as ReaperMidiFunctions <<новый>> {
+    <color:#2E7D32>+ constexpr int kControlOnly = 0x10000</color>
+    <color:#2E7D32>+ bool isNoteStart(std::span<const std::uint8_t> message)</color>
+    <color:#2E7D32>+ bool isNote(const MidiEvent &event, const MidiRead &read)</color>
+  }
+  note right of ReaperMidiFunctions
+    kControlOnly — из training::trainer,
+    isNoteStart — из training::onset,
+    isNote — из training::trainer::MidiNotes.
+  end note
+
+  class "training::reaper::MidiClock" as MidiClock <<изменён>> <<struct>> {
+    <color:#C62828><s>+ std::optional<training::core::Interval> runTime</s></color>
+  }
+  note right of MidiClock
+    Время ноты MIDI = конец взятого звука
+    − возраст события − компенсация MIDI;
+    время от начала запуска не нужно.
+  end note
+
+  class "training::reaper::MidiPlaces" as MidiPlaces <<изменён>> {
+    <color:#C62828><s>+ std::vector<trainer::MidiNote> place(std::span<const trainer::MidiEvent> events,</s></color>
+    <color:#C62828><s>    const trainer::MidiRead &read, const MidiClock &clock)</s></color>
+    <color:#2E7D32>+ std::vector<training::core::MidiNote> place(std::span<const MidiEvent> events,</color>
+    <color:#2E7D32>    const MidiRead &read, const MidiClock &clock)</color>
+  }
+  note right of MidiPlaces
+    Время ноты — время ядра в тех же часах, что
+    блоки звука: минус компенсация MIDI,
+    подряд через проходы петли.
+  end note
+
+  class "training::reaper::RunTimeline" as LoopTimeline <<новый>> {
+    <color:#2E7D32>+ training::core::Position positionAt(training::core::Moment time) const override</color>
+    <color:#2E7D32>+ training::core::Moment timeAt(training::core::Position position) const override</color>
+    <color:#2E7D32>+ training::core::Bar barOf(std::int64_t index) const override</color>
+  }
+  note right of LoopTimeline
+    Карта темпа запуска для ядра: время ядра
+    (часы потока звука, проходы петли подряд) ↔
+    такты по порядку запуска. Внутри — позиции
+    блоков REAPER, отсчёт, скорость, петля.
+    Слышимую позицию связка переводит во время ядра.
+  end note
+
+  class "training::reaper::Run" as Run <<изменён>> {
+    <color:#C62828><s>+ std::optional<training::core::Moment> blockPlace(const trainer::AudioOnset &onset) const</s></color>
+  }
+}
+
+package "src — training::reaper" as src #FFF8EE {
+
+  class "training::reaper::AudioInput" as AudioInput <<изменён>> {
+    <color:#C62828><s>+ AudioInput(trainer::OnsetSearch &search, const core::Settings &settings,</s></color>
+    <color:#C62828><s>    const InputSettings &input)</s></color>
+    <color:#2E7D32>+ AudioInput(training::core::SoundReceiver &search, const core::Settings &settings,</color>
+    <color:#2E7D32>    const InputSettings &input)</color>
+    <color:#C62828><s>+ std::optional<trainer::AudioOnset> popOnset()</s></color>
+    <color:#C62828><s>+ std::optional<HostClock> clock(core::Moment run) const</s></color>
+    <color:#2E7D32>+ std::optional<HostClock> clock() const</color>
+    <color:#2E7D32>+ void onStart()</color>
+    <color:#C62828><s>- SpscRing<trainer::AudioOnset, 1024> onsets_</s></color>
+    <color:#2E7D32>- training::core::Moment streamEnd_</color>
+  }
+  note right of AudioInput
+    streamEnd_ — конец взятого звука во времени ядра:
+    сумма длин блоков, каждый по своей частоте.
+    Время блока для ядра — минус компенсация звука,
+    взятая при начале запуска.
+    На смене srate зовёт setSampleRate перед блоком.
+    onStart — отметка Play из Trainer::onPlayState: хук
+    запоминает время первого блока после неё — начало
+    воспроизведения для RunTimeline.
+  end note
+
+  class "training::reaper::HostClock" as HostClock <<изменён>> <<struct>> {
+    <color:#C62828><s>+ std::optional<std::uint64_t> elapsed</s></color>
+  }
+
+  class "training::reaper::AudioInput::BlockHeader" as BlockHeader <<изменён>> <<struct>> {
+    <color:#2E7D32>+ training::core::Moment start</color>
+  }
+
+  class "training::reaper::CalibrationChunk" as CalibrationChunk <<изменён>> <<struct>> {
+    <color:#C62828><s>+ bool gap</s></color>
+    <color:#2E7D32>+ training::core::Moment start</color>
+  }
+
+  class "training::reaper::InputSettings" as InputSettings <<изменён>> {
+    <color:#2E7D32>+ Input input() const</color>
+    <color:#2E7D32>+ void setInput(Input input)</color>
+    <color:#2E7D32>- Input input_</color>
+  }
+}
+
+' --- раскладка: слои сверху вниз ---------------------------------------------------
+
+src -[hidden]down-> trainer
+reaper -[hidden]down-> trainer
+trainer -[hidden]down-> core
+CoreAudioBlock -[hidden]down-> CoreMidiNote
+SoundReceiver -[hidden]down-> MidiReceiver
+OnsetSearch -[hidden]down-> AudioOnset
+Calibrator -[hidden]down-> TrainerAudioBlock
+AudioOnset -[hidden]down-> MidiNotes
+TrainerAudioBlock -[hidden]down-> TrainerMidiNote
+ReaperInput -[hidden]down-> MidiPlaces
+ReaperMidiEvent -[hidden]down-> LoopTimeline
+ReaperMidiRead -[hidden]down-> Run
+AudioInput -[hidden]down-> BlockHeader
+
+' --- связи ---------------------------------------------------------------------
+
+OnsetSearch ..|> SoundReceiver
+Calibrator ..|> SoundReceiver
+MidiNotes ..|> MidiReceiver
+LoopTimeline ..|> CoreTimeline
+
+SoundReceiver ..> CoreAudioBlock
+MidiReceiver ..> CoreMidiNote
+OnsetSearch --> SoundEvents
+OnsetSearch ..> AudioOnset
+Transport *-- OnsetSearch
+Transport ..|> SoundReceiver
+Transport ..|> MidiReceiver
+Transport *-- Bars
+Transport *-- MidiNotes
+Transport ..> PlacedNote
+Transport --> NoteEvents
+Transport ..> CoreTimeline
+
+TrainerAudioBlock ..> CoreAudioBlock : заменён
+TrainerMidiNote ..> CoreMidiNote : заменён
+
+AudioInput --> SoundReceiver : подаёт блоки
+MidiPlaces ..> CoreMidiNote : отдаёт ноты
+MidiPlaces ..> ReaperMidiEvent
+MidiPlaces ..> ReaperMidiRead
+ReaperMidiRead --> ReaperInput
+InputSettings --> ReaperInput
+
+@enduml

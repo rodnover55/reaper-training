@@ -439,8 +439,11 @@ def run(arguments):
 def control(name):
     """Прямоугольник контрола `name` в forms.rc, диалоговые единицы, и вид
     контрола."""
+    # CONTROL пишет между номером и местом класс и стиль: CONTROL "текст", ИМЯ,
+    # "Класс", стиль, x, y, ширина, высота.
     pattern = re.compile(r"^\s*(\w+)\s+(?:\"[^\"]*\"\s*,\s*)?" + re.escape(name)
-                         + r"\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)")
+                         + r"\s*,\s*(?:\"[^\"]*\"\s*,\s*[^,]+,\s*)?"
+                         + r"(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)")
     for line in FORMS.read_text().splitlines():
         found = pattern.match(line)
         if found:

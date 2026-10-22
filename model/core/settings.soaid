@@ -3,7 +3,6 @@ value Settings {
 
   field {
     window: HitWindow Окно попадания.
-
     silenceDb: float Порог тишины, dBFS.
   }
 

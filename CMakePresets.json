@@ -108,6 +108,28 @@
       }
     },
     {
+      "name": "unit",
+      "inherits": "default",
+      "displayName": "Только тесты",
+      "description": "Юнит-тесты обычной сборки без линтеров и анализаторов: для прогона после правок кода.",
+      "filter": {
+        "exclude": {
+          "label": "lint|slow"
+        }
+      }
+    },
+    {
+      "name": "tidy",
+      "inherits": "default",
+      "displayName": "Только clang-tidy",
+      "description": "clang-tidy по всем файлам параллельно и с кешем, без остальных тестов: для проверки правок под замечания анализатора.",
+      "filter": {
+        "include": {
+          "name": "^clang_tidy$"
+        }
+      }
+    },
+    {
       "name": "release",
       "inherits": "default",
       "configurePreset": "release",

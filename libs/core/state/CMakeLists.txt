@@ -1,0 +1,3 @@
+add_library(training_core_state INTERFACE)
+
+target_include_directories(training_core_state INTERFACE include)

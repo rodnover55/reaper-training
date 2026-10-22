@@ -24,6 +24,19 @@ context: |
   `timing-display`) в комментариях допустимы. Если файл меняется, такие ссылки
   удаляются во всём файле.
 
+  Архитектура модуля задаётся docs/architecture.md: дизайн, задачи и код
+  изменения следуют его ограничениям, а не устройству текущего кода. Файл
+  меняется только по прямому указанию пользователя; если изменению нужно
+  иное, чем в нём, — вопрос пользователю.
+
+operations:
+  apply:
+    guidance:
+      - >-
+        Код реализации следует ограничениям docs/architecture.md: в какой слой
+        он идёт и какие слои использует, определяется этим файлом. Файл
+        меняется только по прямому указанию пользователя.
+
 # Project context (optional)
 # Add only constraints that should guide OpenSpec artifacts and workflows.
 # Include constraints an agent cannot infer by reading the code.

@@ -1,0 +1,24 @@
+import training.core
+
+interface MidiReceiver {
+  responsibility Интерфейс для приема MIDI-нот
+
+  value Note {
+    field {
+      time: training.core.Moment Время когда возникла нота.
+    }
+  }
+
+  action {
+    receive(notes: Note[]) {
+      responsibility Принимает блок MIDI-нот для обработки.
+
+      invariant #order {
+        Ноты идут по времени. Каждая следующая нота не раньше предыдущей.
+        Ноты старше последней обработанной отбрасываются.
+      }
+
+      note ai Список нот определяется реализацией.
+    }
+  }
+}

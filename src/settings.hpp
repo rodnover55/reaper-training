@@ -3,27 +3,32 @@
 // Хранение настроек тренажёра (`timing-display`): в REAPER, глобально, общие
 // для всех проектов.
 
-#include "training/trainer/settings.hpp"
-#include "training/trainer/settings_file.hpp"
+#include "input_settings.hpp"
+#include "settings_read.hpp"
+
+#include "training/core/settings.hpp"
+#include "training/reaper/mode.hpp"
+#include "training/render/main/view_settings.hpp"
 
 namespace training::reaper {
-
-using trainer::inputText;
-using trainer::Settings;
 
 /// Файл, в котором REAPER хранит настройки расширения, — для журнала и
 /// строки состояния.
 inline constexpr const char *kSettingsFile = "reaper-extstate.ini";
 
 /// Читает настройки, сохранённые REAPER (`GetExtState`), по правилам
-/// `trainer::readSettings`: строка, которой нет или которая не принята,
-/// оставляет настройке значение по умолчанию, не принятые строки — в
+/// `readSettings`: строка, которой нет или которая не принята, оставляет
+/// настройке значение по умолчанию, не принятые строки — в
 /// `SettingsRead::rejected`. Зовётся из главного потока.
-trainer::SettingsRead loadSettings();
+SettingsRead loadSettings();
 
-/// Сохраняет настройки между запусками REAPER (`SetExtState` с `persist`),
-/// кроме скрытой границы шкалы `scaleMs`. Зовётся из главного потока.
-void saveSettings(const Settings &settings);
+/// Сохраняет настройки ядра `settings`, выбранный вход `input`, режим сетки
+/// `mode` и настройки отрисовки `view` между запусками REAPER (`SetExtState`
+/// с `persist`), кроме скрытой границы шкалы `render::ViewSettings::scale`.
+/// Режим пишется ключом `mode` — числом долей на удар. Зовётся из главного
+/// потока.
+void saveSettings(const core::Settings &settings, const InputSettings &input, Mode mode,
+                  const render::ViewSettings &view);
 
 /// Включена ли скрытая настройка `console_log` — ненулевое целое в разделе
 /// расширения `reaper-extstate.ini`. С ней расширение пишет в консоль REAPER

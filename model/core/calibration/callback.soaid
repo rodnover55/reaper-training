@@ -1,0 +1,6 @@
+
+import training.core.input
+
+interface Callback: training.core.input.SoundReceiver {
+
+}

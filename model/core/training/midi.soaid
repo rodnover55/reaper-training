@@ -1,0 +1,24 @@
+import training.core.input
+import training.core.training.state
+import training.core
+
+entity Midi: Trainer&training.core.input.MidiReceiver&training.core.Unit<Trainer.State> {
+  responsibility Читает входной MIDI поток и преобразует его в [state.Note].
+
+  action {
+    receive(notes: training.core.input.MidiReceiver.Note[]) {
+      responsibility Читает MIDI поток и каждую полученную ноту преобразует в [state.Note].
+
+      body {
+        Для каждой MIDI-ноты из [notes]
+        на основе времени ноты создает [Trainer.Note] атакам и добавляет их
+        используя вызов родительского класса [Trainer.process].
+      }
+
+      note ai {
+        Список старых отслеживается только текущего запуска. 
+        Предыдущие запуски - забываются.
+      }
+    }
+  }
+}

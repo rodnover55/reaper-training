@@ -1,0 +1,5 @@
+add_library(training_core_input INTERFACE)
+
+target_include_directories(training_core_input INTERFACE include)
+
+target_link_libraries(training_core_input INTERFACE training_core)

@@ -39,14 +39,16 @@ entity Detector {
   }
 
   action {
+    constructor create(settings: Settings) {
+      invariant #const-sample-rate {
+        [Settings.sampleRate] может быть обновлен только через конструктор.
+      }
+    }
+
     reset() {
       responsibility {
         Начинает поток заново: забывает прошлые сэмплы и непрочитанные атаки, устанавливает позицию в 0
       }
-    }
-
-    setSilenceDb(silenceDb: float) {
-      responsibility Меняет порог тишины, dBFS.
     }
 
     skip(count: int) {
@@ -80,6 +82,8 @@ entity Detector {
         note ai Можно вернуть пустой элемент для этой ошибки.
       }
     }
+
+    setSilenceDb(silenceDb: float) Изменяет порог тишины, без пересоздания детектора.
 
     filter(): Filter {
       responsibility {

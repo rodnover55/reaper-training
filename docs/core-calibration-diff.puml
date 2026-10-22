@@ -1,0 +1,461 @@
+@startuml core-calibration-diff
+title Калибровка в ядре: training::onset::Calibration + training::trainer::Calibrator → libs/core/calibration (только дифф)
+
+' Новый модуль показан целиком. У изменённых типов — только изменённые члены;
+' типы «как есть» — только члены, через которые идёт калибровка.
+
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam nodesep 40
+skinparam ranksep 60
+
+skinparam class {
+  BackgroundColor<<новый>> #E8F5E9
+  BorderColor<<новый>> #2E7D32
+  BackgroundColor<<изменён>> #FFF8E1
+  BorderColor<<изменён>> #F9A825
+  BackgroundColor<<удалён>> #FFEBEE
+  BorderColor<<удалён>> #C62828
+  BackgroundColor<<как есть>> #F4F4F4
+  BorderColor<<как есть>> #9E9E9E
+}
+
+legend top left
+  |= Блок |= Что значит |
+  |<back:#E8F5E9>   новый   </back>| новый тип |
+  |<back:#FFF8E1>  изменён  </back>| тип остаётся, меняются показанные члены |
+  |<back:#FFEBEE>  удалён   </back>| тип убирается |
+  |<back:#F4F4F4>  как есть </back>| тип не меняется, показан для хода калибровки |
+  | <color:#2E7D32>+ член</color> | добавляется |
+  | <color:#C62828><s>член</s></color> | убирается |
+  | 1–7 на стрелках | ход калибровки, см. заметку у training::reaper::Trainer |
+endlegend
+
+package "training" as ns_training #FFFFFF {
+  package "training::core — libs/core" as core #F5F6FC {
+
+    interface "training::core::SoundReceiver" as SoundReceiver <<как есть>> {
+      + void setSampleRate(double sampleRate)
+      + void receive(const training::core::AudioBlock &block)
+    }
+
+    class "training::core::AudioBlock" as AudioBlock <<как есть>> <<struct>> {
+      + std::span<const float> samples
+      + training::core::Moment start
+    }
+
+    class "training::core::Settings" as Settings <<как есть>> {
+      + static training::core::Range<double> kSilenceRange
+    }
+
+    package "training::core::calibration — libs/core/calibration" as calib #EEF7EE {
+
+      class "training::core::calibration::Calibration" as Calibration <<новый>> {
+        <color:#2E7D32>+ explicit Calibration(training::core::calibration::Events *events = nullptr)</color>
+        <color:#2E7D32>+ void start(int channel, const std::string &channelName, double silenceDb)</color>
+        <color:#2E7D32>+ void end()</color>
+        <color:#2E7D32>+ void onInputChange()</color>
+        <color:#2E7D32>+ void onStart()</color>
+        <color:#2E7D32>+ void onStop()</color>
+        <color:#2E7D32>+ void setSampleRate(double sampleRate) override</color>
+        <color:#2E7D32>+ void receive(const training::core::AudioBlock &block) override</color>
+        <color:#2E7D32>+ std::optional<double> applyAnyway()</color>
+        <color:#2E7D32>+ std::optional<training::core::calibration::Snapshot> snapshot() const</color>
+        <color:#2E7D32>+ std::optional<double> silenceDb() const</color>
+        <color:#2E7D32>+ std::optional<double> anywaySilenceDb() const</color>
+        <color:#2E7D32>+ bool listening() const</color>
+        <color:#2E7D32>+ bool finished() const</color>
+        <color:#2E7D32>+ bool cancelledByPlayback() const</color>
+        .. сессия ..
+        <color:#2E7D32>- training::core::calibration::Events *events_</color>
+        <color:#2E7D32>- mutable std::mutex mutex_</color>
+        <color:#2E7D32>- bool listening_</color>
+        <color:#2E7D32>- double previousSilenceDb_</color>
+        <color:#2E7D32>- std::string channelName_</color>
+        <color:#2E7D32>- bool cancelledByPlayback_</color>
+        .. поток звука ..
+        <color:#2E7D32>- double sampleRate_</color>
+        <color:#2E7D32>- training::core::calibration::Calibration::Lengths lengths_</color>
+        <color:#2E7D32>- std::optional<training::core::Moment> heardEnd_</color>
+        <color:#2E7D32>- std::uint64_t position_</color>
+        <color:#2E7D32>- std::optional<training::core::detector::HighPass> highPass_</color>
+        <color:#2E7D32>- std::optional<training::core::detector::Envelope> envelope_</color>
+        <color:#2E7D32>- double lastLevel_</color>
+        <color:#2E7D32>- training::core::calibration::Step step_</color>
+        .. шаг тишины ..
+        <color:#2E7D32>- std::uint64_t settleUntil_</color>
+        <color:#2E7D32>- std::vector<double> windows_</color>
+        <color:#2E7D32>- double windowMax_</color>
+        <color:#2E7D32>- std::uint64_t windowFill_</color>
+        <color:#2E7D32>- std::optional<std::uint64_t> soundAt_</color>
+        <color:#2E7D32>- double noiseDb_</color>
+        .. шаг нот ..
+        <color:#2E7D32>- std::optional<training::core::detector::Detector> detector_</color>
+        <color:#2E7D32>- std::uint64_t detectorStart_</color>
+        <color:#2E7D32>- std::vector<double> history_</color>
+        <color:#2E7D32>- std::vector<std::uint64_t> pending_</color>
+        <color:#2E7D32>- std::vector<double> attacks_</color>
+        <color:#2E7D32>- double peak_</color>
+        <color:#2E7D32>- std::uint64_t lastNoteAt_</color>
+        <color:#2E7D32>- std::optional<std::uint64_t> finishAt_</color>
+        .. итог ..
+        <color:#2E7D32>- std::optional<training::core::calibration::Result> result_</color>
+        <color:#2E7D32>- std::optional<std::uint64_t> closeFrom_</color>
+        .. закрытые методы ..
+        <color:#2E7D32>- void restart()</color>
+        <color:#2E7D32>- std::span<const float> stitch(const training::core::AudioBlock &block)</color>
+        <color:#2E7D32>- void discontinuity()</color>
+        <color:#2E7D32>- void processSilence(float sample)</color>
+        <color:#2E7D32>- void closeWindow()</color>
+        <color:#2E7D32>- void startNotes()</color>
+        <color:#2E7D32>- std::size_t processNotes(std::span<const float> samples)</color>
+        <color:#2E7D32>- void checkpoint()</color>
+        <color:#2E7D32>- void finish()</color>
+        <color:#2E7D32>- bool processDone(std::span<const float> samples)</color>
+        <color:#2E7D32>- void endSession()</color>
+        <color:#2E7D32>- training::core::calibration::Snapshot current() const</color>
+      }
+      note right of Calibration
+        <b>Одна сессия калибровки входа и её измерение.</b> Один замок mutex_
+        на всё состояние; все методы можно звать из любых потоков.
+
+        <b>Запуск.</b> start — новая сессия (прежняя кончается), событие started.
+        Если частота известна — restart: измерение с шага тишины, событие
+        silenceStep. setSampleRate с новой частотой во время сессии без итога —
+        тоже restart; после итога новая частота снимает closeFrom_: звук
+        после итога больше не слушается.
+
+        <b>Звук.</b> receive: stitch стыкует блок по времени ядра — начало,
+        лежащее в разобранном звуке, отрезается; промежуток — разрыв
+        (discontinuity, событие gap). Дальше сэмплы идут по шагу:
+        processSilence → processNotes → processDone.
+
+        <b>Конец сессии</b> (endSession, событие ended): end, onInputChange,
+        onStart (шаги прерваны — cancelledByPlayback до onStop; итог —
+        просто закрыт), applyAnyway, удар по струнам после итога
+        (processDone вернул правду → closedBySound).
+
+        <b>Из ядра наружу.</b>
+        1) события Events — в потоке вызова, который к ним привёл;
+        2) копии под замком: snapshot, silenceDb, anywaySilenceDb,
+           listening, finished, cancelledByPlayback;
+        3) значение applyAnyway — порог тишины для настроек.
+      end note
+
+      class "training::core::calibration::Calibration::Lengths" as Lengths <<новый>> <<struct>> {
+        <color:#2E7D32>+ std::uint64_t settle</color>
+        <color:#2E7D32>+ std::uint64_t window</color>
+        <color:#2E7D32>+ std::size_t windowsPerStep</color>
+        <color:#2E7D32>+ std::uint64_t attack</color>
+        <color:#2E7D32>+ std::uint64_t history</color>
+        <color:#2E7D32>+ std::uint64_t afterLast</color>
+        <color:#2E7D32>+ std::uint64_t timeout</color>
+        <color:#2E7D32>+ std::uint64_t closeAfter</color>
+        <color:#2E7D32>+ static Lengths of(double sampleRate)</color>
+      }
+      note bottom of Lengths
+        Закрытый тип Calibration: длины шагов в сэмплах
+        при частоте sampleRate_. Считается в restart.
+      end note
+
+      class "training::core::calibration::Snapshot" as Snapshot <<новый>> <<struct>> {
+        <color:#2E7D32>+ training::core::calibration::Step step</color>
+        <color:#2E7D32>+ training::core::Interval silenceLeft</color>
+        <color:#2E7D32>+ std::optional<training::core::Interval> sinceSound</color>
+        <color:#2E7D32>+ double noiseDb</color>
+        <color:#2E7D32>+ double levelDb</color>
+        <color:#2E7D32>+ std::vector<double> attacksDb</color>
+        <color:#2E7D32>+ training::core::Interval withoutNotes</color>
+        <color:#2E7D32>+ std::optional<training::core::calibration::Result> result</color>
+        <color:#2E7D32>+ double previousSilenceDb</color>
+        <color:#2E7D32>+ std::string channelName</color>
+      }
+      note bottom of Snapshot
+        Копия сессии и хода измерения на один момент.
+        До первого блока: step = Silence, silenceLeft = kSilence.
+        Итог подведён ⇔ result есть.
+      end note
+
+      enum "training::core::calibration::Step" as Step <<новый>> {
+        <color:#2E7D32>Silence</color>
+        <color:#2E7D32>Notes</color>
+        <color:#2E7D32>Done</color>
+      }
+
+      class "training::core::calibration::Result" as Result <<новый>> <<struct>> {
+        <color:#2E7D32>+ training::core::calibration::Verdict verdict</color>
+        <color:#2E7D32>+ double noiseDb</color>
+        <color:#2E7D32>+ int notes</color>
+        <color:#2E7D32>+ double softestDb</color>
+        <color:#2E7D32>+ double loudestDb</color>
+        <color:#2E7D32>+ double peakDb</color>
+        <color:#2E7D32>+ double thresholdDb</color>
+        <color:#2E7D32>+ static Result judge(double noiseDb, std::span<const double> attacksDb, double peakDb)</color>
+        <color:#2E7D32>+ double silenceDb() const</color>
+      }
+      note bottom of Result
+        judge — итог по уровням (бывшая judgeCalibration).
+        silenceDb — thresholdDb в training::core::Settings::kSilenceRange
+        (бывшая silenceOf из libs/trainer).
+      end note
+
+      enum "training::core::calibration::Verdict" as Verdict <<новый>> {
+        <color:#2E7D32>Good</color>
+        <color:#2E7D32>NoiseTooClose</color>
+        <color:#2E7D32>Clipping</color>
+        <color:#2E7D32>NotEnoughNotes</color>
+      }
+
+      class "training::core::calibration (константы)" as Constants <<новый>> {
+        <color:#2E7D32>+ int kNotes = 8</color>
+        <color:#2E7D32>+ double kMinGapDb = 12.0</color>
+        <color:#2E7D32>+ double kClipDb = -1.0</color>
+        <color:#2E7D32>+ training::core::Interval kSilence = 3 s</color>
+        <color:#2E7D32>+ training::core::Interval kNotesTimeout = 15 s</color>
+        <color:#2E7D32>+ training::core::Interval kCloseAfter = 5 s</color>
+        <color:#2E7D32>+ double kFloorDb = -120.0</color>
+      }
+
+      interface "training::core::calibration::Events" as Events <<новый>> {
+        <color:#2E7D32>+ void started(int channel, const std::string &inputName, double silenceDb)</color>
+        <color:#2E7D32>+ void ended()</color>
+        <color:#2E7D32>+ void cancelledByPlayback()</color>
+        <color:#2E7D32>+ void closedByPlayback()</color>
+        <color:#2E7D32>+ void gap()</color>
+        <color:#2E7D32>+ void silenceStep(double sampleRate)</color>
+        <color:#2E7D32>+ void soundDuringSilence()</color>
+        <color:#2E7D32>+ void notesStep(double noiseDb)</color>
+        <color:#2E7D32>+ void attack(std::size_t note, double attackDb)</color>
+        <color:#2E7D32>+ void finished(const training::core::calibration::Result &result)</color>
+        <color:#2E7D32>+ void silenceSet(double fromDb, double toDb)</color>
+        <color:#2E7D32>+ void appliedAnyway(double silenceDb)</color>
+        <color:#2E7D32>+ void closedBySound()</color>
+      }
+      note bottom of Events
+        Calibration зовёт события там, где меняется шаг:
+        closeWindow — soundDuringSilence, startNotes — notesStep,
+        checkpoint — attack, finish — finished и silenceSet.
+      end note
+    }
+
+    package "training::core::detector — libs/core/detector" as detector #F5F6FC {
+
+      class "training::core::detector::Detector" as Detector <<как есть>> {
+        + explicit Detector(const training::core::detector::Settings &settings)
+        + void reset()
+        + void process(std::span<const float> samples)
+        + training::core::detector::OnsetBuffer::Iterator onsets()
+      }
+      note bottom of Detector
+        <b>Как калибровка зовёт детектор</b> (только шаг нот):
+        startNotes — detector_.emplace(Settings{.sampleRate = sampleRate_,
+          .silenceDb = noiseDb_ + 6 дБ}); detectorStart_ = position_.
+        processNotes — звук кусками до границ, кратных 5 мс от начала
+          измерения: каждый сэмпл → HighPass → Envelope → history_, peak_;
+          затем Detector::process(кусок); атаки — итератором onsets():
+          detectorStart_ + Onset::position → pending_.
+        checkpoint — на границе: атака, чьи 5 мс прошли, меряется
+          по history_ → attacks_; конец шага → finish.
+        discontinuity на шаге нот — Detector::reset(),
+          detectorStart_ = position_, pending_ очищается.
+      end note
+
+      class "training::core::detector::Onset" as Onset <<как есть>> <<struct>> {
+        + double position
+        + double levelDb
+      }
+
+      class "training::core::detector::HighPass" as HighPass <<как есть>> {
+        + double process(double sample)
+        + void reset()
+      }
+
+      class "training::core::detector::Envelope" as Envelope <<как есть>> {
+        + double process(double sample)
+        + void reset()
+      }
+    }
+  }
+
+  package "training::trainer — libs/trainer" as trainer #FAF5FB {
+    class "training::trainer::Calibrator" as Calibrator <<удалён>> {
+    }
+    class "training::trainer::CalibrationSession" as Session <<удалён>> <<struct>> {
+    }
+    enum "training::trainer::CalibrationPhase" as Phase <<удалён>> {
+    }
+    interface "training::trainer::CalibrationEvents" as OldEvents <<удалён>> {
+    }
+    class "training::trainer (функции calibration.hpp)" as TrainerFunctions <<удалён>> {
+      <color:#C62828><s>+ CalibrationPhase phaseOf(const CalibrationSession &session)</s></color>
+    }
+    note bottom of TrainerFunctions
+      <b>Из чего собран libs/core/calibration</b>
+      onset::Calibration + trainer::Calibrator → Calibration
+      onset::CalibrationSnapshot + trainer::CalibrationSession → Snapshot
+      onset::CalibrationStep + trainer::CalibrationPhase + phaseOf → Step
+      onset::CalibrationResult + judgeCalibration + silenceOf → Result
+      onset::Verdict → Verdict;  onset::kCalibration… → k…
+      trainer::CalibrationEvents → Events
+
+      <b>Что пропадает при слиянии</b>
+      CalibrationSession::finished — это «result есть»;
+      второй замок onset::Calibration::mutex_;
+      вторая частота onset::Calibration::sampleRate_;
+      сравнение хода до и после process в Calibrator::receive —
+        события зовутся там, где меняется шаг;
+      onset::Calibration::soundAfterResult — сессию кончает receive;
+      сессия без измерения до первого блока (calibration = nullopt).
+    end note
+
+    class "training::trainer::Transport" as Transport <<как есть>> {
+      + bool start()
+      + void startCalibration()
+      + void endCalibration()
+      - training::core::WorkMode mode_
+      - training::trainer::CalibrationFeed *calibration_
+    }
+
+    interface "training::trainer::CalibrationFeed" as Feed <<как есть>> {
+      + void start()
+      + void end()
+    }
+  }
+
+  package "training::onset — libs/onset" as onset #F2F8FD {
+    class "training::onset::Calibration" as OnsetCalibration <<удалён>> {
+    }
+    class "training::onset::CalibrationSnapshot" as OnsetSnapshot <<удалён>> {
+    }
+    class "training::onset::CalibrationResult" as OnsetResult <<удалён>> <<struct>> {
+    }
+    enum "training::onset::CalibrationStep" as OnsetStep <<удалён>> {
+    }
+    enum "training::onset::Verdict" as OnsetVerdict <<удалён>> {
+    }
+    class "training::onset (функции и константы calibration.hpp)" as OnsetFunctions <<удалён>> {
+      <color:#C62828><s>+ CalibrationResult judgeCalibration(double noiseDb,</s></color>
+      <color:#C62828><s>    std::span<const double> attacksDb, double peakDb)</s></color>
+      <color:#C62828><s>+ kCalibrationNotes, kCalibrationMinGapDb, kCalibrationClipDb,</s></color>
+      <color:#C62828><s>  kCalibrationSilence, kCalibrationNotesTimeout,</s></color>
+      <color:#C62828><s>  kCalibrationCloseAfter, kCalibrationFloorDb</s></color>
+    }
+    note bottom of OnsetFunctions
+      В libs/onset остаётся training::onset::DeadTime.
+    end note
+  }
+
+  package "training::render — libs/render" as render #FDF7EE {
+    class "training::render::CalibrationPanel" as Panel <<изменён>> {
+      <color:#C62828><s>+ void setSession(const training::trainer::CalibrationSession &session)</s></color>
+      <color:#2E7D32>+ void setSession(const training::core::calibration::Snapshot &session)</color>
+      <color:#C62828><s>- void silenceStep(const training::onset::CalibrationSnapshot *calibration)</s></color>
+      <color:#2E7D32>- void silenceStep(const training::core::calibration::Snapshot &session)</color>
+      <color:#C62828><s>- void notesStep(const training::onset::CalibrationSnapshot &calibration)</s></color>
+      <color:#2E7D32>- void notesStep(const training::core::calibration::Snapshot &session)</color>
+      <color:#C62828><s>- void result(const training::onset::CalibrationSnapshot &calibration,</s></color>
+      <color:#C62828><s>    const training::onset::CalibrationResult &result)</s></color>
+      <color:#2E7D32>- void result(const training::core::calibration::Snapshot &session,</color>
+      <color:#2E7D32>    const training::core::calibration::Result &result)</color>
+    }
+    note bottom of Panel
+      Этап панели — Snapshot::step, без phaseOf.
+    end note
+  }
+
+  package "training::reaper — src" as reaper #FFF3F0 {
+    class "training::reaper::Trainer" as Trainer <<изменён>> {
+      + bool startCalibration()
+      + void endCalibration()
+      + void applyCalibration()
+      <color:#C62828><s>+ std::optional<training::trainer::CalibrationSession> calibration() const</s></color>
+      <color:#2E7D32>+ std::optional<training::core::calibration::Snapshot> calibration() const</color>
+      + void apply(const training::core::Settings &settings, const InputSettings &input)
+      + void onPlayState(bool play, bool pause, bool record)
+      - bool pollCalibration()
+      - void setSilence(double silenceDb)
+      <color:#C62828><s>- training::trainer::Calibrator calibrator_</s></color>
+      <color:#2E7D32>- training::core::calibration::Calibration calibration_</color>
+    }
+    note right of Trainer
+      <b>Ход калибровки</b> (связка не меняется, меняется только тип поля)
+      1. startCalibration: транспорт стоит, вход звуковой карты есть →
+         Calibration::start(channel, channelName, silenceDb).
+      2. Transport::startCalibration: режим Calibration →
+         CalibrationFeed::start — AudioInput кладёт звук канала
+         в очередь калибровки.
+      3. pollCalibration: кусок очереди → Calibration::setSampleRate,
+         Calibration::receive.
+      4. События → CalibrationJournal (журнал).
+      5. Итог появился → Calibration::silenceDb → setSilence
+         (training::core::Settings, файл настроек).
+         listening() ложь → Transport::endCalibration;
+         2 с без звука → признак «нет звука», Transport::endCalibration.
+      6. Окно: calibration() → Calibration::snapshot →
+         CalibrationPanel::setSession.
+      7. Конец: endCalibration → Calibration::end; applyCalibration →
+         Calibration::applyAnyway; Play/Stop (onPlayState) →
+         Calibration::onStart/onStop; смена входа (apply) →
+         Calibration::onInputChange.
+    end note
+
+    class "training::reaper::CalibrationJournal" as Journal <<изменён>> {
+      <color:#C62828><s>базовый класс training::trainer::CalibrationEvents</s></color>
+      <color:#2E7D32>базовый класс training::core::calibration::Events</color>
+      <color:#C62828><s>+ void finished(const training::onset::CalibrationResult &result) override</s></color>
+      <color:#2E7D32>+ void finished(const training::core::calibration::Result &result) override</color>
+    }
+
+    class "training::reaper::AudioInput" as AudioInput <<как есть>> {
+      + void start() override
+      + void end() override
+      + std::optional<CalibrationChunk> popCalibration(std::vector<float> &samples)
+    }
+  }
+}
+
+
+
+
+
+
+
+' --- связи нового модуля ---
+Calibration .up.|> SoundReceiver
+Calibration ..> AudioBlock : receive
+Calibration *-- Lengths
+Calibration *-- "0..1" Detector : шаг нот
+Calibration *-- "0..1" HighPass
+Calibration *-- "0..1" Envelope
+Detector ..> Onset : onsets()
+Calibration o-- "0..1" Events : events_
+Calibration ..> Snapshot : snapshot()
+Calibration *-- "0..1" Result : result_
+Calibration ..> Constants
+Snapshot --> Step
+Snapshot --> "0..1" Result
+Result --> Verdict
+Result ..> Settings : kSilenceRange
+
+' --- связка и показ ---
+Trainer *-- Calibration : 1, 3, 5, 6, 7
+Trainer --> Transport : 2, 5
+Transport o-- Feed
+AudioInput ..|> Feed
+Trainer --> AudioInput : 3 popCalibration
+Journal ..|> Events : 4
+Panel ..> Snapshot : 6
+
+' --- раскладка ---
+Calibrator -[hidden]right- Session
+Session -[hidden]right- Phase
+Phase -[hidden]right- OldEvents
+OnsetCalibration -[hidden]right- OnsetSnapshot
+OnsetSnapshot -[hidden]right- OnsetResult
+OnsetResult -[hidden]right- OnsetStep
+OnsetStep -[hidden]right- OnsetVerdict
+TrainerFunctions -[hidden]down- OnsetCalibration
+Calibrator -[hidden]down- TrainerFunctions
+
+@enduml

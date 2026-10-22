@@ -1,5 +1,5 @@
 # Общая часть списков изоляции: то, что запрещено во всех независимых
-# библиотеках (design.md D9). Подключается из `libs/<имя>/isolation.cmake`,
+# библиотеках. Подключается из `libs/<имя>/isolation.cmake`,
 # а те дописывают своё.
 
 # Понятия хоста, ОС и их библиотек. Заголовки ловит список разрешённых
@@ -23,9 +23,9 @@ set(training_forbidden_patterns
 
 # Стандартная библиотека. Заголовков C из неё (<unistd.h> и прочих POSIX)
 # в списке нет намеренно: это уже ОС. <format> нет тоже: строки форматирует
-# {fmt} (design.md D9).
+# {fmt}.
 set(training_standard_includes
   "algorithm" "array" "atomic" "bit" "cassert" "cctype" "charconv" "chrono" "cmath"
-  "compare" "cstddef" "cstdint" "cstring" "deque" "functional" "limits" "numbers" "numeric"
-  "optional" "ranges" "span" "stdexcept" "string" "string_view" "type_traits" "utility"
-  "vector")
+  "compare" "concepts" "cstddef" "cstdint" "cstring" "deque" "expected" "functional"
+  "iterator" "limits" "map" "memory" "mutex" "numbers" "numeric" "optional" "ranges" "span"
+  "stdexcept" "string" "string_view" "type_traits" "utility" "vector")

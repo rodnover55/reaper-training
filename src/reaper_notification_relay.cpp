@@ -17,8 +17,13 @@ namespace {
 /// без окна настроек: так REAPER доставляет уведомления.
 class ReaperNotificationRelay final : public IReaperControlSurface {
 public:
+  /// Тип поверхности для REAPER — «REAPERTRAINING».
   const char *GetTypeString() override { return "REAPERTRAINING"; }
+
+  /// Описание поверхности для REAPER — «reaper-training».
   const char *GetDescString() override { return "reaper-training"; }
+
+  /// Пустая строка настроек: у поверхности нет настроек.
   const char *GetConfigString() override { return ""; }
 
   // Запись REAPER всегда ведёт с воспроизведением: флаг записи запуску ничего
@@ -27,6 +32,11 @@ public:
     trainer().onPlayState(play, pause, rec);
   }
 
+  /// Передаёт тренажёру скорость воспроизведения
+  /// (`CSURF_EXT_SETBPMANDPLAYRATE`) и смену номеров устройств MIDI
+  /// (`CSURF_EXT_MIDI_DEVICE_REMAP`); остальные вызовы пропускает.
+  ///
+  /// @return всегда 0.
   int Extended(int call, void *parm1, void *parm2, void *parm3) override {
     // Скорость — второй параметр; первый, темп, тренажёру не нужен. При
     // открытии проекта и смене вкладки REAPER скорость не передаёт, а

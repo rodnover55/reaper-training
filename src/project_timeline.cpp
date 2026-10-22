@@ -7,6 +7,8 @@
 
 #include "project_timeline.hpp"
 
+#include "clock.hpp"
+
 // SWELL объявляет max и min макросами, и они ломают стандартную библиотеку.
 #define WDL_NO_DEFINE_MINMAX
 
@@ -19,7 +21,7 @@
 namespace training::reaper {
 namespace {
 
-/// Шаг по шкале, с, чтобы взять размер по разные стороны от метки.
+/// Шаг по шкале, с, чтобы метка на границе такта считалась в начале такта.
 constexpr double kAside = 1e-6;
 
 /// Метка темпа и размера проекта.
@@ -29,6 +31,8 @@ struct Marker {
   bool linear = false;
 };
 
+/// Метка темпа и размера активного проекта с номером `index`, с 0; метки с
+/// таким номером нет — метка с нулями.
 Marker markerAt(int index) {
   Marker marker;
   (void)GetTempoTimeSigMarker(nullptr, index, &marker.time, nullptr, nullptr, &marker.bpm,
@@ -36,95 +40,73 @@ Marker markerAt(int index) {
   return marker;
 }
 
-/// Размер такта в момент `time`.
-grid::Meter meterAt(double time) {
-  int numerator = 0;
-  int denominator = 0;
-  (void)TimeMap2_timeToBeats(nullptr, time, nullptr, &numerator, nullptr, &denominator);
-  return {.beats = numerator, .unit = denominator};
+/// Темп, которым становится темп на метке `index` из `count` меток, четвертей
+/// в минуту: у метки с плавным переходом — темп в конце перехода, то есть темп
+/// следующей метки.
+double tempoAfter(int index, int count) {
+  const Marker marker = markerAt(index);
+  if (marker.linear && index + 1 < count)
+    return markerAt(index + 1).bpm;
+  return marker.bpm;
+}
+
+/// Позиция REAPER, с, доли `beat` такта `measure`.
+double secondsAt(std::int64_t measure, double beat) {
+  const auto index = static_cast<int>(measure);
+  return TimeMap2_beatsToTime(nullptr, beat, &index);
 }
 
 } // namespace
 
-double ProjectTimeline::beatsAt(double time) const {
-  double fullBeats = 0.0;
-  (void)TimeMap2_timeToBeats(nullptr, time, nullptr, nullptr, &fullBeats, nullptr);
-  return fullBeats;
-}
-
-double ProjectTimeline::timeAt(double beats) const {
-  return TimeMap2_beatsToTime(nullptr, beats, nullptr);
-}
-
-grid::Bar ProjectTimeline::barOf(std::int64_t beat) const {
-  // Такт берётся посередине удара: на самой границе такта обратный пересчёт
-  // может дать «3.9999…» прошлого такта.
+Position ProjectTimeline::positionAt(core::Moment time) const {
   int measure = 0;
   int numerator = 0;
-  int denominator = 0;
-  const double inMeasure =
-      TimeMap2_timeToBeats(nullptr, timeAt(static_cast<double>(beat) + 0.5), &measure,
-                           &numerator, nullptr, &denominator);
+  double beat = TimeMap2_timeToBeats(nullptr, projectSeconds(time), &measure, &numerator,
+                                     nullptr, nullptr);
 
   // До начала проекта REAPER отдаёт удар в такте отрицательным — от начала
   // ближайшего следующего такта: время −0.25 с при 120 ударах в минуту — такт
-  // 0, удар −0.5 (findings.md изменения remove-poll-timer, R5). Такт с таким
-  // ударом начинается на целое число тактов раньше.
-  double inBar = inMeasure;
-  if (inBar < 0.0 && numerator > 0) {
-    const double before = std::ceil(-inBar / static_cast<double>(numerator));
-    inBar += before * static_cast<double>(numerator);
-    measure -= static_cast<int>(before);
+  // 0, удар −0.5. Такт с таким ударом начинается на целое число тактов
+  // раньше.
+  std::int64_t bar = measure;
+  if (beat < 0.0 && numerator > 0) {
+    const double before = std::ceil(-beat / static_cast<double>(numerator));
+    beat += before * static_cast<double>(numerator);
+    bar -= static_cast<std::int64_t>(before);
   }
+  return {.bar = bar, .beat = beat};
+}
 
-  grid::Bar bar{.index = measure,
-                .firstBeat = beat - static_cast<std::int64_t>(std::floor(inBar)),
-                .meter = {.beats = numerator, .unit = denominator},
-                .changes = {}};
+core::Moment ProjectTimeline::timeAt(Position position) const {
+  return projectTime(secondsAt(position.bar, position.beat));
+}
 
-  const double start = timeAt(static_cast<double>(bar.firstBeat));
-  const double end = timeAt(static_cast<double>(bar.firstBeat + bar.meter.beats));
+MapBar ProjectTimeline::barOf(std::int64_t index) const {
+  // Размер берётся посередине первого удара: на самой границе такта обратный
+  // пересчёт может дать конец прошлого такта.
+  int numerator = 0;
+  int denominator = 0;
+  (void)TimeMap2_timeToBeats(nullptr, secondsAt(index, 0.5), nullptr, &numerator, nullptr,
+                             &denominator);
+  MapBar bar{.index = index, .meter = {.beats = numerator, .unit = denominator}, .tempo = {}};
+
+  // Темп в начале такта — по последней метке не позже начала такта, до первой
+  // метки — темп из настроек проекта. Метка в начале проекта действует и до
+  // него: до неё ничего нет.
+  double tempo = 0.0;
+  GetProjectTimeSignature2(nullptr, &tempo, nullptr);
+  const double start = secondsAt(index, 0.0);
+  const double end = secondsAt(index, static_cast<double>(numerator));
   const int count = CountTempoTimeSigMarkers(nullptr);
-  for (int index = 0; index < count; ++index) {
-    const Marker marker = markerAt(index);
-    // Метка в начале проекта ничего не меняет: до неё ничего нет.
-    if (marker.time < start - kAside || marker.time >= end - kAside || marker.time <= kAside)
-      continue;
-
-    grid::Change change;
-    change.beat = std::max(0.0, beatsAt(marker.time) - static_cast<double>(bar.firstBeat));
-
-    const grid::Meter before = meterAt(marker.time - kAside);
-    const grid::Meter after = meterAt(marker.time + kAside);
-    if (before != after) {
-      change.meterFrom = before;
-      change.meterTo = after;
-    }
-
-    // Темп перед меткой: в конце плавного перехода он уже равен темпу метки,
-    // перед первой меткой — темп из настроек проекта.
-    double tempoBefore = marker.bpm;
-    if (index == 0) {
-      GetProjectTimeSignature2(nullptr, &tempoBefore, nullptr);
-    } else if (const Marker previous = markerAt(index - 1); !previous.linear) {
-      tempoBefore = previous.bpm;
-    }
-
-    double from = tempoBefore;
-    double to = marker.bpm;
-    if (marker.linear && index + 1 < count) {
-      from = marker.bpm;
-      to = markerAt(index + 1).bpm;
-    }
-    if (std::abs(from - to) > 1e-6) {
-      change.tempoFrom = from;
-      change.tempoTo = to;
-    }
-
-    if (change.meterFrom || change.tempoFrom)
-      bar.changes.push_back(change);
+  for (int marker = 0; marker < count; ++marker) {
+    const double time = markerAt(marker).time;
+    if (time <= std::max(start, 0.0) + kAside)
+      tempo = tempoAfter(marker, count);
+    else if (time < end - kAside)
+      bar.tempo.emplace(core::training::state::Beat(positionAt(projectTime(time)).beat),
+                        tempoAfter(marker, count));
   }
-
+  bar.tempo.emplace(core::training::state::Beat(), tempo);
   return bar;
 }
 

@@ -1,0 +1,20 @@
+import training.core.input
+import training.core.training
+import training.core.calibration
+
+interface Unit<T>: (training.Callback|calibration.Callback) {
+  responsibility Предоставляет интерфейс получения результата запущенного шага
+
+  typearg {
+    T Тип который содержит состояние шага.
+  }
+
+  action {
+    result(): T {
+      responsibility Возвращает результат шага
+
+      invariant #state Содержит статус запуска.
+      invariant #readonly Возвращенные данные доступны только для чтения.
+    }
+  }
+}

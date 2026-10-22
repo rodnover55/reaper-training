@@ -1,0 +1,180 @@
+@startuml core-calibration-sequence
+title Калибровка входа после объединения: от старта до окончания
+
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+
+' Подпись сообщения: первая строка — что делает действие, серая — вызов.
+
+box "Гитарист и REAPER" #F2F2F2
+  actor "Гитарист" as User
+  participant "REAPER" as Reaper
+end box
+
+box "Связка: src" #EAF2FB
+  participant "окно тренажёра\n(src/window.cpp)" as Window
+  participant "training::reaper::Trainer\n(главный поток)" as Trainer
+  participant "training::reaper::AudioInput::onBlock\n(звуковой поток)" as Hook
+  participant "training::reaper::AudioInput\n(рабочий поток и очереди)" as Input
+  participant "training::reaper::CalibrationJournal" as Journal
+end box
+
+box "Ядро: libs/trainer, libs/core" #EAF7EA
+  participant "training::trainer::Transport" as Transport
+  participant "training::core::calibration::Calibration" as Calibration
+  participant "training::core::detector::Detector" as Detector
+end box
+
+box "Показ: libs/render" #FDF7EE
+  participant "training::render::CalibrationPanel" as Panel
+end box
+
+== Старт ==
+
+User -> Window : Нажимает Calibrate…\n<color:#666666>""IDC_CALIBRATE""</color>
+Window -> Trainer : Начинает калибровку\n<color:#666666>""startCalibration()""</color>
+note right of Trainer
+  Калибровка начинается, только если транспорт стоит,
+  выбран вход звуковой карты и выбранный канал у неё есть.
+end note
+Trainer -> Calibration : Начинает сессию выбранного канала с действующим порогом тишины\n<color:#666666>""start(channel, channelName, silenceDb)""</color>
+Calibration -> Journal : Сессия началась\n<color:#666666>""started(channel, inputName, silenceDb)""</color>
+opt частота дискретизации уже известна
+  Calibration -> Calibration : Начинает измерение с шага тишины\n<color:#666666>""restart()""</color>
+  Calibration -> Journal : Шаг тишины на этой частоте\n<color:#666666>""silenceStep(sampleRate)""</color>
+end
+Trainer -> Input : Выбрасывает куски прошлой сессии из очереди калибровки\n<color:#666666>""popCalibration(samples)"" пока есть</color>
+Trainer -> Transport : Переводит режим работы в калибровку\n<color:#666666>""startCalibration()""</color>
+Transport -> Input : Направляет звук канала в очередь калибровки\n<color:#666666>""training::trainer::CalibrationFeed::start()""</color>
+opt звуковая карта закрыта
+  Trainer -> Reaper : Открывает звуковую карту\n<color:#666666>""Audio_Init()""</color>
+end
+Trainer --> Window : Калибровка началась\n<color:#666666>""true""</color>
+
+== Звук: каждый блок, звуковой и рабочий потоки ==
+
+Reaper -> Hook : Отдаёт блок звука входов\n<color:#666666>""OnAudioBuffer(isPost = false, length, sampleRate)""</color>
+Hook -> Input : Кладёт копию сэмплов канала и сведения о блоке в очередь рабочего потока\n<color:#666666>""BlockHeader{calibration = true}""</color>
+Input -> Input : Перекладывает звук блока в очередь калибровки для главного потока\n<color:#666666>""feed(header) → forwardCalibration(header)""</color>
+
+== Звук: таймер главного потока REAPER ==
+
+Reaper -> Trainer : Опрашивает тренажёр\n<color:#666666>""onMainTimer() → poll() → pollCalibration()""</color>
+loop пока в очереди калибровки есть куски
+  Trainer -> Input : Берёт кусок\n<color:#666666>""popCalibration(samples)""</color>
+  Input --> Trainer : Кусок: частота, сэмплы, время первого сэмпла\n<color:#666666>""training::reaper::CalibrationChunk""</color>
+  Trainer -> Calibration : Ставит частоту куска\n<color:#666666>""setSampleRate(chunk.sampleRate)""</color>
+  opt частота сменилась, итога нет
+    Calibration -> Calibration : Начинает измерение заново с шага тишины\n<color:#666666>""restart()""</color>
+    Calibration -> Journal : Шаг тишины на новой частоте\n<color:#666666>""silenceStep(sampleRate)""</color>
+  end
+  Trainer -> Calibration : Отдаёт кусок\n<color:#666666>""receive(training::core::AudioBlock{samples, start})""</color>
+  Calibration -> Calibration : Стыкует кусок по времени: разобранное начало отрезает\n<color:#666666>""stitch(block)""</color>
+  opt между кусками пропал звук
+    Calibration -> Calibration : Начинает фильтры заново, шаг — по правилу разрыва\n<color:#666666>""discontinuity()""</color>
+    Calibration -> Journal : Звук пропадал\n<color:#666666>""gap()""</color>
+  end
+
+  alt шаг тишины
+    Calibration -> Calibration : Каждый сэмпл: ВЧ-фильтр → огибающая → наибольшая огибающая окна 0.1 с\n<color:#666666>""processSilence(sample) → closeWindow()""</color>
+    opt окно громче медианы окон больше чем на 20 дБ
+      Calibration -> Journal : На шаге тишины был звук: шаг отсчитывается заново\n<color:#666666>""soundDuringSilence()""</color>
+    end
+    opt окон набралось на 3 с
+      Calibration -> Calibration : Шум — наибольшее окно; начинает шаг нот\n<color:#666666>""startNotes()""</color>
+      Calibration -> Detector : Создаёт детектор с порогом тишины на 6 дБ выше шума\n<color:#666666>""Detector(Settings{sampleRate, silenceDb = noiseDb + 6})""</color>
+      Calibration -> Journal : Начался шаг нот\n<color:#666666>""notesStep(noiseDb)""</color>
+    end
+
+  else шаг нот
+    loop кусок до границы, кратной 5 мс от начала измерения
+      Calibration -> Calibration : Каждый сэмпл: ВЧ-фильтр → огибающая → история огибающей и пик\n<color:#666666>""processNotes(samples)""</color>
+      Calibration -> Detector : Ищет атаки в куске\n<color:#666666>""process(piece)""</color>
+      Calibration -> Detector : Читает найденные атаки\n<color:#666666>""onsets()""</color>
+      Detector --> Calibration : Начала атак в сэмплах\n<color:#666666>""training::core::detector::Onset::position"" → pending_</color>
+      Calibration -> Calibration : Атака, все 5 мс которой прошли, меряется по истории огибающей\n<color:#666666>""checkpoint()""</color>
+      opt атака измерена
+        Calibration -> Journal : Найдена нота\n<color:#666666>""attack(note, attackDb)""</color>
+      end
+      opt 8 нот и ещё 1 с или 15 с без новой ноты
+        Calibration -> Calibration : Подводит итог по шуму, атакам и пику\n<color:#666666>""finish() → Result::judge(noiseDb, attacksDb, peakDb)""</color>
+        Calibration -> Journal : Итог калибровки\n<color:#666666>""finished(result)""</color>
+        opt вердикт Good
+          Calibration -> Journal : Удачный итог поставил порог тишины\n<color:#666666>""silenceSet(previousSilenceDb, result.silenceDb())""</color>
+        end
+      end
+    end
+
+  else итог подведён
+    Calibration -> Calibration : Слушает звук после итога: через 5 с — удар громче шума на 20 дБ\n<color:#666666>""processDone(samples)""</color>
+  end
+
+  opt итог появился на этом куске
+    Trainer -> Calibration : Берёт порог тишины удачного итога\n<color:#666666>""silenceDb()""</color>
+    Calibration --> Trainer : Порог в training::core::Settings::kSilenceRange или пусто
+    Trainer -> Trainer : Ставит порог в настройки ядра и в файл настроек\n<color:#666666>""setSilence(silenceDb)""</color>
+  end
+end
+
+opt 2 с без кусков звука, итога нет
+  Trainer -> Transport : Кончает подачу звука в калибровку\n<color:#666666>""endCalibration() → CalibrationFeed::end()""</color>
+  Trainer -> Journal : Нет звука\n<color:#666666>""noSound()""</color>
+  note right of Trainer
+    Сессия остаётся: панель показывает «нет звука»,
+    пока гитарист не закроет её.
+  end note
+end
+
+== Показ: таймер нашёл изменения ==
+
+Trainer -> Window : Перерисовывает окно\n<color:#666666>""refreshWindow()""</color>
+Window -> Trainer : Берёт сессию калибровки\n<color:#666666>""calibration()""</color>
+Trainer -> Calibration : Берёт копию сессии и хода измерения\n<color:#666666>""snapshot()""</color>
+Calibration --> Trainer : Копия под замком калибровки\n<color:#666666>""training::core::calibration::Snapshot""</color>
+Trainer --> Window : Копия сессии
+Window -> Panel : Показывает «нет звука» и сессию: этап, остаток тишины, ноты, итог\n<color:#666666>""setNoSound(noSound); setSession(snapshot)""</color>
+
+== Окончание: одно из ==
+
+alt удар по струнам после итога
+  Calibration -> Calibration : Звук после итога громче шума на 20 дБ\n<color:#666666>""processDone(samples) → true""</color>
+  Calibration -> Journal : Удар по струнам закрыл сессию; сессия кончилась\n<color:#666666>""closedBySound(); ended()""</color>
+  Trainer -> Calibration : Проверяет, есть ли сессия\n<color:#666666>""listening()""</color>
+  Calibration --> Trainer : Нет\n<color:#666666>""false""</color>
+  Trainer -> Transport : Кончает подачу звука в калибровку\n<color:#666666>""endCalibration() → CalibrationFeed::end()""</color>
+
+else Finish, Close или Cancel
+  User -> Window : Нажимает Finish, Close или Cancel\n<color:#666666>""IDC_CALIBRATE, IDC_CAL_CLOSE, IDC_CAL_CANCEL""</color>
+  Window -> Trainer : Кончает калибровку\n<color:#666666>""endCalibration()""</color>
+  Trainer -> Calibration : Кончает сессию без изменений порога\n<color:#666666>""end()""</color>
+  Calibration -> Journal : Сессия кончилась\n<color:#666666>""ended()""</color>
+  Trainer -> Transport : Кончает подачу звука в калибровку\n<color:#666666>""endCalibration() → CalibrationFeed::end()""</color>
+
+else Apply anyway
+  User -> Window : Нажимает Apply anyway\n<color:#666666>""IDC_CAL_APPLY""</color>
+  Window -> Trainer : Ставит порог неудачного итога\n<color:#666666>""applyCalibration()""</color>
+  Trainer -> Calibration : Берёт порог итога и кончает сессию\n<color:#666666>""applyAnyway()""</color>
+  Calibration -> Journal : Порог поставлен; сессия кончилась\n<color:#666666>""appliedAnyway(silenceDb); ended()""</color>
+  Calibration --> Trainer : Порог тишины или пусто
+  Trainer -> Transport : Кончает подачу звука в калибровку\n<color:#666666>""endCalibration() → CalibrationFeed::end()""</color>
+  Trainer -> Trainer : Ставит порог в настройки ядра и в файл настроек\n<color:#666666>""setSilence(silenceDb)""</color>
+
+else Play
+  Reaper -> Trainer : Транспорт пошёл\n<color:#666666>""onPlayState(play = true, …)""</color>
+  Trainer -> Transport : Начинает запуск: звук — из калибровки в поиск атак\n<color:#666666>""start() → CalibrationFeed::end()""</color>
+  Trainer -> Calibration : Отмечает начало запуска\n<color:#666666>""onStart()""</color>
+  Calibration -> Journal : Шаги прерваны или итог закрыт; сессия кончилась\n<color:#666666>""cancelledByPlayback() или closedByPlayback(); ended()""</color>
+  note right of Calibration
+    После прерванных шагов cancelledByPlayback()
+    правда до onStop(): строка состояния пишет об этом.
+  end note
+
+else смена входа
+  User -> Window : Выбирает другой вход или канал
+  Window -> Trainer : Ставит настройки\n<color:#666666>""apply(settings, input)""</color>
+  Trainer -> Calibration : Сессия меряла прежний вход: кончает её\n<color:#666666>""onInputChange()""</color>
+  Calibration -> Journal : Сессия кончилась\n<color:#666666>""ended()""</color>
+  Trainer -> Transport : Кончает подачу звука в калибровку\n<color:#666666>""endCalibration() → CalibrationFeed::end()""</color>
+end
+
+@enduml

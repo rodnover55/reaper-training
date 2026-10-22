@@ -1,0 +1,71 @@
+import training.core.calibration
+import training.core.training
+import training.core.input
+
+entity Transport {
+  value {
+    Calibration Запуск калибровки.
+
+    Training {
+      responsibility Запуск тренировки.
+
+      field {
+        inputType: training.Trainer.Type Тип входного канала
+      }
+    }
+  }
+
+  field {
+    settings: Settings Настройки плагина.
+
+    sampleRate: SampleRate {
+      responsibility Частота дискретизации.
+
+      invariant Передается через конструктор.
+    }
+  }
+
+  dependency calibration.Calibrator
+  dependency training.Trainer
+
+  action {
+    constructor create(sampleRate: SampleRate, settings: Settings)
+
+    start<T: training.Trainer.State|calibration.Calibrator.State>(unit: Calibration|Training): Unit<T> throws CannotStartUnit {
+      responsibility {
+        Запускает переданный юнит.
+        Возвращает обработчик, для передачи данных юниту и получения их от него.
+
+        Если в [Transport] был запущен другой юнит, 
+        то он сначала останавливается и запускается новый.
+      }
+
+      invariant {
+        Для [Calibration] используется [calibration.Calibrator.State],
+        для [Training] используется [training.Trainer.State].
+      }
+
+      note {
+        [calibration.Calibrator] и [training.Audio]/[training.Midi]
+        возвращаются как результат.  
+      }
+
+      note ai Может быть реализован несколькими методами.
+
+      error CannotStartUnit {
+        responsibility {
+          Когда невозможно запустить Unit, например в следствии ошибочного конфига.
+        }
+      }
+    }
+
+    stop() Останавливает запущенный юнит.
+
+    setSettings(settings: Settings) {
+      responsibility {
+        Переустанавливает входящие настройки. 
+        Эти настройки применяются к текущему запуску без перезагрузки самого запуска.
+      }
+    }
+  }
+}

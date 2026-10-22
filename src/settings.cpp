@@ -10,7 +10,7 @@
 #include <reaper_plugin.h>
 #include <reaper_plugin_functions.h>
 
-#include "training/grid/hit_window.hpp"
+#include "training/render/main/ms_text.hpp"
 
 #include <fmt/format.h>
 
@@ -33,6 +33,8 @@ std::optional<std::string> textOf(std::string_view key) {
   return std::string(text);
 }
 
+/// Сохраняет строку `value` настройки `key` в разделе расширения
+/// `reaper-extstate.ini`: запись остаётся после перезапуска REAPER.
 void store(const char *key, const std::string &value) {
   SetExtState(kSection, key, value.c_str(), true);
 }
@@ -41,27 +43,28 @@ void store(const char *key, const std::string &value) {
 
 bool consoleLogEnabled() {
   const std::optional<std::string> text = textOf("console_log");
-  const std::optional<int> value = text ? trainer::integerOf(*text) : std::nullopt;
+  const std::optional<int> value = text ? integerOf(*text) : std::nullopt;
   return value && *value != 0;
 }
 
-trainer::SettingsRead loadSettings() { return trainer::readSettings(textOf); }
+SettingsRead loadSettings() { return readSettings(textOf); }
 
-void saveSettings(const Settings &settings) {
-  store("mode", fmt::format("{}", grid::divisions(settings.mode())));
+void saveSettings(const core::Settings &settings, const InputSettings &input, Mode mode,
+                  const render::ViewSettings &view) {
+  store("mode", fmt::format("{}", divisions(mode)));
   // Граница шкалы — скрытая настройка: окно её не меняет и не пишет.
-  store("tolerance_ms", grid::halfMsText(settings.toleranceMs(), grid::MsStyle::Plain));
-  store("offset_ms", grid::halfMsText(settings.offsetMs(), grid::MsStyle::Plain));
-  store("channel", fmt::format("{}", settings.channel() + 1));
+  store("tolerance_ms",
+        render::halfMsText(settings.window().tolerance(), render::MsStyle::Plain));
+  store("offset_ms", render::halfMsText(settings.window().offset(), render::MsStyle::Plain));
+  store("channel", fmt::format("{}", input.channel() + 1));
   // Пустой ключ входа MIDI при загрузке выбирает канал `channel`.
-  store("midi_input", settings.midiInput());
-  store("midi_input_index", settings.midiInput().empty()
-                                ? std::string()
-                                : fmt::format("{}", settings.midiIndex()));
+  const bool midi = input.input() == Input::Midi;
+  store("midi_input", midi ? input.midiInput() : std::string());
+  store("midi_input_index", midi ? fmt::format("{}", input.midiIndex()) : std::string());
   store("silence_db", fmt::format("{}", static_cast<int>(std::lround(settings.silenceDb()))));
-  store("show_bar_numbers", settings.showBarNumbers() ? "1" : "0");
-  store("show_bar_stats", settings.showBarStats() ? "1" : "0");
-  store("settings_collapsed", settings.panelCollapsed() ? "1" : "0");
+  store("show_bar_numbers", view.showBarNumbers() ? "1" : "0");
+  store("show_bar_stats", view.showBarStats() ? "1" : "0");
+  store("settings_collapsed", view.panelCollapsed() ? "1" : "0");
 }
 
 } // namespace training::reaper

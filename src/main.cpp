@@ -9,6 +9,7 @@
 #define REAPERAPI_WANT_GetResourcePath
 #define REAPERAPI_WANT_Audio_RegHardwareHook
 #define REAPERAPI_WANT_GetPlayPosition2Ex
+#define REAPERAPI_WANT_GetPlayStateEx
 #define REAPERAPI_WANT_GetNumAudioInputs
 #define REAPERAPI_WANT_GetInputOutputLatency
 #define REAPERAPI_WANT_get_config_var
@@ -84,6 +85,19 @@ bool inForkedCopy() {
 
 } // namespace
 
+/// Точка входа расширения: REAPER вызывает её при загрузке и при выгрузке.
+///
+/// При загрузке проверяет версию API и загружает функции REAPER, открывает
+/// журнал в каталоге ресурсов REAPER, заводит тренажёр, передачу уведомлений
+/// REAPER и действия; по скрытой настройке пишет в консоль REAPER версию и
+/// время сборки. При выгрузке снимает действия, закрывает окно, снимает
+/// передачу уведомлений, останавливает тренажёр и закрывает журнал; в копии
+/// процесса после fork ничего не делает.
+///
+/// @param instance модуль расширения: из него берутся ресурсы окна.
+/// @param rec сведения о REAPER и его функции; nullptr — выгрузка.
+/// @return 1 — расширение загружено; 0 — при выгрузке или если расширение не
+///   загружено: другая версия API или функции REAPER не загрузились.
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE instance, reaper_plugin_info_t *rec) {
   if (!rec) { // rec == nullptr — REAPER выгружает расширение
