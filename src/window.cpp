@@ -33,6 +33,7 @@
 #include "training/reaper/mode.hpp"
 #include "training/render/calibration/calibration_panel.hpp"
 #include "training/render/calibration/db_text.hpp"
+#include "training/render/common/fill.hpp"
 #include "training/render/main/bar_rows.hpp"
 #include "training/render/main/field_frame.hpp"
 #include "training/render/main/field_texts.hpp"
@@ -40,6 +41,7 @@
 #include "training/render/main/gauge_layout.hpp"
 #include "training/render/main/hit_window_gauge.hpp"
 #include "training/render/main/ms_text.hpp"
+#include "training/render/main/run_summary.hpp"
 #include "training/render/main/settings_toggle.hpp"
 #include "training/render/main/view_settings.hpp"
 #include "training/render/palette.hpp"
@@ -95,7 +97,7 @@ std::string editText(HWND dialog, int control) {
 }
 
 /// Поле окна `control` с числом настройки; пусто — `control` не Offset,
-/// Tolerance или Silence.
+/// Tolerance, Silence или Hide bars.
 std::optional<render::Field> fieldOf(int control) {
   switch (control) {
   case IDC_OFFSET:
@@ -104,6 +106,8 @@ std::optional<render::Field> fieldOf(int control) {
     return render::Field::Tolerance;
   case IDC_SILENCE:
     return render::Field::Silence;
+  case IDC_HIDE_BARS:
+    return render::Field::HideBars;
   default:
     return std::nullopt;
   }
@@ -128,20 +132,27 @@ render::FieldBounds boundsOf(render::Field field, const core::Settings &settings
             .max = range.max / core::Interval::kMillisecond,
             .condition = hit.offset() / core::Interval::kMillisecond};
   }
+  case render::Field::HideBars:
+    return {.min = render::ViewSettings::kHiddenBarsRange.min,
+            .max = render::ViewSettings::kHiddenBarsRange.max,
+            .condition = std::nullopt};
   case render::Field::Silence:
     break;
   }
   return {.min = kSilenceRange.min, .max = kSilenceRange.max, .condition = std::nullopt};
 }
 
-/// Действующее значение поля `field` в настройках ядра `settings`, в единицах
-/// поля.
-double currentOf(render::Field field, const core::Settings &settings) {
+/// Действующее значение поля `field` в настройках ядра `settings` и
+/// настройках отрисовки `view`, в единицах поля.
+double currentOf(render::Field field, const core::Settings &settings,
+                 const render::ViewSettings &view) {
   switch (field) {
   case render::Field::Offset:
     return settings.window().offset() / core::Interval::kMillisecond;
   case render::Field::Tolerance:
     return settings.window().tolerance() / core::Interval::kMillisecond;
+  case render::Field::HideBars:
+    return view.hiddenBars();
   case render::Field::Silence:
     break;
   }
@@ -150,7 +161,7 @@ double currentOf(render::Field field, const core::Settings &settings) {
 
 /// Поле с числом, вписанное значение которого настройки не приняли.
 struct Rejection {
-  /// Поле: `IDC_OFFSET`, `IDC_TOLERANCE` или `IDC_SILENCE`.
+  /// Поле: `IDC_OFFSET`, `IDC_TOLERANCE`, `IDC_SILENCE` или `IDC_HIDE_BARS`.
   int control = 0;
 
   /// Вписанный текст без пробелов по краям.
@@ -177,12 +188,12 @@ void journalSettings(std::string_view what) {
   const core::Settings &settings = trainer().settings();
   const render::ViewSettings &view = trainer().view();
   journal("{}: mode {}, offset {} ms, tolerance {} ms, input {}, silence {} dBFS, bar "
-          "numbers {}, mean/spread {}, collapsed {}",
+          "numbers {}, median/iqr {}, hidden bars {}, collapsed {}",
           what, divisions(trainer().gridMode()),
           render::halfMsText(settings.window().offset(), render::MsStyle::Plain),
           render::halfMsText(settings.window().tolerance(), render::MsStyle::Plain),
           inputText(trainer().inputSettings()), settings.silenceDb(), view.showBarNumbers(),
-          view.showBarStats(), view.panelCollapsed());
+          view.showBarStats(), view.hiddenBars(), view.panelCollapsed());
 }
 
 /// Правда, если строка состояния вместо обычного текста показывает
@@ -203,7 +214,7 @@ std::string statusText() {
     if (const std::optional<render::Field> field = fieldOf(rejection->control))
       return render::rejectionText(*field, rejection->text,
                                    boundsOf(*field, settings, trainerRef.view()),
-                                   currentOf(*field, settings));
+                                   currentOf(*field, settings, trainerRef.view()));
   if (const std::string_view notice = trainerRef.fileNotice().text(); !notice.empty())
     return std::string(notice);
 
@@ -326,8 +337,18 @@ void showSilence(HWND dialog) {
   showingSettings = showing;
 }
 
+/// Пишет число скрытых тактов из настроек отрисовки в поле Hide bars.
+void showHiddenBars(HWND dialog) {
+  const bool showing = showingSettings;
+  showingSettings = true;
+  SetDlgItemText(dialog, IDC_HIDE_BARS,
+                 fmt::format("{}", trainer().view().hiddenBars()).c_str());
+  showingSettings = showing;
+}
+
 void placePanel(HWND dialog);
 RECT rowsArea(HWND dialog);
+std::optional<RECT> indicatorsBeside(HWND dialog);
 
 /// Пункт списка Input: канал звуковой карты или вход MIDI.
 struct InputChoice {
@@ -437,6 +458,7 @@ void fillControls(HWND dialog) {
                      static_cast<WPARAM>(modeIndex(trainer().gridMode())), 0);
   showHitWindow(dialog);
   showSilence(dialog);
+  showHiddenBars(dialog);
   setRejection(dialog, std::nullopt);
   CheckDlgButton(dialog, IDC_SHOW_NUMBERS,
                  view.showBarNumbers() ? BST_CHECKED : BST_UNCHECKED);
@@ -585,12 +607,36 @@ bool setField(core::Settings &settings, int control, double value) {
   return true;
 }
 
-/// Ставит в настройки число, вписанное в поле `control` — Offset, Tolerance
-/// или Silence. Недописанное число настроек не меняет. Допустимое — сразу
-/// действует и сохраняется (`Trainer::setSettings`, `showEdit`). Недопустимое
-/// настройки не меняет, а поле с вписанным становится отклонённым
-/// (`setRejection`).
+/// Ставит в настройки отрисовки число скрытых тактов, вписанное в поле Hide
+/// bars, как `editField`.
+void editHiddenBars(HWND dialog) {
+  const std::string text = editText(dialog, IDC_HIDE_BARS);
+  const std::optional<int> bars = integerOf(text);
+  if (!bars) {
+    if (rejection && rejection->control == IDC_HIDE_BARS)
+      setRejection(dialog, std::nullopt);
+    return;
+  }
+  render::ViewSettings view = trainer().view();
+  if (!view.setHiddenBars(*bars)) {
+    setRejection(dialog, Rejection{.control = IDC_HIDE_BARS, .text = text});
+    return;
+  }
+  setRejection(dialog, std::nullopt);
+  trainer().setView(view);
+  showEdit(dialog, IDC_HIDE_BARS);
+}
+
+/// Ставит в настройки число, вписанное в поле `control` — Offset, Tolerance,
+/// Silence или Hide bars. Недописанное число настроек не меняет. Допустимое —
+/// сразу действует и сохраняется (`Trainer::setSettings`, `showEdit`).
+/// Недопустимое настройки не меняет, а поле с вписанным становится
+/// отклонённым (`setRejection`).
 void editField(HWND dialog, int control) {
+  if (control == IDC_HIDE_BARS) {
+    editHiddenBars(dialog);
+    return;
+  }
   const std::string text = editText(dialog, control);
   // Порог тишины — целое; смещение и допуск округляются до 0.5 мс.
   std::optional<double> value;
@@ -640,6 +686,8 @@ void onCommand(HWND dialog, int control, int notification) {
       setRejection(dialog, std::nullopt);
       if (control == IDC_SILENCE)
         showSilence(dialog);
+      else if (control == IDC_HIDE_BARS)
+        showHiddenBars(dialog);
       else
         showHitWindow(dialog);
     } else if (notification == EN_CHANGE) {
@@ -668,6 +716,7 @@ struct Components {
 
   render::HitWindowGauge gauge;
   render::FieldFrame fieldFrame{render::Color{}};
+  render::RunSummary runSummary;
   render::BarRows barRows;
   render::CalibrationPanel calibrationPanel;
   render::SettingsToggle settingsToggle;
@@ -676,15 +725,34 @@ struct Components {
 /// Компоненты окна: есть, пока есть окно.
 std::optional<Components> components;
 
-/// Рисует на холсте `canvas` в области `area` строки тактов, а пока идёт
-/// калибровка — её панель.
-void paintArea(render::Canvas &canvas, const RECT &area) {
+/// Ставит строкам тактов `barRows` такты запуска тренажёра и настройки
+/// отрисовки: колонки и скрытые такты.
+void setRows(render::BarRows &barRows) {
+  const render::ViewSettings &view = trainer().view();
+  barRows.setColumns(view.showBarNumbers(), view.showBarStats());
+  barRows.setBars(trainer().timeline(), trainer().heard(),
+                  trainer().mode() == core::state::WorkMode::Run,
+                  trainer().settings().window(), view.hiddenBars());
+}
+
+/// Ставит индикаторам запуска сводку тактов тренажёра, показанных строками
+/// тактов `barRows`: в запуске — по последним нотам, после остановки — по
+/// всему запуску.
+void setRunSummary(render::RunSummary &runSummary, const render::BarRows &barRows) {
+  runSummary.setRun(trainer().timeline(), trainer().settings().window(),
+                    trainer().mode() == core::state::WorkMode::Run, barRows.shownEnd());
+}
+
+/// Рисует на холсте `canvas` в области `area` строки тактов, а над ними
+/// полосой высотой в строку такта — индикаторы запуска, если `strip`; пока
+/// идёт калибровка — её панель.
+void paintArea(render::Canvas &canvas, const RECT &area, bool strip) {
   if (!components)
     return;
   render::CalibrationPanel &calibrationPanel = components->calibrationPanel;
   render::BarRows &barRows = components->barRows;
-  const render::ViewSettings &view = trainer().view();
-  const render::Frame frame{.canvas = canvas, .area = boxOf(area)};
+  render::RunSummary &runSummary = components->runSummary;
+  render::Frame frame{.canvas = canvas, .area = boxOf(area)};
   if (trainer().calibrating()) {
     const auto state = trainer().calibrationState();
     calibrationPanel.setNoSound(trainer().calibrationNoSound());
@@ -695,25 +763,28 @@ void paintArea(render::Canvas &canvas, const RECT &area) {
     return;
   }
 
-  barRows.setColumns(view.showBarNumbers(), view.showBarStats());
-  barRows.setBars(trainer().timeline(), trainer().heard(),
-                  trainer().mode() == core::state::WorkMode::Run,
-                  trainer().settings().window());
+  setRows(barRows);
+  if (strip) {
+    const double height = (frame.area.bottom - frame.area.top) / (render::kRows + 1);
+    setRunSummary(runSummary, barRows);
+    runSummary.draw(frame.within(render::Box{.left = frame.area.left,
+                                             .top = frame.area.top,
+                                             .right = frame.area.right,
+                                             .bottom = frame.area.top + height}));
+    frame.area.top += height;
+  }
+
   barRows.draw(frame);
 }
 
-/// Область строк тактов и панели калибровки: всё под контролами окна. У
-/// входа MIDI строки Silence нет, и область — под шкалой окна попадания; у
+/// Область строк тактов и панели калибровки: всё под контролами окна — под
+/// третьей строкой настроек, где поле Hide bars есть у любого входа; у
 /// свёрнутой панели настроек — под кнопкой сворачивания.
 RECT rowsArea(HWND dialog) {
   RECT client{};
   GetClientRect(dialog, &client);
 
-  int lowest = IDC_SILENCE;
-  if (trainer().view().panelCollapsed())
-    lowest = IDC_SETTINGS_TOGGLE;
-  else if (trainer().inputSettings().input() == Input::Midi)
-    lowest = IDC_GAUGE;
+  const int lowest = trainer().view().panelCollapsed() ? IDC_SETTINGS_TOGGLE : IDC_HIDE_BARS;
 
   RECT controls{};
   GetWindowRect(GetDlgItem(dialog, lowest), &controls);
@@ -726,11 +797,12 @@ RECT rowsArea(HWND dialog) {
 }
 
 /// Рисует на холсте `canvas` строки тактов или панель калибровки под
-/// контролами окна.
+/// контролами окна; индикаторы запуска, которым нет места справа от панели
+/// настроек (`indicatorsBeside`), — полосой над строками тактов.
 void paintRowsIn(HWND dialog, render::Canvas &canvas) {
   const RECT area = rowsArea(dialog);
   if (area.bottom > area.top)
-    paintArea(canvas, area);
+    paintArea(canvas, area, trainer().view().showBarStats() && !indicatorsBeside(dialog));
 }
 
 /// Прямоугольник контрола `control` в окне `dialog`, в координатах окна.
@@ -765,7 +837,8 @@ void paintGaugeIn(HWND dialog, render::Canvas &canvas) {
 }
 
 /// Поля с числом настройки.
-constexpr std::array<int, 3> kNumberFields{IDC_OFFSET, IDC_TOLERANCE, IDC_SILENCE};
+constexpr std::array<int, 4> kNumberFields{IDC_OFFSET, IDC_TOLERANCE, IDC_SILENCE,
+                                           IDC_HIDE_BARS};
 
 /// Полоса вокруг поля `control` шириной `render::kRejectionFrame`:
 /// прямоугольник поля, расширенный на неё.
@@ -994,13 +1067,71 @@ void showControl(HWND dialog, int control, bool shown) {
 /// Контролы панели настроек под верхней строкой, которые есть у любого
 /// входа. Calibrate… сюда не входит: её прячет и показывает
 /// `placeCalibrationButtons`.
-constexpr std::array<int, 12> kPanelControls{
-    IDC_MODE_LABEL,   IDC_MODE,       IDC_CHANNEL_LABEL, IDC_CHANNEL, IDC_INPUT_REFRESH,
-    IDC_SHOW_NUMBERS, IDC_SHOW_STATS, IDC_OFFSET_LABEL,  IDC_OFFSET,  IDC_TOLERANCE_LABEL,
-    IDC_TOLERANCE,    IDC_RANGE};
+constexpr std::array<int, 14> kPanelControls{
+    IDC_MODE_LABEL,   IDC_MODE,       IDC_CHANNEL_LABEL,   IDC_CHANNEL,  IDC_INPUT_REFRESH,
+    IDC_SHOW_NUMBERS, IDC_SHOW_STATS, IDC_OFFSET_LABEL,    IDC_OFFSET,   IDC_TOLERANCE_LABEL,
+    IDC_TOLERANCE,    IDC_RANGE,      IDC_HIDE_BARS_LABEL, IDC_HIDE_BARS};
 
 /// Контролы порога тишины: у входа MIDI их нет.
 constexpr std::array<int, 2> kSilenceControls{IDC_SILENCE_LABEL, IDC_SILENCE};
+
+/// Место справа от панели настроек до правого края окна, по высоте — до
+/// строк тактов. Панель кончается на отступе правее самого правого видимого
+/// контрола; отступ — тот же, что у контролов от левого края окна.
+RECT besidePanel(HWND dialog) {
+  int right = 0;
+  const auto widen = [&](int control) {
+    HWND item = GetDlgItem(dialog, control);
+    if (item && (GetWindowLong(item, GWL_STYLE) & WS_VISIBLE) != 0)
+      right = std::max(right, static_cast<int>(controlRect(dialog, control).right));
+  };
+  widen(IDC_SETTINGS_TOGGLE);
+  widen(IDC_STATUS);
+  widen(IDC_CALIBRATE);
+  for (const int control : kPanelControls)
+    widen(control);
+  for (const int control : kSilenceControls)
+    widen(control);
+
+  RECT client{};
+  GetClientRect(dialog, &client);
+  const int pad = static_cast<int>(controlRect(dialog, IDC_SETTINGS_TOGGLE).left);
+  return RECT{.left = std::min(right + pad, static_cast<int>(client.right)),
+              .top = client.top,
+              .right = client.right,
+              .bottom = rowsArea(dialog).top};
+}
+
+/// Место индикаторов запуска справа от панели настроек (`besidePanel`);
+/// пусто — индикаторы встают полосой над строками тактов: настройки свёрнуты
+/// или справа уже `render::RunSummary::minWidth`.
+std::optional<RECT> indicatorsBeside(HWND dialog) {
+  if (trainer().view().panelCollapsed())
+    return std::nullopt;
+  const RECT beside = besidePanel(dialog);
+  if (beside.right - beside.left < render::RunSummary::minWidth())
+    return std::nullopt;
+  return beside;
+}
+
+/// Рисует на холсте `canvas` справа от панели настроек индикаторы запуска,
+/// если им там есть место и видна колонка медианы и IQR; иначе закрашивает
+/// это место цветом фона диалога, стирая прежние индикаторы.
+void paintIndicatorsIn(HWND dialog, render::Canvas &canvas) {
+  if (!components)
+    return;
+  const RECT beside = besidePanel(dialog);
+  if (beside.right <= beside.left || beside.bottom <= beside.top)
+    return;
+  const render::Frame frame{.canvas = canvas, .area = boxOf(beside)};
+  if (trainer().view().showBarStats() && indicatorsBeside(dialog)) {
+    setRows(components->barRows);
+    setRunSummary(components->runSummary, components->barRows);
+    components->runSummary.draw(frame);
+    return;
+  }
+  render::Fill(dialogColors().face).draw(frame);
+}
 
 /// Свёрнутость панели, с которой нарисована кнопка сворачивания; пусто —
 /// кнопку ещё не рисовали.
@@ -1261,6 +1392,7 @@ INT_PTR CALLBACK proc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam) {
         paintGaugeIn(dialog, canvas);
         paintFieldFrames(dialog, canvas);
         paintRowsIn(dialog, canvas);
+        paintIndicatorsIn(dialog, canvas);
       }
       EndPaint(dialog, &paint);
     }

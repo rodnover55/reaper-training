@@ -9,6 +9,9 @@
 namespace training::render {
 namespace {
 
+/// Высота строки скрытых тактов — доля строки такта.
+constexpr double kHiddenRowShare = 0.6;
+
 /// Удар такта `bar` на слышимой позиции `heard`, с 0: удар последней доли не
 /// позже неё; до первой доли — удар перед ней.
 int beatAt(const core::training::state::Bar &bar, core::Moment heard) {
@@ -32,12 +35,15 @@ BarRows::BarRows() : background_(kBackground), line_(kLine) {}
 void BarRows::setColumns(bool barNumbers, bool barStats) {
   barNumbers_ = barNumbers;
   barStats_ = barStats;
+  hiddenRow_.setBarNumbers(barNumbers);
 }
 
 void BarRows::setBars(const core::training::state::Timeline &timeline,
                       std::optional<core::Moment> heard, bool playing,
-                      const core::HitWindow &window) {
+                      const core::HitWindow &window, int hiddenBars) {
   rows_.clear();
+  hidden_.reset();
+  shownEnd_ = timeline.bars().size();
   if (!heard)
     return;
 
@@ -47,6 +53,15 @@ void BarRows::setBars(const core::training::state::Timeline &timeline,
   std::size_t top = bars.size();
   while (top > 0 && bars[top - 1].start() > *heard)
     --top;
+  // Скрытые такты — последние до такта позиции включительно, без предтакта.
+  if (playing && hiddenBars > 0 && top > 1) {
+    const std::size_t count = std::min(static_cast<std::size_t>(hiddenBars), top - 1);
+    hiddenRow_.setHidden(bars[top - count].name(), bars[top - 1].name(),
+                         static_cast<int>(count));
+    hidden_ = hiddenRow_.view();
+    top -= count;
+    shownEnd_ = top;
+  }
   // Такт без нот, ни одна доля которого не действует, целиком заменили
   // пришедшие после него такты — после петли, перемотки или смены скорости:
   // строки у него нет.
@@ -61,10 +76,10 @@ void BarRows::setBars(const core::training::state::Timeline &timeline,
        --index) {
     const core::training::state::Bar &bar = bars[index - 1];
     const core::training::state::Bar &previous = bars[index - 2];
-    const bool isTop = index == top;
+    const bool isTop = index == top && !hidden_;
     if (!isTop && replaced(index - 1))
       continue;
-    if (!isTop && bar.notes().empty() && index > 2 && previous.notes().empty())
+    if (!isTop && index != top && bar.notes().empty() && index > 2 && previous.notes().empty())
       continue;
 
     BarRow &shown = rows_.emplace_back();
@@ -78,9 +93,15 @@ void BarRows::draw(const Frame &frame) const {
   const Box &area = frame.area;
   background_.draw(frame);
 
-  const double rowHeight = (area.bottom - area.top) / kRows;
+  const double share = hidden_ ? kHiddenRowShare : 0.0;
+  const double rowHeight = (area.bottom - area.top) / (kRows + share);
+  const double rowsTop = area.top + share * rowHeight;
+  if (hidden_) {
+    hiddenRow_.draw(frame.within(
+        Box{.left = area.left, .top = area.top, .right = area.right, .bottom = rowsTop}));
+  }
   for (std::size_t r = 0; r < rows_.size() && r < static_cast<std::size_t>(kRows); ++r) {
-    const double top = area.top + static_cast<double>(r) * rowHeight;
+    const double top = rowsTop + static_cast<double>(r) * rowHeight;
     rows_[r].draw(frame.within(
         Box{.left = area.left, .top = top, .right = area.right, .bottom = top + rowHeight}));
   }

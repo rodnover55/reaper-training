@@ -81,4 +81,11 @@ bool ViewSettings::fits(const core::HitWindow &window, core::Interval scale) {
   return window.early() >= -scale && window.late() <= scale;
 }
 
+bool ViewSettings::setHiddenBars(int bars) {
+  if (!kHiddenBarsRange.contains(bars))
+    return false;
+  hiddenBars_ = bars;
+  return true;
+}
+
 } // namespace training::render

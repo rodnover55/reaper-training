@@ -10,16 +10,19 @@ add_library(training_render STATIC
   src/main/bar_row.cpp
   src/main/bar_rows.cpp
   src/main/change_mark.cpp
+  src/main/deviation_stats.cpp
   src/main/field_frame.cpp
   src/main/field_texts.cpp
   src/main/fit_text.cpp
   src/main/file_notice.cpp
   src/main/gauge_handle.cpp
+  src/main/hidden_row.cpp
   src/main/gauge_layout.cpp
   src/main/gauge_ticks.cpp
   src/main/hit_window_gauge.cpp
   src/main/ms_text.cpp
   src/main/node_value.cpp
+  src/main/run_summary.cpp
   src/main/settings_toggle.cpp
   src/main/status_line.cpp
   src/main/view_settings.cpp

@@ -3,6 +3,7 @@
 #include "training/core/clock.hpp"
 #include "training/core/hit_window.hpp"
 #include "training/core/training/state/note.hpp"
+#include "training/render/main/deviation_stats.hpp"
 #include "training/render/palette.hpp"
 
 #include <fmt/format.h>
@@ -23,15 +24,6 @@ constexpr std::string_view kMinus = "−";
 
 /// Разница темпов, четвертей в минуту, до которой темп считается тем же.
 constexpr double kSameTempo = 1e-6;
-
-/// Цвет показанного числа `shown`, мс, по окну попадания `window`, без
-/// `Target`.
-Tone windowTone(double shown, const core::HitWindow &window) {
-  return shown >= window.early() / core::Interval::kMillisecond &&
-                 shown <= window.late() / core::Interval::kMillisecond
-             ? Tone::Good
-             : Tone::Bad;
-}
 
 /// Цвет ноты с оценкой `hit`.
 Tone hitTone(core::Hit hit) {
@@ -61,27 +53,6 @@ Cell noteCell(const core::training::state::Note &note, bool extra) {
   if (extra)
     text += "*";
   return {.text = std::move(text), .tone = hitTone(note.hit)};
-}
-
-/// Нота доли с наименьшей по модулю разницей; `notes` не пустые.
-const core::training::state::Note &
-closest(const std::vector<core::training::state::Note> &notes) {
-  return *std::ranges::min_element(
-      notes, {}, [](const core::training::state::Note &note) { return note.deviation.abs(); });
-}
-
-/// Среднее `mean` для показа: миллисекунды с одним знаком после запятой и
-/// знаком.
-Cell meanCell(core::Interval mean, const core::HitWindow &window) {
-  const double shown = std::round(mean / core::Interval::kMillisecond * 10.0) / 10.0;
-  std::string text;
-  if (shown > 0.0)
-    text = fmt::format("+{:.1f}", shown);
-  else if (shown < 0.0)
-    text = fmt::format("{}{:.1f}", kMinus, -shown);
-  else
-    text = "0.0";
-  return {.text = std::move(text), .tone = windowTone(shown, window)};
 }
 
 /// Размер для маркера: «7/8».
@@ -127,9 +98,9 @@ std::vector<MarkView> marksOf(const core::training::state::Bar &bar,
 }
 
 /// Что показывает строка такта `bar`, который идёт после такта `previous`;
-/// `top` — верхняя строка, у неё нет среднего и разброса, `currentBeat` —
-/// удар, на котором сейчас воспроизведение, `window` — текущее окно попадания
-/// для среднего.
+/// `top` — верхняя строка, у неё нет медианы и IQR, `currentBeat` — удар, на
+/// котором сейчас воспроизведение, `window` — текущее окно попадания для
+/// медианы.
 BarView viewOf(const core::training::state::Bar &bar,
                const core::training::state::Bar &previous, bool top,
                std::optional<int> currentBeat, const core::HitWindow &window) {
@@ -149,12 +120,12 @@ BarView viewOf(const core::training::state::Bar &bar,
   for (const auto &[beat, count] : perBeat)
     view.division = std::max(view.division, count);
 
-  // Среднее и разброс — по одному значению на долю.
+  // Медиана и IQR — по одному значению на долю.
   std::vector<core::Interval> values;
   for (const auto &[division, notes] : bar.notes()) {
     if (notes.empty())
       continue;
-    const core::training::state::Note &note = closest(notes);
+    const core::training::state::Note &note = DeviationStats::closest(notes);
     values.push_back(note.deviation);
     view.values.push_back({.beat = division.beats(),
                            .onBeat = division.beats() == std::floor(division.beats()),
@@ -164,22 +135,9 @@ BarView viewOf(const core::training::state::Bar &bar,
   view.marks = marksOf(bar, previous);
 
   if (!top && values.size() > 1) {
-    core::Interval sum;
-    for (const core::Interval value : values)
-      sum += value;
-    const core::Interval mean = sum / static_cast<double>(values.size());
-    // Квадраты — в секундах в квадрате: у интервала квадрата нет.
-    double squares = 0.0;
-    for (const core::Interval value : values) {
-      const double away = (value - mean) / core::Interval::kSecond;
-      squares += away * away;
-    }
-    const core::Interval spread =
-        core::Interval::kSecond * std::sqrt(squares / static_cast<double>(values.size()));
-    view.mean = meanCell(mean, window);
-    view.spread =
-        Cell{.text = fmt::format("{:.1f}",
-                                 static_cast<double>(spread / core::Interval::kMillisecond))};
+    const DeviationStats stats(std::move(values));
+    view.median = stats.medianCell(window);
+    view.iqr = stats.iqrCell();
   }
   return view;
 }
@@ -198,8 +156,8 @@ Box centered(double x, double y, double halfWidth, double size) {
 Layout layoutOf(const Box &row, bool barNumbers, bool barStats) {
   const double width = row.right - row.left;
   Layout layout{.left = row.left, .width = width, .rowHeight = row.bottom - row.top};
-  // Колонка номера — под пять цифр, до такта 10000; колонка среднего и
-  // разброса — около 9 % ширины.
+  // Колонка номера — под пять цифр, до такта 10000; колонка медианы и IQR —
+  // около 9 % ширины.
   layout.sideSize = std::max(kMinFont, layout.rowHeight * 0.34);
   layout.labelWidth = barNumbers ? layout.sideSize * 0.6 * 5.0 + 10.0 : 0.0;
   layout.statsWidth = barStats ? width * 0.09 : 0.0;
@@ -212,7 +170,7 @@ Layout layoutOf(const Box &row, bool barNumbers, bool barStats) {
 BarRow::BarRow()
     : leadInRow_(kLeadInRow), leadInLabel_(kLeadInLabel), currentRow_(kCurrentRow),
       currentBeat_(kCurrentBeatBack), number_(Label::Style{.color = kNeutral}),
-      mean_(Label::Style{.color = kNeutral}), spread_(Label::Style{.color = kNeutral}) {}
+      median_(Label::Style{.color = kNeutral}), iqr_(Label::Style{.color = kNeutral}) {}
 
 void BarRow::setColumns(bool barNumbers, bool barStats) {
   barNumbers_ = barNumbers;
@@ -234,11 +192,11 @@ void BarRow::setRow(const core::training::state::Bar &bar,
   values_.clear();
   for (const ValueView &value : view_.values)
     values_.emplace_back(value.cell);
-  if (view_.mean && view_.spread) {
-    mean_.setText(view_.mean->text);
-    mean_.setColor(toneColor(view_.mean->tone));
-    spread_.setText(view_.spread->text);
-    spread_.setColor(toneColor(view_.spread->tone));
+  if (view_.median && view_.iqr) {
+    median_.setText(view_.median->text);
+    median_.setColor(toneColor(view_.median->tone));
+    iqr_.setText(view_.iqr->text);
+    iqr_.setColor(toneColor(view_.iqr->tone));
   }
 }
 
@@ -321,12 +279,12 @@ void BarRow::draw(const Frame &frame) const {
     values_[i].draw(frame.within(centered(at, middle, step, size)));
   }
 
-  if (layout.statsWidth > 0.0 && view_.mean && view_.spread) {
+  if (layout.statsWidth > 0.0 && view_.median && view_.iqr) {
     const double right = layout.left + layout.width;
-    mean_.draw(frame.within(centered(right - layout.statsWidth * 0.72, middle,
-                                     layout.statsWidth * 0.28, layout.statsSize)));
-    spread_.draw(frame.within(centered(right - layout.statsWidth * 0.25, middle,
-                                       layout.statsWidth * 0.25, layout.statsSize)));
+    median_.draw(frame.within(centered(right - layout.statsWidth * 0.72, middle,
+                                       layout.statsWidth * 0.28, layout.statsSize)));
+    iqr_.draw(frame.within(centered(right - layout.statsWidth * 0.25, middle,
+                                    layout.statsWidth * 0.25, layout.statsSize)));
   }
 }
 

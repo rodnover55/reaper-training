@@ -10,7 +10,9 @@
 
 // Окно тренажёра встаёт в док REAPER, поэтому это дочерняя форма без рамки.
 // Верхняя строка — кнопка сворачивания панели настроек и строка состояния,
-// под ней — три строки настроек; ниже окно рисует строки тактов само.
+// под ней — три строки настроек; ниже окно рисует строки тактов само. В
+// третьей строке поле Hide bars есть у любого входа, порог тишины и
+// калибровка — только у звукового.
 // Кнопку сворачивания рисует окно (BS_OWNERDRAW): стрелку вниз или вправо —
 // треугольником, а не знаком, которого нет в растровом шрифте диалога Windows.
 // Она записана через CONTROL, а не PUSHBUTTON: у PUSHBUTTON SWELL оставляет
@@ -30,7 +32,7 @@ BEGIN
     COMBOBOX        IDC_CHANNEL, 154, 18, 120, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     PUSHBUTTON      "Refresh", IDC_INPUT_REFRESH, 278, 18, 36, 12, WS_TABSTOP
     CHECKBOX        "Bar numbers", IDC_SHOW_NUMBERS, 324, 19, 56, 10, BS_AUTOCHECKBOX | WS_TABSTOP
-    CHECKBOX        "Mean/spread", IDC_SHOW_STATS, 384, 19, 58, 10, BS_AUTOCHECKBOX | WS_TABSTOP
+    CHECKBOX        "Median/IQR", IDC_SHOW_STATS, 384, 19, 58, 10, BS_AUTOCHECKBOX | WS_TABSTOP
     LTEXT           "Offset, ms:", IDC_OFFSET_LABEL, 4, 40, 38, 10
     EDITTEXT        IDC_OFFSET, 44, 38, 26, 12, ES_AUTOHSCROLL | WS_TABSTOP
     LTEXT           "Tolerance, ms:", IDC_TOLERANCE_LABEL, 78, 40, 52, 10
@@ -40,6 +42,8 @@ BEGIN
     LTEXT           "Silence, dBFS:", IDC_SILENCE_LABEL, 4, 62, 52, 10
     EDITTEXT        IDC_SILENCE, 58, 60, 24, 12, ES_AUTOHSCROLL | WS_TABSTOP
     PUSHBUTTON      "Calibrate...", IDC_CALIBRATE, 88, 60, 50, 12, WS_TABSTOP
+    LTEXT           "Hide bars:", IDC_HIDE_BARS_LABEL, 150, 62, 36, 10
+    EDITTEXT        IDC_HIDE_BARS, 188, 60, 20, 12, ES_AUTOHSCROLL | WS_TABSTOP
     PUSHBUTTON      "Cancel", IDC_CAL_CANCEL, 0, 0, 40, 14, WS_TABSTOP
     PUSHBUTTON      "Apply anyway", IDC_CAL_APPLY, 0, 0, 80, 14, WS_TABSTOP
     PUSHBUTTON      "Calibrate again", IDC_CAL_AGAIN, 0, 0, 64, 14, WS_TABSTOP

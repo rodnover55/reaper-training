@@ -15,6 +15,8 @@ TEST_CASE("Тексты полей: подсказка с допустимыми
   CHECK(rangeHint(Field::Silence,
                   FieldBounds{.min = -90.0, .max = -10.0, .condition = std::nullopt}) ==
         "-90…-10 dBFS");
+  CHECK(rangeHint(Field::HideBars,
+                  FieldBounds{.min = 0.0, .max = 16.0, .condition = std::nullopt}) == "0…16");
 
   // Половины миллисекунд — с одним знаком после точки.
   CHECK(rangeHint(Field::Offset, FieldBounds{.min = -37.5, .max = 37.5, .condition = 12.5}) ==
@@ -34,4 +36,7 @@ TEST_CASE("Тексты полей: сообщение о не принятом 
   CHECK(rejectionText(Field::Tolerance, "0.4",
                       FieldBounds{.min = 1.0, .max = 50.0, .condition = 0.0}, 10.0) ==
         "Tolerance 0.4 ms is out of range 1…50 at offset 0 — not applied, 10 in use");
+  CHECK(rejectionText(Field::HideBars, "20",
+                      FieldBounds{.min = 0.0, .max = 16.0, .condition = std::nullopt},
+                      2.0) == "Hide bars 20 is out of range 0…16 — not applied, 2 in use");
 }

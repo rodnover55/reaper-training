@@ -25,7 +25,19 @@ TEST_CASE("Настройки отрисовки: по умолчанию") {
   CHECK(view.scale() == ms(50.0));
   CHECK(view.showBarNumbers());
   CHECK(view.showBarStats());
+  CHECK(view.hiddenBars() == 0);
   CHECK_FALSE(view.panelCollapsed());
+}
+
+TEST_CASE("Настройки отрисовки: скрытых тактов от 0 до 16") {
+  ViewSettings view;
+  CHECK(view.setHiddenBars(16));
+  CHECK(view.hiddenBars() == 16);
+  CHECK_FALSE(view.setHiddenBars(17));
+  CHECK_FALSE(view.setHiddenBars(-1));
+  CHECK(view.hiddenBars() == 16);
+  CHECK(view.setHiddenBars(0));
+  CHECK(view.hiddenBars() == 0);
 }
 
 TEST_CASE("Настройки отрисовки: граница шкалы от 10 до 200 мс, окно в шкале") {

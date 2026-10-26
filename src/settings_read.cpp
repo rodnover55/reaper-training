@@ -124,6 +124,22 @@ void readSilence(const SettingsLookup &lookup, SettingsRead &read) {
                                         std::lround(read.settings.silenceDb())));
 }
 
+/// Читает число скрытых тактов из `hidden_bars` в настройки отрисовки
+/// `read.view`; число вне `render::ViewSettings::kHiddenBarsRange` называет в
+/// `read.rejected`.
+void readHiddenBars(const SettingsLookup &lookup, SettingsRead &read) {
+  const std::optional<std::string> text = lookup("hidden_bars");
+  if (!text)
+    return;
+  const std::optional<int> bars = integerOf(*text);
+  if (!bars || read.view.setHiddenBars(*bars))
+    return;
+  read.rejected.push_back(fmt::format("hidden_bars={} is out of range {}…{} — {} in use",
+                                      *text, render::ViewSettings::kHiddenBarsRange.min,
+                                      render::ViewSettings::kHiddenBarsRange.max,
+                                      read.view.hiddenBars()));
+}
+
 } // namespace
 
 std::optional<int> integerOf(std::string_view text) {
@@ -140,6 +156,7 @@ SettingsRead readSettings(const SettingsLookup &lookup) {
   readScale(lookup, read);
   readWindow(lookup, read);
   readSilence(lookup, read);
+  readHiddenBars(lookup, read);
 
   // Отклонённый канал — канал по умолчанию, без записи.
   if (const std::optional<int> channel = integerAt(lookup, "channel"))

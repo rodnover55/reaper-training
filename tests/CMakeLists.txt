@@ -23,10 +23,12 @@ add_executable(training_tests
   settings_read_test.cpp
   spsc_ring_test.cpp
   render_bar_rows_test.cpp
+  render_deviation_stats_test.cpp
   render_field_texts_test.cpp
   render_file_notice_test.cpp
   render_fit_text_test.cpp
   render_ms_text_test.cpp
+  render_run_summary_test.cpp
   render_status_line_test.cpp
   render_view_settings_test.cpp
   reaper_calibration_test.cpp
