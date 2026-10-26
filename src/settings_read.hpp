@@ -62,7 +62,7 @@ std::optional<int> integerOf(std::string_view text);
 /// Читает настройки из файла через `lookup` по ключам `mode`,
 /// `window_scale_ms`, `offset_ms`, `tolerance_ms`, `silence_db`, `channel`
 /// (номер с 1), `midi_input`, `midi_input_index`, `show_bar_numbers`,
-/// `show_bar_stats`, `settings_collapsed`. Вид входа — `Input::Midi`,
+/// `show_bar_stats`, `hidden_bars`, `settings_collapsed`. Вид входа — `Input::Midi`,
 /// если строка `midi_input` непуста, иначе `Input::Audio`. Строка,
 /// которую отклонил сеттер `core::Settings`, `InputSettings` или
 /// `render::ViewSettings`, а также `mode` вне пяти режимов `Mode` оставляют
@@ -70,7 +70,7 @@ std::optional<int> integerOf(std::string_view text);
 /// остальные строки принимаются.
 ///
 /// - Разбор идёт в порядке: режим, граница шкалы, окно попадания, порог
-///   тишины, остальное. Окно попадания проверяется по уже прочитанной шкале
+///   тишины, скрытые такты, остальное. Окно попадания проверяется по уже прочитанной шкале
 ///   (`render::ViewSettings::fits`).
 /// - Окно попадания собирается из `offset_ms` и `tolerance_ms`, округлённых
 ///   до 0.5 мс (`halfMsOf`); отсутствующая строка даёт значение по

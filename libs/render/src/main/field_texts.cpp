@@ -21,7 +21,7 @@ std::string msText(Field field, double ms) {
 
 /// Значение `value` поля `field` так, как его пишет поле.
 std::string valueText(Field field, double value) {
-  if (field == Field::Silence)
+  if (field == Field::Silence || field == Field::HideBars)
     return fmt::format("{}", std::lround(value));
   return msText(field, value);
 }
@@ -50,24 +50,38 @@ const char *nameOf(Field field) {
   case Field::Tolerance:
     return "Tolerance";
   case Field::Silence:
+    return "Silence";
+  case Field::HideBars:
     break;
   }
-  return "Silence";
+  return "Hide bars";
 }
 
-/// Единица числа поля `field`.
-const char *unitOf(Field field) { return field == Field::Silence ? "dBFS" : "ms"; }
+/// Единица числа поля `field` с пробелом перед ней: « ms», « dBFS»; у числа
+/// тактов — пусто.
+const char *unitOf(Field field) {
+  switch (field) {
+  case Field::Silence:
+    return " dBFS";
+  case Field::HideBars:
+    return "";
+  case Field::Offset:
+  case Field::Tolerance:
+    break;
+  }
+  return " ms";
+}
 
 } // namespace
 
 std::string rangeHint(Field field, const FieldBounds &bounds) {
-  return fmt::format("{} {}{}", rangeText(field, bounds), unitOf(field),
+  return fmt::format("{}{}{}", rangeText(field, bounds), unitOf(field),
                      conditionText(field, bounds));
 }
 
 std::string rejectionText(Field field, std::string_view text, const FieldBounds &bounds,
                           double current) {
-  return fmt::format("{} {} {} is out of range {}{} — not applied, {} in use", nameOf(field),
+  return fmt::format("{} {}{} is out of range {}{} — not applied, {} in use", nameOf(field),
                      text, unitOf(field), rangeText(field, bounds),
                      conditionText(field, bounds), valueText(field, current));
 }

@@ -6,7 +6,9 @@
 #include "training/render/common/fill.hpp"
 #include "training/render/element.hpp"
 #include "training/render/main/bar_row.hpp"
+#include "training/render/main/hidden_row.hpp"
 
+#include <cstddef>
 #include <optional>
 #include <vector>
 
@@ -23,12 +25,17 @@ public:
   BarRows();
 
   /// Включает и выключает колонку номеров тактов `barNumbers` и колонку
-  /// среднего и разброса `barStats`.
+  /// медианы и IQR `barStats`.
   void setColumns(bool barNumbers, bool barStats);
 
   /// Показывает такты запуска `timeline` (`timing-display`): строки — такты,
   /// в которые вошло воспроизведение, новые сверху, не больше `kRows`.
   ///
+  /// - Пока идёт воспроизведение (`playing`), последние `hiddenBars` тактов
+  ///   до такта позиции `heard` включительно скрыты: над строками — строка
+  ///   скрытых тактов (`HiddenRow`), верхняя строка — такт перед скрытыми, и
+  ///   она не текущая: у неё есть медиана и IQR и нет текущего удара. Тактов
+  ///   после предтакта меньше — скрыты все.
   /// - Первый такт списка — предтакт перед началом запуска — строкой не
   ///   показывается.
   /// - Верхняя строка — такт, в котором позиция `heard`.
@@ -44,18 +51,27 @@ public:
   ///   воспроизведение, если его `start` не позже неё. Пусто — строк нет.
   /// @param playing идёт воспроизведение: у верхней строки выделен удар
   ///   позиции `heard` — удар последней доли не позже неё. У верхней строки нет
-  ///   среднего и разброса и без воспроизведения.
-  /// @param window текущее окно попадания: им красится среднее
+  ///   медианы и IQR и без воспроизведения.
+  /// @param window текущее окно попадания: им красится медиана
   ///   (`BarRow::setRow`).
   void setBars(const core::training::state::Timeline &timeline,
-               std::optional<core::Moment> heard, bool playing, const core::HitWindow &window);
+               std::optional<core::Moment> heard, bool playing, const core::HitWindow &window,
+               int hiddenBars = 0);
 
   /// Строки области сверху вниз.
   const std::vector<BarRow> &rows() const { return rows_; }
 
-  /// Рисует в месте кадра первые `kRows` строк — место делится на `kRows`
-  /// равных строк — и линии на краях такта: у начала — от номеров тактов, у
-  /// конца — от среднего и разброса; у выключенной колонки линии нет.
+  /// Строка скрытых тактов; пусто — скрытых тактов нет.
+  const std::optional<HiddenView> &hidden() const { return hidden_; }
+
+  /// Конец показанных тактов: номер в списке такта после последнего
+  /// показанного такта; без скрытых тактов — число тактов списка.
+  std::size_t shownEnd() const { return shownEnd_; }
+
+  /// Рисует в месте кадра строку скрытых тактов высотой 0.6 строки, если она
+  /// есть, под ней первые `kRows` строк — место делится на `kRows` равных
+  /// строк и эту строку — и линии на краях такта: у начала — от номеров тактов, у
+  /// конца — от медианы и IQR; у выключенной колонки линии нет.
   void draw(const Frame &frame) const override;
 
 private:
@@ -64,6 +80,9 @@ private:
   Fill background_;
   Fill line_;
   std::vector<BarRow> rows_;
+  std::optional<HiddenView> hidden_;
+  HiddenRow hiddenRow_;
+  std::size_t shownEnd_ = 0;
 };
 
 } // namespace training::render

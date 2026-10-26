@@ -174,7 +174,7 @@ TEST_CASE("показ тактов: цвет значения — по оцен�
   CHECK(view.values[3].cell.tone == Tone::Good);
 }
 
-TEST_CASE("показ тактов: у верхней строки текущий удар и нет среднего") {
+TEST_CASE("показ тактов: у верхней строки текущий удар и нет медианы") {
   Timeline run = runOf(0, 1);
   note(run, 1, 0.0, -4.0);
   note(run, 1, 1.0, 2.0);
@@ -186,22 +186,23 @@ TEST_CASE("показ тактов: у верхней строки текущи�
   const auto views = present(run, 5.2);
   REQUIRE(views.size() == 2);
   CHECK(views[0].currentBeat == 1);
-  CHECK_FALSE(views[0].mean);
+  CHECK_FALSE(views[0].median);
   CHECK_FALSE(views[1].currentBeat);
-  REQUIRE(views[1].mean);
-  REQUIRE(views[1].spread);
-  CHECK(views[1].mean->text == "+2.0");
-  CHECK(views[1].mean->tone == Tone::Good);
-  CHECK(views[1].spread->text == "3.7");
-  CHECK(views[1].spread->tone == Tone::Neutral);
+  REQUIRE(views[1].median);
+  REQUIRE(views[1].iqr);
+  // Отклонения −4, 2, 4, 6: медиана 3, квантили 0.25 и 0.75 — 0.5 и 4.5.
+  CHECK(views[1].median->text == "+3.0");
+  CHECK(views[1].median->tone == Tone::Good);
+  CHECK(views[1].iqr->text == "4.0");
+  CHECK(views[1].iqr->tone == Tone::Neutral);
 
   // Без воспроизведения текущего удара нет, а у верхней строки по-прежнему
-  // нет среднего.
+  // нет медианы.
   const auto stopped = present(run, 5.2, false);
   REQUIRE(stopped.size() == 2);
   CHECK_FALSE(stopped.front().currentBeat);
-  CHECK_FALSE(stopped.front().mean);
-  CHECK(stopped.back().mean);
+  CHECK_FALSE(stopped.front().median);
+  CHECK(stopped.back().median);
 }
 
 TEST_CASE("показ тактов: подпись — имя такта «10000»") {
@@ -290,7 +291,7 @@ TEST_CASE("показ тактов: число — до ближайшего, ц
   CHECK(view.values[1].cell.tone == Tone::Bad);
 }
 
-TEST_CASE("показ тактов: отрицательное, нулевое и далёкое среднее") {
+TEST_CASE("показ тактов: отрицательная, нулевая и далёкая медиана") {
   Timeline run = runOf(0, 3);
   const std::vector<std::vector<double>> values{{-1.0, -2.0}, {-1.0, 1.0}, {12.0, 14.0}};
   for (std::size_t i = 0; i < values.size(); ++i) {
@@ -300,10 +301,10 @@ TEST_CASE("показ тактов: отрицательное, нулевое �
 
   const auto views = present(run, 12.1);
   REQUIRE(views.size() == 4);
-  CHECK(views[3].mean->text == "−1.5");
-  CHECK(views[2].mean->text == "0.0");
-  CHECK(views[1].mean->text == "+13.0");
-  CHECK(views[1].mean->tone == Tone::Bad);
+  CHECK(views[3].median->text == "−1.5");
+  CHECK(views[2].median->text == "0.0");
+  CHECK(views[1].median->text == "+13.0");
+  CHECK(views[1].median->tone == Tone::Bad);
 }
 
 TEST_CASE("показ тактов: разница 8 мс — «+8»") {
@@ -363,7 +364,7 @@ TEST_CASE("показ тактов: смена смещения не меняе�
   CHECK(view.values[2].cell.tone == Tone::Good);
 }
 
-TEST_CASE("показ тактов: среднее, равное смещению, — зелёное, без подложки") {
+TEST_CASE("показ тактов: медиана, равная смещению, — зелёная, без подложки") {
   const HitWindow behind = windowOf(12.0, 8.0);
   Timeline run = runOf(0, 1);
   note(run, 1, 0.0, 11.0, behind);
@@ -371,21 +372,21 @@ TEST_CASE("показ тактов: среднее, равное смещени�
 
   const auto views = present(run, 4.1, true, behind);
   REQUIRE(views.size() == 2);
-  REQUIRE(views[1].mean);
-  CHECK(views[1].mean->text == "+12.0");
-  CHECK(views[1].mean->tone == Tone::Good);
+  REQUIRE(views[1].median);
+  CHECK(views[1].median->text == "+12.0");
+  CHECK(views[1].median->tone == Tone::Good);
 }
 
-TEST_CASE("показ тактов: среднее красится по текущему окну попадания") {
+TEST_CASE("показ тактов: медиана красится по текущему окну попадания") {
   Timeline run = runOf(0, 1);
   note(run, 1, 0.0, 14.0);
   note(run, 1, 1.0, 15.0);
 
   const auto views = present(run, 4.1, true, windowOf(12.0, 8.0));
   REQUIRE(views.size() == 2);
-  REQUIRE(views[1].mean);
-  CHECK(views[1].mean->text == "+14.5");
-  CHECK(views[1].mean->tone == Tone::Good);
+  REQUIRE(views[1].median);
+  CHECK(views[1].median->text == "+14.5");
+  CHECK(views[1].median->tone == Tone::Good);
   CHECK(views[1].values[0].cell.tone == Tone::Bad);
 }
 
@@ -494,4 +495,42 @@ TEST_CASE("строки тактов: такт, начатый с середин
   run = replaced(run, 1, rebuilt(run.bars()[1], run.bars()[1].name(), steady().beatTime(1.5)));
   CHECK(present(run, 1.7).front().currentBeat == 1);
   CHECK(present(run, 2.2).front().currentBeat == 2);
+}
+
+TEST_CASE("показ тактов: последние такты скрыты, пока идёт воспроизведение") {
+  Timeline run = runOf(0, 9);
+  for (std::size_t bar = 7; bar <= 10; ++bar) {
+    note(run, bar, 0.0, 2.0);
+    note(run, bar, 1.0, 4.0);
+  }
+
+  BarRows rows;
+  rows.setBars(run, steady().beatTime(9 * 4.0 + 1.2), true, kWindow, 2);
+  REQUIRE(rows.hidden());
+  CHECK(rows.hidden()->label == "9–10");
+  CHECK(rows.hidden()->text == "2 bars hidden");
+  CHECK(rows.shownEnd() == 9);
+  REQUIRE_FALSE(rows.rows().empty());
+  const BarView &top = rows.rows().front().view();
+  CHECK(top.label == "8");
+  CHECK_FALSE(top.currentBeat);
+  REQUIRE(top.median);
+  CHECK(top.median->text == "+3.0");
+
+  // После остановки скрытых тактов нет.
+  rows.setBars(run, steady().beatTime(9 * 4.0 + 1.2), false, kWindow, 2);
+  CHECK_FALSE(rows.hidden());
+  CHECK(rows.shownEnd() == run.bars().size());
+  CHECK(rows.rows().front().view().label == "10");
+}
+
+TEST_CASE("показ тактов: скрытых тактов больше, чем сыграно, — скрыты все") {
+  const Timeline run = runOf(0, 0);
+  BarRows rows;
+  rows.setBars(run, steady().beatTime(1.2), true, kWindow, 3);
+  REQUIRE(rows.hidden());
+  CHECK(rows.hidden()->label == "1");
+  CHECK(rows.hidden()->text == "1 bar hidden");
+  CHECK(rows.rows().empty());
+  CHECK(rows.shownEnd() == 1);
 }

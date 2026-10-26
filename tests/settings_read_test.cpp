@@ -67,6 +67,7 @@ TEST_CASE("Файл настроек: все строки приняты") {
                                       {"midi_input_index", "3"},
                                       {"show_bar_numbers", "0"},
                                       {"show_bar_stats", "0"},
+                                      {"hidden_bars", "3"},
                                       {"settings_collapsed", "1"}});
   CHECK(read.rejected.empty());
   CHECK(read.mode == Mode::Sixteenths);
@@ -79,7 +80,15 @@ TEST_CASE("Файл настроек: все строки приняты") {
   CHECK(read.input.midiIndex() == 3);
   CHECK_FALSE(read.view.showBarNumbers());
   CHECK_FALSE(read.view.showBarStats());
+  CHECK(read.view.hiddenBars() == 3);
   CHECK(read.view.panelCollapsed());
+}
+
+TEST_CASE("Файл настроек: скрытых тактов вне 0…16 не принято") {
+  const SettingsRead read = readFrom({{"hidden_bars", "17"}});
+  CHECK(read.view.hiddenBars() == 0);
+  CHECK(read.rejected ==
+        std::vector<std::string>{"hidden_bars=17 is out of range 0…16 — 0 in use"});
 }
 
 TEST_CASE("Файл настроек: пустой файл — настройки по умолчанию") {

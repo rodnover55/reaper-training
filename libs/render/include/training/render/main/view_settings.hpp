@@ -15,7 +15,7 @@ namespace training::render {
 /// остаются прежними.
 ///
 /// Созданный объект: шкала от −50 до +50 мс, обе колонки строк показаны,
-/// панель настроек развёрнута.
+/// скрытых тактов нет, панель настроек развёрнута.
 class ViewSettings {
 public:
   /// Граница шкалы окна попадания у созданного объекта: шкала от −50 до
@@ -75,11 +75,24 @@ public:
   /// Ставит, видна ли колонка номеров тактов.
   void setShowBarNumbers(bool shown) { showBarNumbers_ = shown; }
 
-  /// Колонка среднего и разброса справа от строк («Mean/spread»).
+  /// Колонка медианы и IQR справа от строк («Median/IQR»).
   bool showBarStats() const { return showBarStats_; }
 
-  /// Ставит, видна ли колонка среднего и разброса.
+  /// Ставит, видна ли колонка медианы и IQR.
   void setShowBarStats(bool shown) { showBarStats_ = shown; }
+
+  /// Допустимое число скрытых тактов: от 0 до 16.
+  static constexpr core::Range<int> kHiddenBarsRange{.min = 0, .max = 16};
+
+  /// Сколько последних тактов запуска скрыто, пока идёт воспроизведение
+  /// («Hide bars»): строка такта появляется, когда воспроизведение ушло
+  /// на столько тактов дальше него; 0 — ничего не скрыто.
+  int hiddenBars() const { return hiddenBars_; }
+
+  /// Ставит, сколько последних тактов скрыто.
+  ///
+  /// @return ложь, если `bars` вне `kHiddenBarsRange`: настройки прежние.
+  bool setHiddenBars(int bars);
 
   /// Панель настроек свёрнута в одну строку: кнопку «Settings» и строку
   /// состояния.
@@ -99,6 +112,7 @@ private:
   Milliseconds scale_ = kDefaultScale;
   bool showBarNumbers_ = true;
   bool showBarStats_ = true;
+  int hiddenBars_ = 0;
   bool panelCollapsed_ = false;
 };
 

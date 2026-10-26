@@ -64,6 +64,7 @@ void saveSettings(const core::Settings &settings, const InputSettings &input, Mo
   store("silence_db", fmt::format("{}", static_cast<int>(std::lround(settings.silenceDb()))));
   store("show_bar_numbers", view.showBarNumbers() ? "1" : "0");
   store("show_bar_stats", view.showBarStats() ? "1" : "0");
+  store("hidden_bars", fmt::format("{}", view.hiddenBars()));
   store("settings_collapsed", view.panelCollapsed() ? "1" : "0");
 }
 
